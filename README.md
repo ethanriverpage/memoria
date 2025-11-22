@@ -1,11 +1,14 @@
 <div align="center">
 
-# Memoria
+# **me·mo·ri·a** _/məˈmôrēə/_ · _noun_ · the faculty by which the mind stores and remembers information
 
 **Transform messy social media exports into well-organized, properly dated media libraries**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Platform Support](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey.svg)](https://github.com/your_username/memoria)
+[![GitHub Issues](https://img.shields.io/github/issues/your_username/memoria)](https://github.com/your_username/memoria/issues)
 
 [Features](#key-features) • [Quick Start](#quick-start) • [Documentation](../../wiki) • [Platforms](#supported-platforms) • [Contributing](CONTRIBUTING.md)
 
@@ -87,12 +90,12 @@ It takes the JSON metadata files, HTML conversation dumps, and scattered media f
 > **Backup and Data Loss**
 >
 > While Memoria processes copies of your export files and does not modify the original export directories, **I am not responsible for any data loss**. Always maintain backups of your original exports before processing.
->
+
 > [!WARNING]
 > **AI-Generated Code**
 >
 > This codebase was created with the assistance of AI. It is **strongly recommended** that you thoroughly review and test the code before using it in any production environment or with irreplaceable data.
->
+
 > [!IMPORTANT]
 > **Read the Documentation**
 >

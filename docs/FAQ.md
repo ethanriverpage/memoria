@@ -115,6 +115,15 @@ JSON format is recommended for best metadata extraction, but Memoria can work wi
 
 Only if they were saved to your archive. Regular 24-hour stories that disappeared are not included in Instagram's export.
 
+### My old Instagram export has .json.xz files. What should I do?
+
+Old Instagram exports sometimes include compressed JSON metadata files with the `.json.xz` extension. You must extract these files before processing:
+
+- **Linux/macOS**: Run `xz -d *.json.xz` in your export directory
+- **Windows**: Use 7-Zip to extract the files
+
+This is a current limitation that will be addressed in a future update to automatically handle compressed files.
+
 ## Snapchat
 
 ### Can Memoria automatically download my Snapchat memories?
