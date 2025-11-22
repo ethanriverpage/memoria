@@ -1,0 +1,62 @@
+name: Sync Documentation to Wiki
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'docs/**'
+      - '.github/workflows/wiki-sync.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Checkout wiki
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}.wiki
+          path: wiki
+
+      - name: Sync wiki files
+        run: |
+          # Copy wiki files
+          cp docs/Home.md wiki/Home.md
+          cp docs/_Sidebar.md wiki/_Sidebar.md
+          cp docs/Getting-Started.md wiki/Getting-Started.md
+          cp docs/Usage.md wiki/Usage.md
+          cp docs/Google-Export.md wiki/Google-Export.md
+          cp docs/Instagram-Export.md wiki/Instagram-Export.md
+          cp docs/Snapchat-Export.md wiki/Snapchat-Export.md
+          cp docs/Immich-Upload.md wiki/Immich-Upload.md
+          cp docs/Parallel-Processing.md wiki/Parallel-Processing.md
+          cp docs/Upload-Only-Mode.md wiki/Upload-Only-Mode.md
+          cp docs/Upload-Queuing.md wiki/Upload-Queuing.md
+          cp docs/Logging.md wiki/Logging.md
+          cp docs/Deduplication.md wiki/Deduplication.md
+          cp docs/Standalone-Tools.md wiki/Standalone-Tools.md
+          cp docs/Adding-Processors.md wiki/Adding-Processors.md
+          cp docs/FAQ.md wiki/FAQ.md
+          cp docs/Common-Gotchas.md wiki/Common-Gotchas.md
+          cp docs/Design-Decisions.md wiki/Design-Decisions.md
+
+      - name: Commit and push changes
+        working-directory: wiki
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Sync wiki from docs/ [skip ci]"
+            git push
+          fi

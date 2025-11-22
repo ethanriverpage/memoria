@@ -1,0 +1,143 @@
+# Git files
+.git
+.gitattributes
+.cursor
+.pylintrc
+
+
+# Cursor files
+.cursorignore
+.cursorrules
+.cursorconfig
+.cursorhistory
+.cursorhistory.json
+.cursorhistory.json.gz
+.cursorhistory.json.gz.part
+.cursorhistory.json.gz.part.1
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS specific
+.DS_Store
+Thumbs.db
+.Spotlight-V100
+.Trashes
+._*
+__MACOSX/
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Reference files and originals
+reference-do-not-modify/
+*/reference-do-not-modify/
+*/reference/
+originals/
+*/originals/
+
+# Processor-specific data directories
+snapchat-export-*/
+downloaded_memories/
+zip_archives/
+processed/
+*/processed/
+
+# Log files
+logs/
+*.log
+*.err
+*.out
+*.err.log
+*.out.log
+
+# Data and archive files (specific directories only)
+*.zip
+
+# Generated output and analysis files
+POTENTIAL_MATCHES.json
+/standalone/duplicate_analysis.json
+
+# Data files in processor directories only
+google-*/**/*.json
+google-*/**/*.html
+google-*/**/*.csv
+instagram-*/**/*.json
+instagram-*/**/*.html
+instagram-*/**/*.csv
+snapchat-*/**/*.json
+snapchat-*/**/*.html
+snapchat-*/**/*.csv
+processed/**/*.json
+processed/**/*.html
+processed/**/*.csv
+
+# Media files (uncomment if you want to ignore media files in processor directories)
+# *.mp4
+# *.mov
+# *.avi
+# *.webm
+# *.jpg
+# *.jpeg
+# *.png
+# *.gif
+# *.bmp
+# *.tiff
+# *.ico
+# *.webp
+
+# Large data files
+*.txt
+
+# Test files
+test_*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Script and documentation files (uncomment if needed)
+# *.sh
+# *.MD
+
+internal/
