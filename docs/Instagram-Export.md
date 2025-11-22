@@ -234,6 +234,37 @@ instagram-username-YYYYMMDD/
 └── ...
 ```
 
+Or, in some exports, JSON metadata may be compressed:
+
+```
+instagram-username-YYYYMMDD/
+├── 2023-01-15_10-30-45_UTC.jpg
+├── 2023-01-15_10-30-45_UTC.json.xz    # Compressed JSON metadata
+├── 2023-01-15_10-30-45_UTC.txt
+└── ...
+```
+
+### Important: Extracting Compressed JSON Files
+
+If your old Instagram export contains `.json.xz` files, you must extract them before processing:
+
+**Linux/macOS:**
+
+```bash
+cd instagram-username-YYYYMMDD
+xz -d *.json.xz
+```
+
+**Windows:**
+Download and install 7-Zip, then:
+
+```powershell
+cd instagram-username-YYYYMMDD
+7z e *.json.xz
+```
+
+This limitation will be addressed in a future update to automatically extract compressed files during preprocessing.
+
 ### What Gets Processed
 
 - Photos and videos with UTC timestamps in filename
@@ -241,6 +272,10 @@ instagram-username-YYYYMMDD/
   - Post caption
   - Post date
   - Location
+- Metadata from paired `.json` files (if available) including:
+  - More detailed caption information
+  - Precise timestamp
+  - Media type
 
 ### Filename Pattern
 
@@ -262,13 +297,21 @@ Example:
 
 ### Metadata Files
 
-Each media file has a corresponding `.txt` file:
+Each media file may have one or both metadata files:
+
+**Text caption file:**
 
 ```
 2023-01-15_10-30-45_UTC.txt
 ```
 
-Contains post caption and metadata.
+**JSON metadata file (if available):**
+
+```
+2023-01-15_10-30-45_UTC.json
+```
+
+Note: Some exports have `.json.xz` (compressed) which must be extracted first (see above).
 
 ### Required Elements
 
@@ -292,7 +335,9 @@ For videos, equivalent metadata is embedded in the `Comment` and `Description` f
 
 ### Common Issues
 
-**No JSON files**: Old format uses `.txt` files instead of JSON - this is expected.
+**Compressed JSON files**: If you see `.json.xz` files, you must extract them first using `xz -d *.json.xz` (Linux/macOS) or 7-Zip (Windows). The processor currently expects uncompressed `.json` files.
+
+**No JSON files**: Old format may use only `.txt` files for captions - this is expected for some exports.
 
 **Carousel numbering**: Multi-photo posts have `_1`, `_2`, etc. suffixes. All are processed individually.
 
