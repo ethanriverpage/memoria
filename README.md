@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 
-[Features](#key-features) • [Quick Start](#quick-start) • [Documentation](#documentation) • [Platforms](#supported-platforms) • [Contributing](CONTRIBUTING.md)
+[Features](#key-features) • [Quick Start](#quick-start) • [Documentation](../../wiki) • [Platforms](#supported-platforms) • [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -87,12 +87,12 @@ It takes the JSON metadata files, HTML conversation dumps, and scattered media f
 > **Backup and Data Loss**
 >
 > While Memoria processes copies of your export files and does not modify the original export directories, **I am not responsible for any data loss**. Always maintain backups of your original exports before processing.
-
+>
 > [!WARNING]
 > **AI-Generated Code**
 >
 > This codebase was created with the assistance of AI. It is **strongly recommended** that you thoroughly review and test the code before using it in any production environment or with irreplaceable data.
-
+>
 > [!IMPORTANT]
 > **Read the Documentation**
 >
@@ -221,7 +221,7 @@ Memoria makes specific design choices that prioritize data portability and futur
 - **Non-Destructive Processing**: Original exports are never modified; all operations work on copies
 
 > [!NOTE]
-> For detailed rationale behind these decisions, see the [Design Decisions](docs/Design-Decisions.md) document.
+> For detailed rationale behind these decisions, see the [Design Decisions](../../wiki/Design-Decisions) document.
 
 ## Supported Platforms
 
@@ -280,7 +280,7 @@ pip install -e .
 ```
 
 > [!TIP]
-> See the [Getting Started Guide](docs/Getting-Started.md) for detailed installation instructions and the [Usage Guide](docs/Usage.md) for all command-line options.
+> See the [Getting Started Guide](../../wiki/Getting-Started) for detailed installation instructions and the [Usage Guide](../../wiki/Usage) for all command-line options.
 
 ### Export Guides
 
@@ -288,9 +288,9 @@ Before processing, export your data from the platforms:
 
 | Platform | Guide | What to Export |
 |----------|-------|----------------|
-| Google | [Google Export Guide](docs/Google-Export.md) | Photos, Chat, Voice |
-| Instagram | [Instagram Export Guide](docs/Instagram-Export.md) | Messages, Posts, Stories |
-| Snapchat | [Snapchat Export Guide](docs/Snapchat-Export.md) | Memories, Messages |
+| Google | [Google Export Guide](../../wiki/Google-Export) | Photos, Chat, Voice |
+| Instagram | [Instagram Export Guide](../../wiki/Instagram-Export) | Messages, Posts, Stories |
+| Snapchat | [Snapchat Export Guide](../../wiki/Snapchat-Export) | Memories, Messages |
 
 ## Documentation
 
@@ -299,8 +299,8 @@ Before processing, export your data from the platforms:
 
 <br>
 
-- **[Getting Started](docs/Getting-Started.md)** - Installation, system requirements, and initial setup
-- **[Usage Guide](docs/Usage.md)** - Complete command-line reference and workflows
+- **[Getting Started](../../wiki/Getting-Started)** - Installation, system requirements, and initial setup
+- **[Usage Guide](../../wiki/Usage)** - Complete command-line reference and workflows
 
 </details>
 
@@ -309,9 +309,9 @@ Before processing, export your data from the platforms:
 
 <br>
 
-- **[Google Export](docs/Google-Export.md)** - Google Photos, Chat, and Voice export setup
-- **[Instagram Export](docs/Instagram-Export.md)** - Instagram Messages, posts, and legacy formats
-- **[Snapchat Export](docs/Snapchat-Export.md)** - Snapchat Memories and Messages setup
+- **[Google Export](../../wiki/Google-Export)** - Google Photos, Chat, and Voice export setup
+- **[Instagram Export](../../wiki/Instagram-Export)** - Instagram Messages, posts, and legacy formats
+- **[Snapchat Export](../../wiki/Snapchat-Export)** - Snapchat Memories and Messages setup
 
 </details>
 
@@ -320,13 +320,13 @@ Before processing, export your data from the platforms:
 
 <br>
 
-- **[Immich Upload](docs/Immich-Upload.md)** - Immich upload configuration and ignore patterns
-- **[Parallel Processing](docs/Parallel-Processing.md)** - Process multiple exports in parallel
-- **[Upload Only Mode](docs/Upload-Only-Mode.md)** - Upload previously processed exports
-- **[Upload Queuing](docs/Upload-Queuing.md)** - Parallel processing upload queuing
-- **[Logging](docs/Logging.md)** - Logging configuration and verbose mode
-- **[Deduplication](docs/Deduplication.md)** - Google Photos deduplication system
-- **[Standalone Tools](docs/Standalone-Tools.md)** - Standalone utility scripts for analysis and comparison
+- **[Immich Upload](../../wiki/Immich-Upload)** - Immich upload configuration and ignore patterns
+- **[Parallel Processing](../../wiki/Parallel-Processing)** - Process multiple exports in parallel
+- **[Upload Only Mode](../../wiki/Upload-Only-Mode)** - Upload previously processed exports
+- **[Upload Queuing](../../wiki/Upload-Queuing)** - Parallel processing upload queuing
+- **[Logging](../../wiki/Logging)** - Logging configuration and verbose mode
+- **[Deduplication](../../wiki/Deduplication)** - Google Photos deduplication system
+- **[Standalone Tools](../../wiki/Standalone-Tools)** - Standalone utility scripts for analysis and comparison
 
 </details>
 
@@ -335,9 +335,9 @@ Before processing, export your data from the platforms:
 
 <br>
 
-- **[FAQ](docs/FAQ.md)** - Frequently asked questions
-- **[Common Gotchas](docs/Common-Gotchas.md)** - Important behaviors and surprises to know
-- **[Design Decisions](docs/Design-Decisions.md)** - Rationale for architectural choices
+- **[FAQ](../../wiki/FAQ)** - Frequently asked questions
+- **[Common Gotchas](../../wiki/Common-Gotchas)** - Important behaviors and surprises to know
+- **[Design Decisions](../../wiki/Design-Decisions)** - Rationale for architectural choices
 
 </details>
 
@@ -346,7 +346,7 @@ Before processing, export your data from the platforms:
 
 <br>
 
-- **[Adding Processors](docs/Adding-Processors.md)** - Create custom processors for new platforms
+- **[Adding Processors](../../wiki/Adding-Processors)** - Create custom processors for new platforms
 
 </details>
 
@@ -354,14 +354,14 @@ Before processing, export your data from the platforms:
 
 | Scenario | Recommendation |
 |----------|----------------|
-| **First Time?** | Start with the [Getting Started Guide](docs/Getting-Started.md) for setup instructions |
-| **Important Behaviors** | Read [Common Gotchas](docs/Common-Gotchas.md) to avoid surprises |
+| **First Time?** | Start with the [Getting Started Guide](../../wiki/Getting-Started) for setup instructions |
+| **Important Behaviors** | Read [Common Gotchas](../../wiki/Common-Gotchas) to avoid surprises |
 | **Export Setup** | See platform-specific guides for export preparation |
 | **Performance** | Use `--workers N` to control parallelism |
 | **Multiple Exports** | Use `--originals` to batch process everything at once |
 | **Debugging** | Enable `--verbose` for detailed logs |
 | **Immich Upload** | Configure automatic upload to your Immich server |
-| **Questions?** | Check the [FAQ](docs/FAQ.md) for common questions |
+| **Questions?** | Check the [FAQ](../../wiki/FAQ) for common questions |
 
 ## Contributing
 
@@ -401,8 +401,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 | `exiftool is not installed` or `ffmpeg not found` | Install required system dependencies (see [Quick Start](#quick-start)) |
 | `No processors matched input directory` | Check export structure against platform guides |
 | Import errors | Try installing in development mode: `pip install -e .` |
-| Performance issues | See [Usage Guide](docs/Usage.md#performance-tips) for optimization |
+| Performance issues | See [Usage Guide](../../wiki/Usage#performance-tips) for optimization |
 
-For more help, see the **[Getting Started Guide](docs/Getting-Started.md#troubleshooting)**.
+For more help, see the **[Getting Started Guide](../../wiki/Getting-Started#troubleshooting)**.
 
 </details>
