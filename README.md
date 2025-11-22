@@ -2,22 +2,33 @@
 
 ## What is Memoria?
 
-Memoria transforms messy social media exports into well-organized, properly dated media libraries. It takes the JSON metadata files, HTML conversation dumps, and scattered media files from your platform exports and produces a clean collection where every photo and video has its original timestamp, location, and context embedded directly into the file itself - making your memories searchable and sortable in any photo application, now and in the future.
+Memoria transforms messy social media exports into well-organized, properly dated media libraries.
 
-The program handles all the tedious work: parsing platform-specific metadata formats, matching media files to their data, embedding everything as standard EXIF tags, and organizing the output by platform and account. Process multiple accounts and platforms in one go, and optionally upload everything to your Immich server with automatically created albums.
+It takes the JSON metadata files, HTML conversation dumps, and scattered media files from your platform exports and produces a clean collection where every photo and video has its original timestamp, location, and context embedded directly into the file itself - making your memories searchable and sortable in any photo application, now and in the future.
+
+### Key Features
+
+- **Metadata Extraction**: Parses platform-specific metadata formats (JSON, HTML) to extract dates, locations, and context
+- **EXIF Embedding**: Writes all metadata as standard EXIF tags directly into your files
+- **Smart Organization**: Organizes output by platform and account with descriptive filenames
+- **Batch Processing**: Process multiple accounts and platforms in one go
+- **Immich Integration**: Optionally upload everything to your Immich server with automatically created albums
 
 ---
 
 ## IMPORTANT DISCLAIMERS
 
+> [!WARNING]
 > **Backup and Data Loss**
 >
 > While Memoria processes copies of your export files and does not modify the original export directories, **I am not responsible for any data loss**. Always maintain backups of your original exports before processing.
-
+>
+> [!CAUTION]
 > **AI-Generated Code**
 >
 > This codebase was created with the assistance of AI. It is **strongly recommended** that you thoroughly review and test the code before using it in any production environment or with irreplaceable data.
-
+>
+> [!IMPORTANT]
 > **Read the Documentation**
 >
 > Please read all documentation carefully before use. This tool makes specific design decisions that may not align with everyone's needs or expectations. **Make sure you fully understand the purpose and behavior of this program before processing your data.**
@@ -26,19 +37,27 @@ The program handles all the tedious work: parsing platform-specific metadata for
 
 ## What Do You Get?
 
-After processing, your files are transformed with rich metadata embedded directly into each file:
+After processing, your files are transformed with rich metadata embedded directly into each file.
 
 ### Metadata Embedding
 
 Every processed file gets comprehensive EXIF metadata written using ExifTool:
 
+#### Standard Tags
+
 - **Timestamps**: Original capture date/time embedded in `DateTimeOriginal`, `CreateDate`, and `ModifyDate` tags
 - **GPS Coordinates**: Location data (when available) embedded in standard GPS tags (`GPSLatitude`, `GPSLongitude`, `GPSAltitude`)
-- **Source Information**: Platform, account, and context embedded in description fields:
-  - **Images**: `ImageDescription` and `IPTC:Caption-Abstract` tags
-  - **Videos**: `Comment` and `Description` tags
 
-The description field contains structured source information, for example:
+#### Source Information
+
+Platform, account, and context embedded in description fields:
+
+- **Images**: `ImageDescription` and `IPTC:Caption-Abstract` tags
+- **Videos**: `Comment` and `Description` tags
+
+#### Description Examples
+
+The description field contains structured source information:
 
 - `Source: Instagram/username/messages` + conversation name + sender name
 - `Source: Google Photos/username` for photos
@@ -61,7 +80,7 @@ Files are renamed with descriptive, sortable names that include platform, userna
 
 Processed files are organized by platform and service/media type:
 
-```
+```text
 platform-username-YYYYMMDD/
 ├── Google Photos/
 │   └── john.doe/
@@ -81,20 +100,33 @@ platform-username-YYYYMMDD/
 
 In addition to EXIF metadata, file modification times are set to match the original capture date, making files sort correctly in file browsers.
 
-### Result
+### The Result
 
-Your media becomes truly portable and future-proof. Every file carries its complete history - when it was taken, where you were, who sent it, what platform it came from - all in industry-standard formats that work with any photo management application, cloud service, or future software you might use.
+Your media becomes truly portable and future-proof. Every file carries its complete history:
+
+- When it was taken
+- Where you were
+- Who sent it
+- What platform it came from
+
+All in industry-standard formats that work with any photo management application, cloud service, or future software you might use.
 
 ## Design Philosophy
 
-Memoria makes specific design choices that prioritize data portability and future-proofing:
+Memoria makes specific design choices that prioritize data portability and future-proofing.
+
+### Core Principles
 
 - **Metadata-First Approach**: All context is embedded directly in files using industry-standard EXIF tags, not stored in sidecar files or databases
+
 - **Flat Organization**: Files are organized by platform/username, not by albums or conversations, to simplify deduplication and avoid complex folder structures
+
 - **Deduplication by Default**: Google Photos automatically deduplicates across albums to save space and reduce processing time
+
 - **Non-Destructive Processing**: Original exports are never modified; all operations work on copies
 
-For detailed rationale behind these decisions, see the [Design Decisions](docs/Design-Decisions.md) document.
+> [!NOTE]
+> For detailed rationale behind these decisions, see the [Design Decisions](docs/Design-Decisions.md) document.
 
 ## Supported Platforms
 
@@ -117,14 +149,14 @@ Memoria can process exports from the following platforms:
 - **Snapchat Memories** - Saved snaps and stories with overlay embedding
 - **Snapchat Messages** - Chat media from conversations
 
-## Getting Started
+## Quick Links
 
 New to Memoria? Start here:
 
 1. **[Getting Started Guide](docs/Getting-Started.md)** - Installation, system requirements, and initial setup
 2. **[Usage Guide](docs/Usage.md)** - Detailed command-line options and workflows
 
-### Platform-Specific Guides
+### Export Guides
 
 Detailed export setup and structure requirements for each platform:
 
@@ -205,20 +237,18 @@ Special thanks to the [immich-go](https://github.com/simulot/immich-go) project,
 
 ## License
 
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
 This project is provided as-is for personal use in organizing and preserving your social media exports.
 
 ## Contributing
 
-When contributing new processors or improvements:
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines on:
 
-1. Follow the existing code structure and patterns
-2. Create processors in `processors/` directory with underscores in names (e.g., `my_platform/`)
-3. Inherit from `ProcessorBase` (from `processors.base`) and implement all required methods
-4. Add proper detection logic that doesn't overlap with existing processors
-5. Include a `get_processor()` function for auto-discovery
-6. Include documentation and examples
-7. Test with real export data before submitting
-8. Use appropriate priority value (see `processors/base.py` for guidelines)
+- Setting up your development environment
+- Code style and standards
+- Adding new processors
+- Testing and submitting changes
 
 ## Troubleshooting
 

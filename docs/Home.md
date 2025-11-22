@@ -105,20 +105,18 @@ For all command-line options, see the [Usage Guide](Usage).
 
 ## License
 
+This project is licensed under the MIT License.
+
 This project is provided as-is for personal use in organizing and preserving your social media exports.
 
 ## Contributing
 
-When contributing new processors or improvements:
+Contributions are welcome! Please see the CONTRIBUTING.md file for detailed guidelines on:
 
-1. Follow the existing code structure and patterns
-2. Create processors in `processors/` directory with underscores in names (e.g., `my_platform/`)
-3. Inherit from `ProcessorBase` (from `processors.base`) and implement all required methods
-4. Add proper detection logic that doesn't overlap with existing processors
-5. Include a `get_processor()` function for auto-discovery
-6. Include documentation and examples
-7. Test with real export data before submitting
-8. Use appropriate priority value (see `processors/base.py` for guidelines)
+- Setting up your development environment
+- Code style and standards
+- Adding new processors
+- Testing and submitting changes
 
 ## Troubleshooting
 
