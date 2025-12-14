@@ -1,8 +1,9 @@
 # Instagram Export Format Comparison
 
 This document compares the structure and data of two Instagram export formats:
-- **Legacy Format (2022)**: `instagram-your_username-20221116`
-- **Current Format (2025)**: `instagram-your_username-20251007`
+
+- **Legacy Format (2022)**: `instagram-username-20221116`
+- **Current Format (2025)**: `instagram-username-20251007`
 
 ---
 
@@ -25,7 +26,7 @@ Instagram changed their data export format between 2022 and 2025. The key struct
 ### 2022 Export (Legacy Format)
 
 ```
-instagram-your_username-20221116/
+instagram-username-20221116/
 ├── index.html                          # Main entry point
 ├── ads_and_businesses/
 │   ├── advertisers_using_your_activity_or_information.html
@@ -95,7 +96,7 @@ instagram-your_username-20221116/
 ### 2025 Export (Current Format)
 
 ```
-instagram-your_username-20251007/
+instagram-username-20251007/
 ├── start_here.html                     # Main entry point (renamed)
 ├── ads_information/
 │   ├── ads_and_topics/
@@ -200,11 +201,13 @@ instagram-your_username-20251007/
 ### 2. Media Metadata Location
 
 **2022**: Metadata HTML files are in `content/` at root level:
+
 - `content/posts_1.html`
 - `content/stories.html`
 - `content/archived_posts.html`
 
 **2025**: Metadata HTML files moved to `your_instagram_activity/media/`:
+
 - `your_instagram_activity/media/posts_1.html`
 - `your_instagram_activity/media/stories.html`
 - `your_instagram_activity/media/archived_posts.html`
@@ -213,9 +216,11 @@ instagram-your_username-20251007/
 ### 3. Messages Location
 
 **2022**: Messages at root level:
+
 - `messages/inbox/{conversation}/message_N.html`
 
 **2025**: Messages nested under activity:
+
 - `your_instagram_activity/messages/inbox/{conversation}/message_N.html`
 - Added `ai_conversations/` for Meta AI chats
 - Added `your_chat_information.html`
@@ -236,6 +241,7 @@ instagram-your_username-20251007/
 ### 5. New Content Types (2025)
 
 The 2025 format includes additional content types:
+
 - `your_instagram_activity/ai/` - AI-related activity
 - `your_instagram_activity/edits/` - Edit history
 - `your_instagram_activity/gifts/` - Digital gifts
@@ -304,6 +310,7 @@ Both formats use the same HTML structure for posts metadata. The CSS classes and
 ### Timestamp Formats
 
 Both formats use the same timestamp format in the HTML:
+
 - `Aug 17, 2025 11:23 am`
 - `Sep 8, 2016, 4:36 PM`
 
@@ -339,16 +346,19 @@ Media filenames follow Instagram's internal naming convention with numeric IDs.
 ### Instagram Public Media Processor
 
 The current processor expects:
+
 1. `media/posts/` or `media/archived_posts/` with YYYYMM folders (detection)
 2. `your_instagram_activity/media/*.html` for metadata (preprocessing)
 
 **2022 exports fail** because:
+
 - Detection passes (media structure exists)
 - Preprocessing fails (no `your_instagram_activity/media/` directory)
 
 ### Recommended Solution
 
 To support legacy exports, the processor would need to:
+
 1. Check for `content/*.html` as a fallback metadata location
 2. Map the legacy paths appropriately:
    - `content/posts_1.html` -> post metadata
@@ -358,6 +368,7 @@ To support legacy exports, the processor would need to:
 ### Instagram Messages Processor
 
 Similar issue with messages location:
+
 - 2022: `messages/inbox/`
 - 2025: `your_instagram_activity/messages/inbox/`
 
@@ -386,6 +397,5 @@ Similar issue with messages location:
 
 ## References
 
-- Instagram Data Download: https://www.instagram.com/download/request/
+- Instagram Data Download: <https://www.instagram.com/download/request/>
 - Memoria Processors: `processors/instagram_public_media/`, `processors/instagram_messages/`
-

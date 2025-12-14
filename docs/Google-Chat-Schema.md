@@ -124,7 +124,7 @@ When present, the `attached_files` array contains objects with:
 {
   "creator": {
     "name": "Jane Doe",
-    "email": "your_username@gmail.com",
+    "email": "jane.doe@example.com",
     "user_type": "Human"
   },
   "created_date": "Tuesday, November 22, 2016 at 9:46:26 PM UTC",
@@ -236,7 +236,7 @@ For Google Drive file/folder links:
 {
   "creator": {
     "name": "Jane Doe",
-    "email": "your_username@gmail.com",
+    "email": "jane.doe@example.com",
     "user_type": "Human"
   },
   "created_date": "Monday, September 5, 2016 at 6:46:08 PM UTC",
@@ -355,8 +355,8 @@ The `Users/User {user_id}/user_info.json` file contains information about the ex
 ```json
 {
   "user": {
-    "name": "Jane Doe",
-    "email": "your_username@gmail.com",
+    "name": "John Smith",
+    "email": "john.smith@example.com",
     "user_type": "Human"
   },
   "membership_info": [

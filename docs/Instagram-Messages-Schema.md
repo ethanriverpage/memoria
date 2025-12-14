@@ -222,12 +222,12 @@ Memoria's preprocessor extracts the following information from HTML files:
 
 ```html
 <div class="pam _3-95 _2ph- _a6-g uiBoxWhite noborder">
-  <h2 class="_3-95 _2pim _a6-h _a6-i">john_doe</h2>
+  <h2 class="_3-95 _2pim _a6-h _a6-i">friend_username</h2>
   <div class="_3-95 _a6-p">
     <div>Look at this</div>
     <div><div>
-      <a target="_blank" href="your_instagram_activity/messages/inbox/john_doe_123/photos/123456789.jpg">
-        <img src="your_instagram_activity/messages/inbox/john_doe_123/photos/123456789.jpg" class="_a6_o _3-96" />
+      <a target="_blank" href="your_instagram_activity/messages/inbox/friend_username_123/photos/123456789.jpg">
+        <img src="your_instagram_activity/messages/inbox/friend_username_123/photos/123456789.jpg" class="_a6_o _3-96" />
       </a>
     </div></div>
   </div>
@@ -242,8 +242,8 @@ Memoria's preprocessor extracts the following information from HTML files:
   <h2 class="_3-95 _2pim _a6-h _a6-i">your_username</h2>
   <div class="_3-95 _a6-p">
     <div><div><div><div>
-      <video src="your_instagram_activity/messages/inbox/alex_123/videos/1276044200006294.mp4" controls="1" class="_a6_o _3-96">
-        <a target="_blank" href="your_instagram_activity/messages/inbox/alex_123/videos/1276044200006294.mp4">
+      <video src="your_instagram_activity/messages/inbox/friend_username_123/videos/1276044200006294.mp4" controls="1" class="_a6_o _3-96">
+        <a target="_blank" href="your_instagram_activity/messages/inbox/friend_username_123/videos/1276044200006294.mp4">
           <div>Click for video:</div>
         </a>
       </video>
@@ -272,7 +272,7 @@ Memoria's preprocessor extracts the following information from HTML files:
 
 ```html
 <div class="pam _3-95 _2ph- _a6-g uiBoxWhite noborder">
-  <h2 class="_3-95 _2pim _a6-h _a6-i">Alex</h2>
+  <h2 class="_3-95 _2pim _a6-h _a6-i">friend_username</h2>
   <div class="_3-95 _a6-p">
     <div>!!! Congrats!!!!!!!</div>
     <div><div><div>
@@ -293,10 +293,10 @@ Memoria's preprocessor extracts the following information from HTML files:
   <div class="_3-95 _a6-p">
     <div>friend_username sent an attachment.</div>
     <div><div><div>
-      <div>CHAAAWHOOO#minecraftmovie#minecraft#jackblack#meme#tiktok#vine</div>
+      <div>Example reel caption with #hashtags</div>
       <div>reel_creator</div>
-      <div><a target="_blank" href="https://www.instagram.com/reel/DIE6ujRy_Os/?id=3604263887476356012_37039024597">
-        https://www.instagram.com/reel/DIE6ujRy_Os/?id=3604263887476356012_37039024597
+      <div><a target="_blank" href="https://www.instagram.com/reel/ABC123/?id=1234567890_12345678">
+        https://www.instagram.com/reel/ABC123/?id=1234567890_12345678
       </a></div>
     </div></div></div>
   </div>
@@ -350,17 +350,17 @@ One-on-one conversations:
 
 - Folder name: `{username}_{conversation_id}/`
 - Title: Other user's display name
-- Example: `john_doe_539841500738651/`
+- Example: `friend_username_539841500738651/`
 
 ### 2. Group Chats
 
 Multi-participant conversations:
 
 - Folder name: `{participant1}{participant2}and{participant3}_{conversation_id}/`
-- Title: Comma-separated participant list (e.g., `"aidan, friend_username and Leah"`)
+- Title: Comma-separated participant list (e.g., `"alice, bob and charlie"`)
 - Participant list: Separate `<h2>` header with `Participants: name1, name2, name3 and name4`
 - Group invite link: Optional `<h2>` header with group invite URL
-- Example folder: `aidanfriend_usernameandleah_9520404464722127/`
+- Example folder: `alicebobandcharlie_9520404464722127/`
 
 **Note:** Group chat folders concatenate participant usernames without separators (except "and"), while the title displays them comma-separated for readability.
 
@@ -461,7 +461,7 @@ Messages that are just reactions to previous messages:
 
 ```html
 <div class="pam _3-95 _2ph- _a6-g uiBoxWhite noborder">
-  <h2 class="_3-95 _2pim _a6-h _a6-i">Alex</h2>
+  <h2 class="_3-95 _2pim _a6-h _a6-i">friend_username</h2>
   <div class="_3-95 _a6-p">
     <div>Reacted ❤️ to your message </div>
   </div>

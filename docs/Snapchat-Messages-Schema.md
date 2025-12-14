@@ -58,7 +58,7 @@ Each message in the conversation arrays has the following structure:
 | `From` | string | Username of the message sender | `"friend_username"` |
 | `Media Type` | string | Type of message content | `"TEXT"`, `"PHOTO"`, `"VIDEO"`, `"MEDIA"` |
 | `Created` | string | Timestamp when message was sent (UTC) | `"2024-04-20 01:29:22 UTC"` |
-| `Conversation Title` | string or null | Name of the conversation (null for DMs) | `"Summer Staff Group"` or `null` |
+| `Conversation Title` | string or null | Name of the conversation (null for DMs) | `"Group Chat Name"` or `null` |
 | `IsSender` | boolean | Whether the export user sent this message | `true` or `false` |
 | `Created(microseconds)` | integer | Timestamp in microseconds since epoch | `1713576562686` |
 | `IsSaved` | boolean | Whether the message was saved | `true` or `false` |
@@ -117,7 +117,7 @@ The `snap_history.json` file has the same top-level structure as `chat_history.j
 | `From` | string | Username of the message sender | `"friend_username"` |
 | `Media Type` | string | Type of snap content | `"IMAGE"`, `"VIDEO"` |
 | `Created` | string | Timestamp when snap was sent (UTC) | `"2024-06-13 16:42:26 UTC"` |
-| `Conversation Title` | string | Name of the conversation | `"Summer Staff Group"` or `null` |
+| `Conversation Title` | string | Name of the conversation | `"Group Chat Name"` or `null` |
 | `IsSender` | boolean | Whether the export user sent this snap | `true` or `false` |
 | `Created(microseconds)` | integer | Timestamp in microseconds since epoch | `1718296946482` |
 
@@ -135,7 +135,7 @@ The `snap_history.json` file has the same top-level structure as `chat_history.j
   "From": "friend_username",
   "Media Type": "IMAGE",
   "Created": "2024-06-13 16:42:26 UTC",
-  "Conversation Title": "Summer Staff Group",
+  "Conversation Title": "Group Chat Name",
   "IsSender": false,
   "Created(microseconds)": 1718296946482
 }
