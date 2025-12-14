@@ -21,6 +21,19 @@ Instagram provides data export through their settings. Memoria can process:
 
 Instagram has changed their export format over time, so you may encounter different structures depending on when you requested your export.
 
+### Supported Export Formats
+
+Memoria supports both legacy and current Instagram export structures:
+
+| Export Era | Metadata Location | Messages Location |
+|------------|-------------------|-------------------|
+| 2023+ (Current) | `your_instagram_activity/media/` | `your_instagram_activity/messages/inbox/` |
+| Pre-2023 (Legacy) | `content/` | `messages/inbox/` |
+
+The processor automatically detects which format your export uses and handles it appropriately. No manual configuration is needed.
+
+For detailed technical comparison, see [Instagram Export Format Comparison](Instagram-Export-Format-Comparison.md).
+
 ---
 
 ## Important Caveats
@@ -106,7 +119,9 @@ instagram-username-YYYYMMDD/
 
 ### Required Elements
 
-- `your_instagram_activity/messages/inbox/` directory path
+- Messages inbox directory (either location):
+  - Current format: `your_instagram_activity/messages/inbox/`
+  - Legacy format: `messages/inbox/`
 - Conversation folders
 - Message files in `.html` format (message_1.html, message_2.html, etc.)
 - Media files within conversation folders (typically in `photos/` subdirectories)

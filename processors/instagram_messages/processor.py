@@ -42,7 +42,7 @@ def detect(input_path: Path) -> bool:
     """Check if this processor can handle the input directory
 
     Detection criteria for Instagram Messages:
-    - Directory contains 'your_instagram_activity/messages/inbox/'
+    - Directory contains messages inbox (new or legacy location)
     - Inbox contains conversation folders with message_N.html files
 
     Args:
@@ -52,18 +52,17 @@ def detect(input_path: Path) -> bool:
         True if this is an Instagram Messages export, False otherwise
     """
     try:
-        activity_dir = input_path / "your_instagram_activity"
-        messages_dir = activity_dir / "messages"
-        inbox_dir = messages_dir / "inbox"
+        # Check both new format and legacy format paths
+        new_format_inbox = input_path / "your_instagram_activity" / "messages" / "inbox"
+        legacy_format_inbox = input_path / "messages" / "inbox"
 
-        # Check if messages/inbox structure exists
-        if not activity_dir.exists() or not activity_dir.is_dir():
-            return False
+        inbox_dir = None
+        if new_format_inbox.exists() and new_format_inbox.is_dir():
+            inbox_dir = new_format_inbox
+        elif legacy_format_inbox.exists() and legacy_format_inbox.is_dir():
+            inbox_dir = legacy_format_inbox
 
-        if not messages_dir.exists() or not messages_dir.is_dir():
-            return False
-
-        if not inbox_dir.exists() or not inbox_dir.is_dir():
+        if inbox_dir is None:
             return False
 
         # Check for at least one conversation folder with message_N.html files
@@ -73,7 +72,6 @@ def detect(input_path: Path) -> bool:
             if not conv_folder.is_dir():
                 continue
 
-            # Check if this folder contains message HTML files
             for file_path in conv_folder.iterdir():
                 if file_path.is_file() and message_pattern.match(file_path.name):
                     return True
