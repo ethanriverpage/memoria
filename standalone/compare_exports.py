@@ -21,6 +21,11 @@ from pathlib import Path
 from typing import Dict, List, Set, Any, Optional
 from collections import defaultdict
 
+# Add parent directory to path for imports when running standalone
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from common.logging_config import setup_logging
+
 # Try to import tqdm for progress bars
 try:
     from tqdm import tqdm
@@ -28,6 +33,9 @@ try:
 except ImportError:
     HAS_TQDM = False
     print("Warning: tqdm not available, progress bars disabled")
+
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 
 class ExportComparator:
@@ -55,33 +63,6 @@ class ExportComparator:
             'metadata_mismatches': 0,
             'size_mismatches': 0,
         }
-        
-        # Set up logging
-        self.logger = logging.getLogger(__name__)
-        self._setup_logging()
-    
-    def _setup_logging(self):
-        """Configure logging to both file and console"""
-        # Clear any existing handlers
-        self.logger.handlers.clear()
-        self.logger.setLevel(logging.DEBUG)
-        
-        # File handler
-        fh = logging.FileHandler(self.log_file, mode='w', encoding='utf-8')
-        fh.setLevel(logging.DEBUG)
-        file_formatter = logging.Formatter(
-            '%(asctime)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        fh.setFormatter(file_formatter)
-        self.logger.addHandler(fh)
-        
-        # Console handler
-        ch = logging.StreamHandler(sys.stdout)
-        ch.setLevel(logging.INFO)
-        console_formatter = logging.Formatter('%(levelname)s - %(message)s')
-        ch.setFormatter(console_formatter)
-        self.logger.addHandler(ch)
     
     def _should_ignore(self, path: Path) -> bool:
         """Check if path matches any ignore patterns"""
@@ -109,7 +90,7 @@ class ExportComparator:
                     rel_path = full_path.relative_to(directory)
                     files[str(rel_path)] = full_path
                 except ValueError:
-                    self.logger.warning(f"Could not get relative path for {full_path}")
+                    logger.warning(f"Could not get relative path for {full_path}")
                     continue
         
         return files
@@ -144,7 +125,7 @@ class ExportComparator:
                     hash_func.update(chunk)
             return hash_func.hexdigest()
         except Exception as e:
-            self.logger.error(f"Error computing hash for {filepath}: {e}")
+            logger.error(f"Error computing hash for {filepath}: {e}")
             return None
     
     def _batch_get_exif_metadata(self, filepaths: List[Path]) -> Dict[str, Dict[str, Any]]:
@@ -188,16 +169,16 @@ class ExportComparator:
                             metadata_map[str(Path(source_file).resolve())] = item
                 
             except FileNotFoundError:
-                self.logger.warning("exiftool not found - skipping metadata comparison")
+                logger.warning("exiftool not found - skipping metadata comparison")
                 return {}
             except subprocess.TimeoutExpired:
-                self.logger.warning(f"exiftool timeout for chunk starting at index {i}")
+                logger.warning(f"exiftool timeout for chunk starting at index {i}")
                 continue
             except json.JSONDecodeError as e:
-                self.logger.warning(f"Failed to parse exiftool JSON output: {e}")
+                logger.warning(f"Failed to parse exiftool JSON output: {e}")
                 continue
             except Exception as e:
-                self.logger.warning(f"Error batch reading metadata: {e}")
+                logger.warning(f"Error batch reading metadata: {e}")
                 continue
         
         return metadata_map
@@ -220,13 +201,13 @@ class ExportComparator:
             
             return None
         except FileNotFoundError:
-            self.logger.warning("exiftool not found - skipping metadata comparison")
+            logger.warning("exiftool not found - skipping metadata comparison")
             return None
         except subprocess.TimeoutExpired:
-            self.logger.warning(f"exiftool timeout for {filepath}")
+            logger.warning(f"exiftool timeout for {filepath}")
             return None
         except Exception as e:
-            self.logger.debug(f"Error reading metadata for {filepath}: {e}")
+            logger.debug(f"Error reading metadata for {filepath}: {e}")
             return None
     
     def _compare_metadata_pair(self, meta1: Optional[Dict[str, Any]], 
@@ -280,34 +261,34 @@ class ExportComparator:
     
     def compare_directory_structure(self):
         """Compare directory structures between the two exports"""
-        self.logger.info("Comparing directory structures...")
+        logger.info("Comparing directory structures...")
         
         dirs1 = self._get_all_dirs(self.dir1)
         dirs2 = self._get_all_dirs(self.dir2)
         
-        self.logger.debug(f"Directory 1 has {len(dirs1)} subdirectories")
-        self.logger.debug(f"Directory 2 has {len(dirs2)} subdirectories")
+        logger.debug(f"Directory 1 has {len(dirs1)} subdirectories")
+        logger.debug(f"Directory 2 has {len(dirs2)} subdirectories")
         
         only_in_dir1 = dirs1 - dirs2
         only_in_dir2 = dirs2 - dirs1
         common_dirs = dirs1 & dirs2
         
         if only_in_dir1:
-            self.logger.warning(f"Found {len(only_in_dir1)} directories only in dir1")
+            logger.warning(f"Found {len(only_in_dir1)} directories only in dir1")
             self.differences['dirs_only_in_dir1'] = sorted(only_in_dir1)
         
         if only_in_dir2:
-            self.logger.warning(f"Found {len(only_in_dir2)} directories only in dir2")
+            logger.warning(f"Found {len(only_in_dir2)} directories only in dir2")
             self.differences['dirs_only_in_dir2'] = sorted(only_in_dir2)
         
         if not only_in_dir1 and not only_in_dir2:
-            self.logger.info(f"Directory structures match ({len(common_dirs)} common directories)")
+            logger.info(f"Directory structures match ({len(common_dirs)} common directories)")
         
         return len(only_in_dir1) == 0 and len(only_in_dir2) == 0
     
     def compare_file_lists(self):
         """Compare file lists and filenames between the two exports"""
-        self.logger.info("Building file lists...")
+        logger.info("Building file lists...")
         
         files1 = self._get_all_files(self.dir1)
         files2 = self._get_all_files(self.dir2)
@@ -315,8 +296,8 @@ class ExportComparator:
         self.stats['total_files_dir1'] = len(files1)
         self.stats['total_files_dir2'] = len(files2)
         
-        self.logger.info(f"Directory 1: {len(files1)} files")
-        self.logger.info(f"Directory 2: {len(files2)} files")
+        logger.info(f"Directory 1: {len(files1)} files")
+        logger.info(f"Directory 2: {len(files2)} files")
         
         files1_set = set(files1.keys())
         files2_set = set(files2.keys())
@@ -330,15 +311,15 @@ class ExportComparator:
         self.stats['matched_files'] = len(common_files)
         
         if only_in_dir1:
-            self.logger.warning(f"Found {len(only_in_dir1)} files only in dir1")
+            logger.warning(f"Found {len(only_in_dir1)} files only in dir1")
             self.differences['files_only_in_dir1'] = sorted(only_in_dir1)
         
         if only_in_dir2:
-            self.logger.warning(f"Found {len(only_in_dir2)} files only in dir2")
+            logger.warning(f"Found {len(only_in_dir2)} files only in dir2")
             self.differences['files_only_in_dir2'] = sorted(only_in_dir2)
         
         if not only_in_dir1 and not only_in_dir2:
-            self.logger.info(f"File lists match ({len(common_files)} common files)")
+            logger.info(f"File lists match ({len(common_files)} common files)")
         
         return common_files, files1, files2
     
@@ -346,10 +327,10 @@ class ExportComparator:
                              files2: Dict[str, Path]):
         """Compare contents of matching files using hash comparison"""
         if self.skip_content:
-            self.logger.info("Skipping content comparison (--skip-content)")
+            logger.info("Skipping content comparison (--skip-content)")
             return
         
-        self.logger.info(f"Comparing contents of {len(common_files)} common files...")
+        logger.info(f"Comparing contents of {len(common_files)} common files...")
         
         iterator = tqdm(sorted(common_files), desc="Comparing files") if HAS_TQDM else sorted(common_files)
         
@@ -369,7 +350,7 @@ class ExportComparator:
                     'dir2_size': size2,
                     'difference': abs(size1 - size2)
                 })
-                self.logger.debug(f"Size mismatch: {rel_path}")
+                logger.debug(f"Size mismatch: {rel_path}")
                 continue
             
             # Compare content hashes
@@ -377,7 +358,7 @@ class ExportComparator:
             hash2 = self._compute_file_hash(file2)
             
             if hash1 is None or hash2 is None:
-                self.logger.warning(f"Could not compute hash for {rel_path}")
+                logger.warning(f"Could not compute hash for {rel_path}")
                 continue
             
             if hash1 != hash2:
@@ -387,30 +368,30 @@ class ExportComparator:
                     'dir1_hash': hash1,
                     'dir2_hash': hash2
                 })
-                self.logger.debug(f"Content mismatch: {rel_path}")
+                logger.debug(f"Content mismatch: {rel_path}")
         
         if self.stats['content_mismatches'] == 0 and self.stats['size_mismatches'] == 0:
-            self.logger.info("All file contents match!")
+            logger.info("All file contents match!")
         else:
             if self.stats['size_mismatches'] > 0:
-                self.logger.warning(f"Found {self.stats['size_mismatches']} files with size mismatches")
+                logger.warning(f"Found {self.stats['size_mismatches']} files with size mismatches")
             if self.stats['content_mismatches'] > 0:
-                self.logger.warning(f"Found {self.stats['content_mismatches']} files with content mismatches")
+                logger.warning(f"Found {self.stats['content_mismatches']} files with content mismatches")
     
     def compare_metadata(self, common_files: Set[str], files1: Dict[str, Path], 
                         files2: Dict[str, Path]):
         """Compare EXIF/XMP metadata of matching files using batch processing"""
         if self.skip_metadata:
-            self.logger.info("Skipping metadata comparison (--skip-metadata)")
+            logger.info("Skipping metadata comparison (--skip-metadata)")
             return
         
-        self.logger.info(f"Comparing metadata of {len(common_files)} common files...")
+        logger.info(f"Comparing metadata of {len(common_files)} common files...")
         
         # Check if exiftool is available
         try:
             subprocess.run(['exiftool', '-ver'], capture_output=True, check=True, stdin=subprocess.DEVNULL)
         except (FileNotFoundError, subprocess.CalledProcessError):
-            self.logger.warning("exiftool not available - skipping metadata comparison")
+            logger.warning("exiftool not available - skipping metadata comparison")
             return
         
         # Filter to only media files
@@ -425,23 +406,23 @@ class ExportComparator:
                 media_files.append((rel_path, file1, files2[rel_path]))
         
         if not media_files:
-            self.logger.info("No media files to compare metadata")
+            logger.info("No media files to compare metadata")
             return
         
-        self.logger.info(f"Reading metadata for {len(media_files)} media files using batch processing...")
+        logger.info(f"Reading metadata for {len(media_files)} media files using batch processing...")
         
         # Batch read metadata from both directories
         files1_paths = [item[1] for item in media_files]
         files2_paths = [item[2] for item in media_files]
         
-        self.logger.debug("Reading metadata from directory 1...")
+        logger.debug("Reading metadata from directory 1...")
         metadata1_map = self._batch_get_exif_metadata(files1_paths)
         
-        self.logger.debug("Reading metadata from directory 2...")
+        logger.debug("Reading metadata from directory 2...")
         metadata2_map = self._batch_get_exif_metadata(files2_paths)
         
         # Compare metadata for each file
-        self.logger.info("Comparing metadata...")
+        logger.info("Comparing metadata...")
         iterator = tqdm(media_files, desc="Comparing metadata") if HAS_TQDM else media_files
         
         for rel_path, file1, file2 in iterator:
@@ -456,97 +437,97 @@ class ExportComparator:
                 self.stats['metadata_mismatches'] += 1
         
         if self.stats['metadata_mismatches'] == 0:
-            self.logger.info("All metadata matches!")
+            logger.info("All metadata matches!")
         else:
-            self.logger.warning(f"Found {self.stats['metadata_mismatches']} files with metadata mismatches")
+            logger.warning(f"Found {self.stats['metadata_mismatches']} files with metadata mismatches")
     
     def generate_report(self):
         """Generate final comparison report"""
-        self.logger.info("\n" + "="*80)
-        self.logger.info("COMPARISON SUMMARY")
-        self.logger.info("="*80)
+        logger.info("\n" + "="*80)
+        logger.info("COMPARISON SUMMARY")
+        logger.info("="*80)
         
-        self.logger.info("\nDirectories compared:")
-        self.logger.info(f"  Dir1: {self.dir1}")
-        self.logger.info(f"  Dir2: {self.dir2}")
+        logger.info("\nDirectories compared:")
+        logger.info(f"  Dir1: {self.dir1}")
+        logger.info(f"  Dir2: {self.dir2}")
         
-        self.logger.info("\nFile counts:")
-        self.logger.info(f"  Total files in dir1: {self.stats['total_files_dir1']}")
-        self.logger.info(f"  Total files in dir2: {self.stats['total_files_dir2']}")
-        self.logger.info(f"  Matched files: {self.stats['matched_files']}")
-        self.logger.info(f"  Files only in dir1: {self.stats['files_only_in_dir1']}")
-        self.logger.info(f"  Files only in dir2: {self.stats['files_only_in_dir2']}")
+        logger.info("\nFile counts:")
+        logger.info(f"  Total files in dir1: {self.stats['total_files_dir1']}")
+        logger.info(f"  Total files in dir2: {self.stats['total_files_dir2']}")
+        logger.info(f"  Matched files: {self.stats['matched_files']}")
+        logger.info(f"  Files only in dir1: {self.stats['files_only_in_dir1']}")
+        logger.info(f"  Files only in dir2: {self.stats['files_only_in_dir2']}")
         
-        self.logger.info("\nDifferences found:")
-        self.logger.info(f"  Size mismatches: {self.stats['size_mismatches']}")
-        self.logger.info(f"  Content mismatches: {self.stats['content_mismatches']}")
-        self.logger.info(f"  Metadata mismatches: {self.stats['metadata_mismatches']}")
-        self.logger.info(f"  Directories only in dir1: {len(self.differences.get('dirs_only_in_dir1', []))}")
-        self.logger.info(f"  Directories only in dir2: {len(self.differences.get('dirs_only_in_dir2', []))}")
+        logger.info("\nDifferences found:")
+        logger.info(f"  Size mismatches: {self.stats['size_mismatches']}")
+        logger.info(f"  Content mismatches: {self.stats['content_mismatches']}")
+        logger.info(f"  Metadata mismatches: {self.stats['metadata_mismatches']}")
+        logger.info(f"  Directories only in dir1: {len(self.differences.get('dirs_only_in_dir1', []))}")
+        logger.info(f"  Directories only in dir2: {len(self.differences.get('dirs_only_in_dir2', []))}")
         
         # Detailed differences
         if self.differences:
-            self.logger.info("\n" + "="*80)
-            self.logger.info("DETAILED DIFFERENCES")
-            self.logger.info("="*80)
+            logger.info("\n" + "="*80)
+            logger.info("DETAILED DIFFERENCES")
+            logger.info("="*80)
             
             if self.differences.get('dirs_only_in_dir1'):
-                self.logger.info("\nDirectories only in dir1:")
+                logger.info("\nDirectories only in dir1:")
                 for d in self.differences['dirs_only_in_dir1'][:20]:  # Limit output
-                    self.logger.info(f"  - {d}")
+                    logger.info(f"  - {d}")
                 if len(self.differences['dirs_only_in_dir1']) > 20:
-                    self.logger.info(f"  ... and {len(self.differences['dirs_only_in_dir1']) - 20} more")
+                    logger.info(f"  ... and {len(self.differences['dirs_only_in_dir1']) - 20} more")
             
             if self.differences.get('dirs_only_in_dir2'):
-                self.logger.info("\nDirectories only in dir2:")
+                logger.info("\nDirectories only in dir2:")
                 for d in self.differences['dirs_only_in_dir2'][:20]:
-                    self.logger.info(f"  - {d}")
+                    logger.info(f"  - {d}")
                 if len(self.differences['dirs_only_in_dir2']) > 20:
-                    self.logger.info(f"  ... and {len(self.differences['dirs_only_in_dir2']) - 20} more")
+                    logger.info(f"  ... and {len(self.differences['dirs_only_in_dir2']) - 20} more")
             
             if self.differences.get('files_only_in_dir1'):
-                self.logger.info("\nFiles only in dir1:")
+                logger.info("\nFiles only in dir1:")
                 for f in self.differences['files_only_in_dir1'][:20]:
-                    self.logger.info(f"  - {f}")
+                    logger.info(f"  - {f}")
                 if len(self.differences['files_only_in_dir1']) > 20:
-                    self.logger.info(f"  ... and {len(self.differences['files_only_in_dir1']) - 20} more")
+                    logger.info(f"  ... and {len(self.differences['files_only_in_dir1']) - 20} more")
             
             if self.differences.get('files_only_in_dir2'):
-                self.logger.info("\nFiles only in dir2:")
+                logger.info("\nFiles only in dir2:")
                 for f in self.differences['files_only_in_dir2'][:20]:
-                    self.logger.info(f"  - {f}")
+                    logger.info(f"  - {f}")
                 if len(self.differences['files_only_in_dir2']) > 20:
-                    self.logger.info(f"  ... and {len(self.differences['files_only_in_dir2']) - 20} more")
+                    logger.info(f"  ... and {len(self.differences['files_only_in_dir2']) - 20} more")
             
             if self.differences.get('size_mismatch'):
-                self.logger.info("\nFile size mismatches:")
+                logger.info("\nFile size mismatches:")
                 for item in self.differences['size_mismatch'][:10]:
-                    self.logger.info(f"  - {item['file']}")
-                    self.logger.info(f"    Dir1: {item['dir1_size']:,} bytes")
-                    self.logger.info(f"    Dir2: {item['dir2_size']:,} bytes")
+                    logger.info(f"  - {item['file']}")
+                    logger.info(f"    Dir1: {item['dir1_size']:,} bytes")
+                    logger.info(f"    Dir2: {item['dir2_size']:,} bytes")
                 if len(self.differences['size_mismatch']) > 10:
-                    self.logger.info(f"  ... and {len(self.differences['size_mismatch']) - 10} more")
+                    logger.info(f"  ... and {len(self.differences['size_mismatch']) - 10} more")
             
             if self.differences.get('content_mismatch'):
-                self.logger.info("\nFile content mismatches:")
+                logger.info("\nFile content mismatches:")
                 for item in self.differences['content_mismatch'][:10]:
-                    self.logger.info(f"  - {item['file']}")
+                    logger.info(f"  - {item['file']}")
                 if len(self.differences['content_mismatch']) > 10:
-                    self.logger.info(f"  ... and {len(self.differences['content_mismatch']) - 10} more")
+                    logger.info(f"  ... and {len(self.differences['content_mismatch']) - 10} more")
             
             if self.differences.get('metadata'):
-                self.logger.info("\nMetadata mismatches:")
+                logger.info("\nMetadata mismatches:")
                 for item in self.differences['metadata'][:5]:
-                    self.logger.info(f"  - {item['file']}")
+                    logger.info(f"  - {item['file']}")
                     if 'differences' in item:
                         for diff in item['differences'][:3]:
-                            self.logger.info(f"    {diff['field']}:")
-                            self.logger.info(f"      Dir1: {diff['dir1_value']}")
-                            self.logger.info(f"      Dir2: {diff['dir2_value']}")
+                            logger.info(f"    {diff['field']}:")
+                            logger.info(f"      Dir1: {diff['dir1_value']}")
+                            logger.info(f"      Dir2: {diff['dir2_value']}")
                         if len(item['differences']) > 3:
-                            self.logger.info(f"    ... and {len(item['differences']) - 3} more fields")
+                            logger.info(f"    ... and {len(item['differences']) - 3} more fields")
                 if len(self.differences['metadata']) > 5:
-                    self.logger.info(f"  ... and {len(self.differences['metadata']) - 5} more files")
+                    logger.info(f"  ... and {len(self.differences['metadata']) - 5} more files")
         
         # Final verdict
         total_issues = (
@@ -559,12 +540,12 @@ class ExportComparator:
             len(self.differences.get('dirs_only_in_dir2', []))
         )
         
-        self.logger.info("\n" + "="*80)
+        logger.info("\n" + "="*80)
         if total_issues == 0:
-            self.logger.info("RESULT: Exports are IDENTICAL")
+            logger.info("RESULT: Exports are IDENTICAL")
         else:
-            self.logger.info(f"RESULT: Found {total_issues} differences between exports")
-        self.logger.info("="*80)
+            logger.info(f"RESULT: Found {total_issues} differences between exports")
+        logger.info("="*80)
         
         # Save detailed JSON report
         json_report_path = self.log_file.with_suffix('.json')
@@ -580,24 +561,24 @@ class ExportComparator:
         with open(json_report_path, 'w', encoding='utf-8') as f:
             json.dump(report_data, f, indent=2, ensure_ascii=False)
         
-        self.logger.info(f"\nDetailed JSON report saved to: {json_report_path}")
+        logger.info(f"\nDetailed JSON report saved to: {json_report_path}")
         
         return total_issues == 0
     
     def run(self) -> bool:
         """Run the full comparison. Returns True if exports are identical."""
-        self.logger.info("Starting export comparison...")
-        self.logger.info(f"Dir1: {self.dir1}")
-        self.logger.info(f"Dir2: {self.dir2}")
-        self.logger.info(f"Log file: {self.log_file}")
+        logger.info("Starting export comparison...")
+        logger.info(f"Dir1: {self.dir1}")
+        logger.info(f"Dir2: {self.dir2}")
+        logger.info(f"Log file: {self.log_file}")
         
         # Verify directories exist
         if not self.dir1.exists():
-            self.logger.error(f"Directory 1 does not exist: {self.dir1}")
+            logger.error(f"Directory 1 does not exist: {self.dir1}")
             return False
         
         if not self.dir2.exists():
-            self.logger.error(f"Directory 2 does not exist: {self.dir2}")
+            logger.error(f"Directory 2 does not exist: {self.dir2}")
             return False
         
         # Run comparisons
@@ -656,6 +637,9 @@ Examples:
     
     args = parser.parse_args()
     
+    # Set up logging using shared infrastructure
+    setup_logging(verbose=args.verbose, log_file=str(args.log))
+    
     # Create comparator and run
     comparator = ExportComparator(
         dir1=args.dir1,
@@ -665,12 +649,6 @@ Examples:
         skip_metadata=args.skip_metadata,
         ignore_patterns=args.ignore_patterns
     )
-    
-    # Adjust logging level if verbose
-    if args.verbose:
-        comparator.logger.setLevel(logging.DEBUG)
-        for handler in comparator.logger.handlers:
-            handler.setLevel(logging.DEBUG)
     
     identical = comparator.run()
     

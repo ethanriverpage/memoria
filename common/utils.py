@@ -9,6 +9,13 @@ import re
 from pathlib import Path
 from typing import Optional
 
+# Re-export logging functions from centralized logging module for backwards compatibility
+from common.logging_config import (
+    setup_logging,
+    add_export_log_handler,
+    remove_export_log_handler,
+)
+
 
 # ============================================================================
 # Media Type Detection
@@ -187,154 +194,6 @@ def sanitize_filename(name: str, max_length: int = 50) -> str:
         sanitized = "unknown"
 
     return sanitized
-
-
-def setup_logging(
-    verbose: bool = False, log_file: Optional[str] = None
-) -> logging.Logger:
-    """Configure logging for media processing
-
-    Sets up console logging with appropriate level and optional file logging.
-
-    In info mode (verbose=False):
-    - Console shows only ERROR messages (clean output with progress bars)
-    - Third-party libraries are suppressed to WARNING level
-
-    In verbose mode (verbose=True):
-    - Console shows INFO level messages
-    - File captures all DEBUG logs
-    - Third-party libraries still suppressed to WARNING
-
-    Args:
-        verbose: If True, enable verbose console output and file logging
-        log_file: Optional path to log file for persistent logging
-
-    Returns:
-        Configured root logger
-
-    Example:
-        >>> logger = setup_logging(verbose=True, log_file="processing.log")
-        >>> logger.info("Processing started")
-    """
-    # Configure root logger to capture everything
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)
-
-    # Clear any existing handlers to avoid duplicates
-    root_logger.handlers.clear()
-
-    # Create console handler
-    # In info mode: only show errors (clean console with progress bars)
-    # In verbose mode: show info and above
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO if verbose else logging.ERROR)
-
-    # Create formatter
-    if verbose:
-        # More detailed format for verbose mode
-        formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-    else:
-        # Simpler format for normal mode
-        formatter = logging.Formatter("%(levelname)s: %(message)s")
-
-    console_handler.setFormatter(formatter)
-    root_logger.addHandler(console_handler)
-
-    # Add file handler if log_file specified
-    if log_file:
-        file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
-        file_handler.setLevel(logging.DEBUG)  # Always log everything to file
-
-        # Use detailed format for file logging
-        file_formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-        file_handler.setFormatter(file_formatter)
-        root_logger.addHandler(file_handler)
-
-    # Suppress noisy third-party loggers
-    for library in ['PIL', 'urllib3', 'urllib3.connectionpool', 'requests']:
-        logging.getLogger(library).setLevel(logging.WARNING)
-
-    return root_logger
-
-
-def add_export_log_handler(export_name: str, verbose: bool = False) -> Optional[logging.FileHandler]:
-    """Add a per-export log file handler to the root logger
-    
-    Creates a separate log file for a specific export being processed.
-    This allows each export to have its own log file while still logging
-    to the main log file.
-    
-    Args:
-        export_name: Name of the export (used in log filename)
-        verbose: If True, create the log file. If False, skip per-export logging.
-        
-    Returns:
-        The created FileHandler, or None if verbose is False
-        
-    Example:
-        >>> handler = add_export_log_handler("google-user-20250526", verbose=True)
-        >>> # Process the export...
-        >>> if handler:
-        ...     remove_export_log_handler(handler)
-    """
-    if not verbose:
-        return None
-    
-    from datetime import datetime
-    
-    # Create logs directory if it doesn't exist
-    logs_dir = Path("logs")
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Create log filename with export name and timestamp
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_file = logs_dir / f"log-{export_name}-{timestamp}.log"
-    
-    # Create file handler for this export
-    file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
-    file_handler.setLevel(logging.DEBUG)  # Log everything to file
-    
-    # Use detailed format for file logging
-    file_formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    file_handler.setFormatter(file_formatter)
-    
-    # Add handler to root logger
-    root_logger = logging.getLogger()
-    root_logger.addHandler(file_handler)
-    
-    return file_handler
-
-
-def remove_export_log_handler(handler: logging.FileHandler) -> None:
-    """Remove a per-export log file handler from the root logger
-    
-    Should be called after processing an export to clean up the handler
-    and close the file.
-    
-    Args:
-        handler: The FileHandler to remove (returned by add_export_log_handler)
-        
-    Example:
-        >>> handler = add_export_log_handler("google-user-20250526", verbose=True)
-        >>> # Process the export...
-        >>> if handler:
-        ...     remove_export_log_handler(handler)
-    """
-    if handler is None:
-        return
-    
-    root_logger = logging.getLogger()
-    root_logger.removeHandler(handler)
-    handler.close()
 
 
 def default_worker_count() -> int:

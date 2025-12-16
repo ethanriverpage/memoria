@@ -26,6 +26,7 @@ from common.exiftool_batch import (
     batch_read_existing_metadata,
     batch_write_metadata_snapchat_messages,
 )
+from common.logging_config import init_worker_logging
 from common.overlay import (
     create_image_with_overlay,
     create_video_with_overlay,
@@ -498,43 +499,6 @@ def _update_snapchat_timestamps(file_path: Path, message: dict) -> bool:
 
 
 
-def _init_worker_logging(log_filename):
-    """Initialize logging for worker processes
-
-    Args:
-        log_filename: Path to the log file for verbose output
-    """
-    if log_filename:
-        # Set up file handler for worker process
-        log_format = "%(asctime)s - %(levelname)s - %(message)s"
-        formatter = logging.Formatter(log_format)
-
-        # Set root logger to INFO (to avoid third-party library spam)
-        root_logger = logging.getLogger()
-        root_logger.setLevel(logging.INFO)
-
-        # Add file handler
-        file_handler = logging.FileHandler(log_filename)
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(formatter)
-        root_logger.addHandler(file_handler)
-
-        # Set application modules to DEBUG level
-        logging.getLogger(__name__).setLevel(logging.DEBUG)
-        logging.getLogger("common.overlay").setLevel(
-            logging.DEBUG
-        )
-        logging.getLogger("processors.snapchat_messages.preprocess").setLevel(
-            logging.DEBUG
-        )
-        logging.getLogger("common.video_encoder").setLevel(
-            logging.DEBUG
-        )
-
-        # Suppress verbose third-party library logging
-        logging.getLogger("PIL").setLevel(logging.INFO)
-
-
 def _create_file_worker(args_tuple):
     """Worker function for creating output files with overlays (Phase 1)
 
@@ -866,10 +830,17 @@ def _process_snapchat_working_directory(working_dir, output_dir, workers, log_fi
     failed_count = 0
 
     if num_workers > 1:
+        # Specify app modules for DEBUG level in workers
+        worker_app_modules = [
+            __name__,
+            "common.overlay",
+            "common.video_encoder",
+            "processors.snapchat_messages.preprocess",
+        ]
         with Pool(
             processes=num_workers,
-            initializer=_init_worker_logging,
-            initargs=(log_filename,),
+            initializer=init_worker_logging,
+            initargs=(log_filename, worker_app_modules),
         ) as pool:
             results = list(
                 progress_bar(

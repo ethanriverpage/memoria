@@ -171,10 +171,7 @@ class DiscordProcessor(ProcessorBase):
             return True
 
         except Exception as e:
-            logger.error(f"Error in DiscordProcessor: {e}")
-            import traceback
-
-            traceback.print_exc()
+            logger.exception(f"Error in DiscordProcessor: {e}")
             return False
 
 
