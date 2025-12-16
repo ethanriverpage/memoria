@@ -25,6 +25,7 @@ from common.exiftool_batch import (
     batch_read_existing_metadata,
     batch_write_metadata_snapchat_memories,
 )
+from common.failure_tracker import FailureTracker
 from common.filter_banned_files import BannedFilesFilter
 from common.overlay import (
     create_image_with_overlay,
@@ -309,7 +310,8 @@ def create_memory_file(args_tuple):
         args_tuple: Tuple containing (memory, output_filename, raw_dir, output_dir, export_username)
 
     Returns:
-        Tuple of (success: bool, output_path: str or None, is_mkv: bool, memory: dict, export_username: str)
+        Tuple of (success: bool, output_path: str or None, is_mkv: bool, memory: dict,
+                  export_username: str, failure_reason: str or None)
     """
     memory, output_filename, raw_dir, output_dir, export_username = args_tuple
 
@@ -325,7 +327,7 @@ def create_memory_file(args_tuple):
 
     if not os.path.exists(media_path):
         logger.warning(f"Media file not found: {media_path}")
-        return (False, None, False, memory, export_username)
+        return (False, None, False, memory, export_username, media_path)
 
     # Determine if this is a video or image
     is_video = get_media_type(media_filename) == "video"
@@ -342,7 +344,7 @@ def create_memory_file(args_tuple):
             output_path = os.path.join(output_dir, output_filename)
             shutil.copy2(media_path, output_path)
             _update_memory_timestamps(output_path, memory)
-            return (True, output_path, False, memory, export_username)
+            return (True, output_path, False, memory, export_username, None)
 
         if is_video:
             # Video with overlay - create multi-track MKV
@@ -362,14 +364,14 @@ def create_memory_file(args_tuple):
                 # Update filesystem timestamps
                 _update_memory_timestamps(output_path, memory)
                 # MKV files already have metadata embedded, mark as such
-                return (True, output_path, True, memory, export_username)
+                return (True, output_path, True, memory, export_username, None)
             else:
                 # Multi-track creation failed, copy original video with original extension
                 fallback_path = os.path.join(output_dir, output_filename)
                 shutil.copy2(media_path, fallback_path)
                 _update_memory_timestamps(fallback_path, memory)
                 # Fallback file needs batch EXIF processing
-                return (True, fallback_path, False, memory, export_username)
+                return (True, fallback_path, False, memory, export_username, None)
 
         elif is_image:
             # Image with overlay - composite
@@ -382,25 +384,25 @@ def create_memory_file(args_tuple):
             ):
                 _update_memory_timestamps(output_path, memory)
                 # Image needs batch EXIF processing
-                return (True, output_path, False, memory, export_username)
+                return (True, output_path, False, memory, export_username, None)
             else:
                 # Image processing failed, copy original
                 shutil.copy2(media_path, output_path)
                 _update_memory_timestamps(output_path, memory)
-                return (True, output_path, False, memory, export_username)
+                return (True, output_path, False, memory, export_username, None)
         else:
             # Unknown file type with overlay - just copy
             output_path = os.path.join(output_dir, output_filename)
             shutil.copy2(media_path, output_path)
             _update_memory_timestamps(output_path, memory)
-            return (True, output_path, False, memory, export_username)
+            return (True, output_path, False, memory, export_username, None)
     else:
         # No overlay - just copy
         output_path = os.path.join(output_dir, output_filename)
         shutil.copy2(media_path, output_path)
         _update_memory_timestamps(output_path, memory)
         # File needs batch EXIF processing
-        return (True, output_path, False, memory, export_username)
+        return (True, output_path, False, memory, export_username, None)
 
 
 def process_logic(
@@ -466,13 +468,39 @@ def process_logic(
         memories = json.load(f)
     logger.info(f"Found {len(memories)} memories to process")
 
-    # Create output directory (subdirectory already set by caller)
-    output_path = Path(output_dir)
-    output_path.mkdir(exist_ok=True, parents=True)
-
     # Initialize banned files filter
     banned_filter = BannedFilesFilter()
     logger.debug(f"Banned file patterns: {', '.join(banned_filter.get_patterns())}")
+
+    # Initialize failure tracker
+    failure_tracker = FailureTracker(
+        processor_name="Snapchat Memories",
+        export_directory=raw_dir,
+    )
+
+    # Track orphaned media files (files in media/ not referenced in metadata)
+    media_dir = Path(raw_dir) / "media"
+    if media_dir.exists():
+        # Build set of all media filenames referenced in metadata
+        referenced_files = {memory["media_filename"] for memory in memories}
+
+        # Scan media directory for all files
+        for media_file in media_dir.iterdir():
+            if media_file.is_file():
+                # Skip banned files - they're intentionally excluded
+                if banned_filter.is_banned(media_file):
+                    continue
+                if media_file.name not in referenced_files:
+                    logger.debug(f"Orphaned media file (no metadata): {media_file.name}")
+                    failure_tracker.add_orphaned_media(
+                        media_path=media_file,
+                        reason="No matching metadata found",
+                        context={"original_location": str(media_file)},
+                    )
+
+    # Create output directory (subdirectory already set by caller)
+    output_path = Path(output_dir)
+    output_path.mkdir(exist_ok=True, parents=True)
 
     # Determine number of workers
     num_workers = workers if workers is not None else default_worker_count()
@@ -542,7 +570,7 @@ def process_logic(
     file_paths = []
     file_info = []
 
-    for success, output_path, is_mkv, memory, export_username in results:
+    for success, output_path, is_mkv, memory, export_username, failure_info in results:
         if success and output_path:
             success_count += 1
             # Only add non-MKV files to batch processing list
@@ -552,6 +580,13 @@ def process_logic(
                 file_info.append((output_path, memory, export_username))
         else:
             failed_count += 1
+            # Track orphaned metadata (metadata without corresponding media file)
+            if failure_info:
+                failure_tracker.add_orphaned_metadata(
+                    metadata_entry=memory,
+                    reason="Media file not found in filesystem",
+                    context={"expected_path": failure_info},
+                )
 
     logger.info(
         f"\nCreated {success_count} files ({len(file_info)} need EXIF processing)"
@@ -574,6 +609,9 @@ def process_logic(
         # Batch read and write metadata
         existing_metadata_map = batch_read_existing_metadata(file_paths)
         batch_write_metadata_snapchat_memories(file_info, existing_metadata_map)
+
+    # Handle failures - copy orphaned files and generate report
+    failure_tracker.handle_failures(output_path)
 
     # Print summary using shared utility
     print_processing_summary(
