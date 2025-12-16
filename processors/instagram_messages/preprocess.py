@@ -17,9 +17,12 @@ from datetime import datetime
 import sys
 import argparse
 from bs4 import BeautifulSoup
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 import multiprocessing
+
+import xxhash
+
 from common.filter_banned_files import BannedFilesFilter
 from common.progress import PHASE_PREPROCESS, futures_progress
 from common.failure_tracker import FailureTracker
@@ -84,6 +87,11 @@ class InstagramMessagesPreprocessor:
         self.stats_lock = Lock()
         self.log_lock = Lock()
         self.destination_lock = Lock()
+        self.dedup_lock = Lock()
+
+        # Content hash registry for deduplication
+        # Maps content_hash -> {filename, first_occurrence: {conversation_id, timestamp, sender}}
+        self.content_hashes: Dict[str, Dict] = {}
 
         # Statistics
         self.stats = {
@@ -94,6 +102,8 @@ class InstagramMessagesPreprocessor:
             "orphaned_files": 0,
             "missing_files": 0,
             "banned_files_skipped": 0,
+            "unique_files": 0,
+            "duplicate_files": 0,
         }
 
         # Log entries
@@ -151,6 +161,21 @@ class InstagramMessagesPreprocessor:
             return False
 
         return True
+
+    def _compute_file_hash(self, file_path: Path) -> str:
+        """Compute xxHash64 of file for deduplication.
+
+        Args:
+            file_path: Path to file
+
+        Returns:
+            Hexadecimal hash digest
+        """
+        hasher = xxhash.xxh64()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
 
     def parse_timestamp(self, timestamp_str: str) -> Optional[str]:
         """
@@ -423,11 +448,16 @@ class InstagramMessagesPreprocessor:
     def copy_media_files(
         self, conversations: List[Dict], file_catalog: Dict[str, Path]
     ) -> None:
-        """Copy media files referenced in metadata to output directory"""
+        """Copy media files referenced in metadata to output directory.
+
+        Implements content-based deduplication using xxHash64. Files with
+        identical content are only copied once, with subsequent references
+        pointing to the same file.
+        """
         # Create output media directory
         self.media_output_dir.mkdir(parents=True, exist_ok=True)
 
-        print("\nCopying media files...")
+        print("\nCopying media files (with deduplication)...")
 
         matched_files = set()
 
@@ -442,20 +472,64 @@ class InstagramMessagesPreprocessor:
 
                     if filename in file_catalog:
                         source_path = file_catalog[filename]
-                        dest_path = self.media_output_dir / filename
 
+                        # Compute content hash for deduplication
                         try:
-                            shutil.copy2(source_path, dest_path)
-                            copied_files.append(filename)
-                            matched_files.add(filename)
-                            self.stats["media_copied"] += 1
+                            content_hash = self._compute_file_hash(source_path)
                         except Exception as e:
-                            self.log_message(
-                                "COPY_ERROR",
-                                f"Failed to copy {filename}",
-                                str(e),
-                            )
-                            print(f"ERROR: Failed to copy {filename}: {e}")
+                            logger.warning(f"Failed to hash {source_path}: {e}")
+                            # Fall back to copying without deduplication
+                            dest_path = self.media_output_dir / filename
+                            try:
+                                shutil.copy2(source_path, dest_path)
+                                copied_files.append(filename)
+                                matched_files.add(filename)
+                                self.stats["media_copied"] += 1
+                                self.stats["unique_files"] += 1
+                            except Exception as copy_err:
+                                self.log_message(
+                                    "COPY_ERROR",
+                                    f"Failed to copy {filename}",
+                                    str(copy_err),
+                                )
+                                print(f"ERROR: Failed to copy {filename}: {copy_err}")
+                            continue
+
+                        # Check for duplicate using content hash
+                        with self.dedup_lock:
+                            if content_hash in self.content_hashes:
+                                # Duplicate found - use existing file
+                                existing_info = self.content_hashes[content_hash]
+                                existing_filename = existing_info["filename"]
+                                copied_files.append(existing_filename)
+                                matched_files.add(filename)
+                                self.stats["duplicate_files"] += 1
+                            else:
+                                # New unique file - copy and register it
+                                dest_path = self.media_output_dir / filename
+                                try:
+                                    shutil.copy2(source_path, dest_path)
+                                    copied_files.append(filename)
+                                    matched_files.add(filename)
+                                    self.stats["media_copied"] += 1
+                                    self.stats["unique_files"] += 1
+
+                                    # Register in hash registry
+                                    self.content_hashes[content_hash] = {
+                                        "filename": filename,
+                                        "first_occurrence": {
+                                            "conversation_id": conversation["conversation_id"],
+                                            "timestamp": message.get("timestamp"),
+                                            "sender": message.get("sender"),
+                                        },
+                                    }
+                                except Exception as e:
+                                    self.log_message(
+                                        "COPY_ERROR",
+                                        f"Failed to copy {filename}",
+                                        str(e),
+                                    )
+                                    print(f"ERROR: Failed to copy {filename}: {e}")
                     else:
                         self.log_message(
                             "MISSING_FILE",
@@ -463,7 +537,7 @@ class InstagramMessagesPreprocessor:
                             f"from path: {media_path}",
                         )
                         self.stats["missing_files"] += 1
-                        
+
                         # Track orphaned metadata
                         self.failure_tracker.add_orphaned_metadata(
                             metadata_entry={
@@ -492,7 +566,7 @@ class InstagramMessagesPreprocessor:
                 "ORPHANED_FILE",
                 f"File in filesystem not referenced in any HTML: {filename}",
             )
-            
+
             # Track orphaned media
             source_path = file_catalog[filename]
             self.failure_tracker.add_orphaned_media(
@@ -504,6 +578,8 @@ class InstagramMessagesPreprocessor:
             )
 
         logger.info(f"   Copied {self.stats['media_copied']} files")
+        print(f"   Unique files copied: {self.stats['unique_files']}")
+        print(f"   Duplicates skipped: {self.stats['duplicate_files']}")
         print(f"   Missing files: {self.stats['missing_files']}")
         print(f"   Orphaned files: {self.stats['orphaned_files']}")
 
@@ -603,6 +679,8 @@ class InstagramMessagesPreprocessor:
                         "total_messages_with_media"
                     ],
                     "total_media_files": self.stats["media_copied"],
+                    "unique_files": self.stats["unique_files"],
+                    "duplicate_files": self.stats["duplicate_files"],
                 },
                 "conversations": conversations,
             }
@@ -634,6 +712,13 @@ class InstagramMessagesPreprocessor:
             f"Banned files skipped:             {self.stats['banned_files_skipped']:>6}"
         )
         print("=" * 70)
+
+        # Deduplication summary
+        if self.stats["unique_files"] > 0 or self.stats["duplicate_files"] > 0:
+            print("\nDEDUPLICATION SUMMARY:")
+            print(f"  Unique media files:             {self.stats['unique_files']:>6}")
+            print(f"  Duplicate instances avoided:    {self.stats['duplicate_files']:>6}")
+            print("=" * 70)
 
     def process(self) -> None:
         """Main processing pipeline"""

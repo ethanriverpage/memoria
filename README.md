@@ -152,7 +152,7 @@ Files are renamed with descriptive, sortable names that include platform, userna
 |----------|------------------|
 | Google Chat | `gchat-john.doe-Family Chat-20230115.jpg` |
 | iMessage | `imessage-mac-14045551234-20230115.heic` |
-| Instagram Messages | `instagram-messages-jane_doe-Best Friends-20230220_1.mp4` |
+| Instagram Messages | `instagram-messages-jane_doe-Best Friends-20230220.mp4` |
 | Snapchat Messages | `snap-messages-user123-john-20230310.jpg` |
 | Instagram Posts | `insta-posts-user123-20230405.jpg` |
 | Google Photos | `gphotos-john.doe-IMG_1234.jpg` |
@@ -168,18 +168,15 @@ Processed files are organized by platform and service/media type:
 
 ```text
 platform-username-YYYYMMDD/
-├── Google Photos/
-│   └── john.doe/
-│       └── gphotos-john.doe-*.jpg
-├── Google Chat/
-│   └── john.doe/
-│       └── gchat-john.doe-*.jpg
+├── photos/                # Google Photos
+│   └── gphotos-john.doe-*.jpg
+├── chat/                  # Google Chat
+│   └── gchat-john.doe-*.jpg
 ├── messages/              # iMessage/Instagram/Snapchat Messages
 │   └── imessage-mac-*.heic
 │   └── *-messages-*.jpg
 └── memories/              # Snapchat Memories
-    └── username/
-        └── snap-*.mp4
+    └── snap-*.mp4
 ```
 
 **Additional Features**

@@ -17,7 +17,7 @@ from datetime import datetime
 import sys
 import argparse
 from bs4 import BeautifulSoup
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 import multiprocessing
 from common.filter_banned_files import BannedFilesFilter
@@ -157,7 +157,7 @@ class InstagramPreprocessor:
         if not self.html_dir.exists():
             new_path = self.export_path / "your_instagram_activity" / "media"
             legacy_path = self.export_path / "content"
-            print(f"ERROR: HTML metadata directory not found.")
+            print("ERROR: HTML metadata directory not found.")
             print(f"  Checked: {new_path}")
             print(f"  Checked: {legacy_path}")
             return False

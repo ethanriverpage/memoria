@@ -11,10 +11,11 @@ Only messages sent by the exporting user are included.
 
 import json
 import logging
+import os
 import re
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -23,11 +24,11 @@ from urllib.parse import urlparse, unquote
 import multiprocessing
 
 import requests
+import xxhash
 
 from common.filter_banned_files import BannedFilesFilter
 from common.failure_tracker import FailureTracker
 from common.progress import PHASE_PREPROCESS, futures_progress
-from common.utils import get_media_type
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -166,9 +167,14 @@ class DiscordPreprocessor:
         self.stats_lock = Lock()
         self.log_lock = Lock()
         self.filename_lock = Lock()
+        self.dedup_lock = Lock()
 
         # Track used filenames to avoid collisions
         self.used_filenames: Dict[str, int] = {}
+
+        # Content hash registry for deduplication
+        # Maps content_hash -> {filename, first_occurrence: {channel_id, message_id, timestamp, content}}
+        self.content_hashes: Dict[str, Dict] = {}
 
         # Statistics
         self.stats = {
@@ -180,6 +186,8 @@ class DiscordPreprocessor:
             "downloads_failed": 0,
             "downloads_skipped": 0,  # Non-media files
             "banned_files_skipped": 0,
+            "unique_files": 0,
+            "duplicate_files": 0,
         }
 
         # Log entries
@@ -471,16 +479,35 @@ class DiscordPreprocessor:
 
         return False, error_msg
 
+    def _compute_file_hash(self, file_path: Path) -> str:
+        """Compute xxHash64 of file for deduplication.
+
+        Args:
+            file_path: Path to file
+
+        Returns:
+            Hexadecimal hash digest
+        """
+        hasher = xxhash.xxh64()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+
     def _download_single_attachment(
         self, args: Tuple[str, str, int, str, str]
     ) -> Dict:
         """Worker function to download a single attachment.
 
+        Downloads the file, computes its hash for deduplication, and either
+        keeps it (if unique) or removes it and references the existing file
+        (if duplicate).
+
         Args:
             args: Tuple of (url, channel_id, message_id, timestamp, content)
 
         Returns:
-            Result dict with download status and metadata
+            Result dict with download status, metadata, and deduplication info
         """
         url, channel_id, message_id, timestamp, content = args
 
@@ -520,24 +547,9 @@ class DiscordPreprocessor:
         # Download the file
         success, error_msg = self.download_attachment(url, output_path)
 
-        with self.stats_lock:
-            if success:
-                self.stats["downloads_successful"] += 1
-            else:
+        if not success:
+            with self.stats_lock:
                 self.stats["downloads_failed"] += 1
-
-        if success:
-            return {
-                "success": True,
-                "url": url,
-                "filename": output_filename,
-                "original_filename": original_filename,
-                "channel_id": channel_id,
-                "message_id": message_id,
-                "timestamp": timestamp,
-                "content": content,
-            }
-        else:
             self.log_message(
                 "DOWNLOAD_FAILED",
                 f"Failed to download: {original_filename}",
@@ -562,6 +574,85 @@ class DiscordPreprocessor:
                 "url": url,
                 "error": error_msg,
             }
+
+        # File downloaded successfully - compute hash for deduplication
+        try:
+            content_hash = self._compute_file_hash(output_path)
+        except Exception as e:
+            logger.warning(f"Failed to hash {output_path}: {e}")
+            # Continue without deduplication if hashing fails
+            with self.stats_lock:
+                self.stats["downloads_successful"] += 1
+                self.stats["unique_files"] += 1
+            return {
+                "success": True,
+                "url": url,
+                "filename": output_filename,
+                "original_filename": original_filename,
+                "channel_id": channel_id,
+                "message_id": message_id,
+                "timestamp": timestamp,
+                "content": content,
+                "is_duplicate": False,
+            }
+
+        # Check for duplicate using content hash
+        with self.dedup_lock:
+            if content_hash in self.content_hashes:
+                # Duplicate found - use existing file
+                existing_info = self.content_hashes[content_hash]
+                existing_filename = existing_info["filename"]
+
+                # Delete the duplicate file we just downloaded
+                try:
+                    os.remove(output_path)
+                except Exception as e:
+                    logger.warning(f"Failed to remove duplicate file {output_path}: {e}")
+
+                with self.stats_lock:
+                    self.stats["downloads_successful"] += 1
+                    self.stats["duplicate_files"] += 1
+
+                return {
+                    "success": True,
+                    "url": url,
+                    "filename": existing_filename,  # Reference the existing file
+                    "original_filename": original_filename,
+                    "channel_id": channel_id,
+                    "message_id": message_id,
+                    "timestamp": timestamp,
+                    "content": content,
+                    "is_duplicate": True,
+                    "content_hash": content_hash,
+                }
+            else:
+                # New unique file - register it
+                self.content_hashes[content_hash] = {
+                    "filename": output_filename,
+                    "first_occurrence": {
+                        "channel_id": channel_id,
+                        "message_id": message_id,
+                        "timestamp": timestamp,
+                        "content": content,
+                    },
+                }
+
+                with self.stats_lock:
+                    self.stats["downloads_successful"] += 1
+                    self.stats["unique_files"] += 1
+
+                return {
+                    "success": True,
+                    "url": url,
+                    "filename": output_filename,
+                    "original_filename": original_filename,
+                    "channel_id": channel_id,
+                    "message_id": message_id,
+                    "timestamp": timestamp,
+                    "content": content,
+                    "is_duplicate": False,
+                    "content_hash": content_hash,
+                }
 
     def scan_channels(self) -> List[Path]:
         """Scan Messages directory for channel folders.
@@ -772,6 +863,8 @@ class DiscordPreprocessor:
             metadata["export_info"]["total_attachments"] = self.stats["total_attachments"]
             metadata["export_info"]["downloads_successful"] = self.stats["downloads_successful"]
             metadata["export_info"]["downloads_failed"] = self.stats["downloads_failed"]
+            metadata["export_info"]["unique_files"] = self.stats["unique_files"]
+            metadata["export_info"]["duplicate_files"] = self.stats["duplicate_files"]
 
             with open(self.metadata_file, "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
@@ -795,6 +888,13 @@ class DiscordPreprocessor:
         print(f"Downloads skipped (non-media):    {self.stats['downloads_skipped']:>6}")
         print(f"Banned files skipped:             {self.stats['banned_files_skipped']:>6}")
         print("=" * 70)
+
+        # Deduplication summary
+        if self.stats["unique_files"] > 0 or self.stats["duplicate_files"] > 0:
+            print("\nDEDUPLICATION SUMMARY:")
+            print(f"  Unique media files:             {self.stats['unique_files']:>6}")
+            print(f"  Duplicate instances avoided:    {self.stats['duplicate_files']:>6}")
+            print("=" * 70)
 
     def process(self) -> None:
         """Main processing pipeline."""

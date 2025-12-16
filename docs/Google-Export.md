@@ -96,7 +96,7 @@ google-username-YYYYMMDD/
 
 ### Important: Album Organization
 
-**Album folder structure is not preserved.** All photos are placed in a flat directory structure under `Google Photos/username/`. While album names are extracted from the Google Photos export and embedded in the file metadata, the physical organization into album folders is lost.
+**Album folder structure is not preserved.** All photos are placed in a flat directory structure under `photos/`. While album names are extracted from the Google Photos export and embedded in the file metadata, the physical organization into album folders is lost.
 
 If you need photos organized by albums in Immich or another photo management system, the album information will be available in the metadata for those systems to use, but Memoria itself outputs a flat file structure for simplicity and deduplication purposes.
 
@@ -188,10 +188,10 @@ google-username-YYYYMMDD/
 
 ### Output Organization
 
-Processed chat media is placed directly in the username directory:
+Processed chat media is placed directly in the chat directory:
 
 ```text
-output/Google Chat/username/
+output/chat/
 ├── gchat-username-Project_Team-20230115.jpg
 ├── gchat-username-Project_Team-20230116.mp4
 ├── gchat-username-John_Doe-20230220.jpg
@@ -287,21 +287,18 @@ Process them all:
 
 ```text
 /path/to/output/
-├── Google Photos/
-│   └── username/
-│       ├── gphotos-username-IMG_1234.jpg
-│       ├── gphotos-username-IMG_1235.mp4
-│       └── ...
-├── Google Chat/
-│   └── username/
-│       ├── gchat-username-Family_Chat-20230115.jpg
-│       ├── gchat-username-Work_Group-20230220.mp4
-│       └── ...
-└── Google Voice/
-    └── username/
-        ├── gvoice-username-+1234567890-20230115.mp3
-        ├── gvoice-username-+0987654321-20230220.jpg
-        └── ...
+├── photos/
+│   ├── gphotos-username-IMG_1234.jpg
+│   ├── gphotos-username-IMG_1235.mp4
+│   └── ...
+├── chat/
+│   ├── gchat-username-Family_Chat-20230115.jpg
+│   ├── gchat-username-Work_Group-20230220.mp4
+│   └── ...
+└── voice/
+    ├── gvoice-username-+1234567890-20230115.mp3
+    ├── gvoice-username-+0987654321-20230220.jpg
+    └── ...
 ```
 
 ### Immich Albums

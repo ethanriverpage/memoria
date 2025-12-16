@@ -24,102 +24,13 @@ from typing import Dict, List, Optional, Tuple, Union
 import xxhash
 
 from common.failure_tracker import FailureTracker
+from common.file_utils import detect_and_correct_extension
 from common.progress import PHASE_PREPROCESS, progress_bar
 from common.filter_banned_files import BannedFilesFilter
 from common.utils import get_media_type
 from processors.imessage.vcard_parser import VCardParser
 
 logger = logging.getLogger(__name__)
-
-# Magic byte signatures for file type detection
-# Format: (signature_bytes, offset, file_type, correct_extension)
-FILE_SIGNATURES = [
-    # Images
-    (b"\xff\xd8\xff", 0, "jpeg", ".jpg"),
-    (b"\x89PNG\r\n\x1a\n", 0, "png", ".png"),
-    (b"GIF87a", 0, "gif", ".gif"),
-    (b"GIF89a", 0, "gif", ".gif"),
-    (b"RIFF", 0, "webp", ".webp"),  # WebP (need additional check for WEBP)
-    # HEIC/HEIF - check ftyp box
-    (b"ftypheic", 4, "heic", ".heic"),
-    (b"ftypheix", 4, "heic", ".heic"),
-    (b"ftypmif1", 4, "heic", ".heic"),
-    (b"ftypmsf1", 4, "heic", ".heic"),
-    (b"ftyphevc", 4, "heic", ".heic"),
-    (b"ftyphevx", 4, "heic", ".heic"),
-    # Videos - QuickTime/MP4/MOV
-    (b"ftypqt", 4, "mov", ".mov"),
-    (b"ftypmp4", 4, "mp4", ".mp4"),
-    (b"ftypisom", 4, "mp4", ".mp4"),
-    (b"ftypM4V", 4, "m4v", ".m4v"),
-    (b"ftypm4v", 4, "m4v", ".m4v"),
-    (b"ftypM4A", 4, "m4a", ".m4a"),
-    (b"ftypm4a", 4, "m4a", ".m4a"),
-    # BMP
-    (b"BM", 0, "bmp", ".bmp"),
-    # TIFF
-    (b"II*\x00", 0, "tiff", ".tiff"),
-    (b"MM\x00*", 0, "tiff", ".tiff"),
-]
-
-
-def detect_actual_file_type(file_path: Path) -> Optional[Tuple[str, str]]:
-    """Detect actual file type using magic bytes.
-
-    Reads the first 32 bytes of a file and compares against known signatures
-    to determine the actual file format, regardless of file extension.
-
-    Args:
-        file_path: Path to the file to analyze
-
-    Returns:
-        Tuple of (file_type, correct_extension) or None if unknown
-        Example: ("jpeg", ".jpg") or ("png", ".png")
-    """
-    try:
-        with open(file_path, "rb") as f:
-            header = f.read(32)
-
-        if len(header) < 8:
-            return None
-
-        # Check each signature
-        for signature, offset, file_type, extension in FILE_SIGNATURES:
-            if len(header) >= offset + len(signature):
-                if header[offset : offset + len(signature)] == signature:
-                    # Special case: WebP needs additional verification
-                    if file_type == "webp":
-                        if len(header) >= 12 and header[8:12] == b"WEBP":
-                            return (file_type, extension)
-                        continue
-                    return (file_type, extension)
-
-        return None
-
-    except (OSError, IOError) as e:
-        logger.debug(f"Failed to read file header for {file_path}: {e}")
-        return None
-
-
-def get_correct_extension(file_path: Path) -> str:
-    """Get the correct file extension based on actual file content.
-
-    Detects the actual file type using magic bytes and returns the
-    appropriate extension. Falls back to the original extension if
-    the file type cannot be determined.
-
-    Args:
-        file_path: Path to the file
-
-    Returns:
-        Correct extension (including dot, e.g., ".jpg")
-    """
-    detected = detect_actual_file_type(file_path)
-    if detected:
-        return detected[1]
-
-    # Fallback to original extension
-    return file_path.suffix.lower()
 
 
 # Apple Cocoa epoch offset: seconds between Unix epoch (1970) and Apple epoch (2001)
@@ -1028,8 +939,12 @@ class IMessagePreprocessor:
         original_path = Path(original_name)
         original_ext = original_path.suffix.lower()
 
-        # Detect actual file type and get correct extension
-        correct_ext = get_correct_extension(source_path)
+        # Detect actual file type and get correct extension using shared utility
+        correct_ext = detect_and_correct_extension(
+            source_path,
+            source_path.name,
+            log_callback=lambda msg, details: self.log_message("EXTENSION_CORRECTED", msg, details),
+        )
 
         # Check if extension needs correction
         if original_ext != correct_ext:

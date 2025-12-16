@@ -70,9 +70,9 @@ processed_output/
 
 ```
 processed_output/
-├── Google Photos/         # Google Photos
-├── Google Chat/           # Google Chat
-└── Google Voice/          # Google Voice
+├── photos/                # Google Photos
+├── chat/                  # Google Chat
+└── voice/                 # Google Voice
 ```
 
 ### Snapchat Export

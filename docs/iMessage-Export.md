@@ -37,7 +37,7 @@ The processor extracts all media attachments with their full conversation contex
 > - **iPhone**: iTunes/Finder backup (unencrypted or decrypted)
 >
 > Encrypted iPhone backups must be decrypted before processing. Tools like iMazing or open-source backup extractors can help.
-
+>
 > **Contacts Recommended:**
 >
 > For best results, export your contacts as a vCard file (`contacts.vcf`) and place it alongside your message exports. This allows Memoria to display contact names instead of phone numbers/email addresses in the metadata.
@@ -52,13 +52,13 @@ Create a directory following Memoria's naming convention:
 
 **Mac exports:**
 
-```
+```text
 mac-messages-YYYYMMDD/
 ```
 
 **iPhone exports:**
 
-```
+```text
 {device}-messages-YYYYMMDD/
 ```
 
@@ -74,9 +74,9 @@ The device identifier (e.g., `mac`, `iphone14`) is used in output filenames and 
 
 ## Mac Export
 
-### Export Structure
+### Mac Export Structure
 
-```
+```text
 mac-messages-YYYYMMDD/
 ├── chat.db
 ├── chat.db-shm (optional)
@@ -114,9 +114,9 @@ For Memoria to detect a Mac iMessage export:
 
 ## iPhone Export
 
-### Export Structure
+### iPhone Export Structure
 
-```
+```text
 {device}-messages-YYYYMMDD/
 └── SMS/
     ├── sms.db
@@ -145,7 +145,7 @@ For Memoria to detect a Mac iMessage export:
    - Copy the `SMS/` directory from the extracted backup
    - Place it in your export directory
 
-### Required Elements
+### iPhone Required Elements
 
 For Memoria to detect an iPhone iMessage export:
 
@@ -193,7 +193,7 @@ Each phone/email is mapped to the contact's display name (FN field in vCard).
 
 ## Cross-Export Consolidation
 
-### Overview
+### Consolidation Overview
 
 When you have multiple iMessage exports (e.g., from different backups over time), Memoria can process them together to:
 
@@ -203,7 +203,7 @@ When you have multiple iMessage exports (e.g., from different backups over time)
 
 ### Example Structure
 
-```
+```text
 exports/
 ├── mac-messages-20240601/
 │   ├── chat.db
@@ -246,7 +246,7 @@ Memoria automatically:
 
 ### Output Structure
 
-```
+```text
 /path/to/output/
 └── messages/
     ├── imessage-mac-14045551234-20231015.heic
@@ -260,7 +260,7 @@ Memoria automatically:
 
 Files are renamed with descriptive, sortable names:
 
-```
+```text
 imessage-{device}-{contact_or_group}-{YYYYMMDD}.{ext}
 ```
 
@@ -298,21 +298,21 @@ Memoria embeds comprehensive metadata into all processed iMessage files.
 
 **Single message (DM):**
 
-```
+```text
 Source: iMessage/mac
   - John Doe in "DM with +14045551234": "Check out this photo!"
 ```
 
 **Single message (Group):**
 
-```
+```text
 Source: iMessage/mac
   - Jane Smith in "Group: Family Chat": "From our trip yesterday"
 ```
 
 **Merged message (same file in multiple conversations):**
 
-```
+```text
 Source: iMessage/iphone14
   - John Doe in "DM with +14045551234" [iphone14-messages-20240601]: "Photo from yesterday"
   - John Doe in "Group: Work Team" [iphone14-messages-20241001]: "Sharing here too"
@@ -322,7 +322,7 @@ Source: iMessage/iphone14
 
 Live Photo video components include a marker:
 
-```
+```text
 Source: iMessage/mac
   - me in "DM with +14045551234"
 [Live Photo Video]
@@ -488,10 +488,3 @@ See [Immich Upload](Immich-Upload) for configuration options.
 - [Immich Upload](Immich-Upload) - Immich upload configuration
 - [iMessage Schema](iMessage-Schema) - Technical database schema details
 - [vCard Schema](vCard-Schema) - Contact file format details
-
-
-
-
-
-
-

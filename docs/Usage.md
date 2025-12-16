@@ -227,15 +227,12 @@ When processing a single export:
 
 ```
 /path/to/output/
-├── Google Photos/          # If Google Photos found
-│   └── username/
-│       └── processed files...
-├── Google Chat/            # If Google Chat found
-│   └── username/
-│       └── processed files...
+├── photos/                 # If Google Photos found
+│   └── processed files...
+├── chat/                   # If Google Chat found
+│   └── processed files...
 ├── messages/               # If Instagram Messages found
-│   └── username/
-│       └── conversations...
+│   └── conversations...
 └── ...
 ```
 
@@ -248,18 +245,13 @@ When using `--originals`:
 ```
 /path/to/output/
 ├── google-user1-20250526/
-│   ├── Google Photos/
-│   │   └── user1/
-│   └── Google Chat/
-│       └── user1/
+│   ├── photos/
+│   └── chat/
 ├── instagram-user2-20251007/
 │   └── messages/
-│       └── user2/
 └── snapchat-user3-20251007/
-    ├── Snapchat Memories/
-    │   └── user3/
-    └── Snapchat Messages/
-        └── user3/
+    ├── memories/
+    └── messages/
 ```
 
 Each export gets its own directory, maintaining the per-processor organization within.

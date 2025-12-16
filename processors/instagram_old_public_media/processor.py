@@ -10,8 +10,6 @@ import multiprocessing
 import os
 import re
 import shutil
-import subprocess
-import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -20,7 +18,12 @@ from common.progress import PHASE_PROCESS, progress_bar
 from processors.instagram_old_public_media.preprocess import OldInstagramPreprocessor
 from common.dependency_checker import check_exiftool, print_exiftool_error
 from processors.base import ProcessorBase
-from common.utils import extract_username_from_export_dir, should_cleanup_temp
+from common.utils import (
+    extract_username_from_export_dir,
+    is_preprocessed_directory,
+    should_cleanup_temp,
+    update_file_timestamps,
+)
 from common.exiftool_batch import (
     batch_validate_exif,
     batch_rebuild_exif,
@@ -196,38 +199,6 @@ def generate_unique_filename(  # noqa: ARG001
         sequence += 1
 
 
-def update_filesystem_timestamps(file_path, post_data):
-    """Update filesystem creation and modification timestamps to match post date
-
-    Args:
-        file_path: Path to the file
-        post_data: Dict containing post metadata with 'timestamp' field
-
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    try:
-        # Parse date from post_data
-        # Format: "2025-08-17 11:23:00"
-        date_str = post_data["timestamp"]
-
-        # Skip if no timestamp
-        if date_str is None:
-            return False
-
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
-
-        # Convert to Unix timestamp
-        timestamp = date_obj.timestamp()
-
-        # Update both access time and modification time
-        os.utime(file_path, (timestamp, timestamp))
-        return True
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Failed to update timestamps for %s: %s", file_path, e)
-        return False
-
-
 def process_media_batch(batch_args):
     """Process a batch of media files (worker function for multiprocessing)
     
@@ -291,7 +262,7 @@ def process_media_batch(batch_args):
     for output_path, post_data, _, _ in file_info:
         if post_data.get("timestamp"):
             logger.debug(f"Updating timestamps for {output_path} to {post_data['timestamp']}")
-        update_filesystem_timestamps(output_path, post_data)
+        update_file_timestamps(output_path, post_data.get("timestamp"))
         exif_rebuilt = output_path in corrupted_files
         if exif_rebuilt:
             logger.debug(f"Rebuilt EXIF structure for {output_path}")
@@ -303,22 +274,6 @@ def process_media_batch(batch_args):
         results.append((False, True, False))
     
     return results
-
-
-def is_preprocessed(input_dir):
-    """Check if input directory is already preprocessed
-
-    Args:
-        input_dir: Path to input directory
-
-    Returns:
-        bool: True if already preprocessed, False if raw export
-    """
-    input_path = Path(input_dir)
-    metadata_file = input_path / "metadata.json"
-    media_dir = input_path / "media"
-
-    return metadata_file.exists() and media_dir.exists()
 
 
 def process_logic(
@@ -348,7 +303,7 @@ def process_logic(
     temp_dir_created = None
 
     try:
-        if is_preprocessed(input_dir):
+        if is_preprocessed_directory(input_dir):
             logger.info(f"Input directory is already preprocessed: {input_dir}")
             working_dir = input_dir
         else:

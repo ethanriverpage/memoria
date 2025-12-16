@@ -19,12 +19,10 @@ import sys
 import argparse
 from collections import defaultdict
 from html.parser import HTMLParser
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 import multiprocessing
-from tqdm import tqdm
-import magic
 
+from common.file_utils import detect_and_correct_extension
 from common.utils import ALL_MEDIA_EXTENSIONS
 from common.filter_banned_files import BannedFilesFilter
 from common.failure_tracker import FailureTracker
@@ -554,105 +552,6 @@ class GoogleVoicePreprocessor:
 
         return None
 
-    def detect_and_correct_extension(
-        self, file_path: Path, original_filename: str
-    ) -> str:
-        """
-        Detect actual file type and return correct extension
-
-        Fixes misnamed files from Google export
-
-        Args:
-            file_path: Path to the actual file
-            original_filename: Original filename with potentially wrong extension
-
-        Returns:
-            Correct file extension (with dot), or original if detection fails
-        """
-        original_ext = Path(original_filename).suffix.lower()
-
-        # Try python-magic first (most reliable)
-        try:
-            mime = magic.from_file(str(file_path), mime=True)
-
-            # Map common MIME types to extensions
-            mime_to_ext = {
-                "image/jpeg": ".jpg",
-                "image/png": ".png",
-                "image/gif": ".gif",
-                "image/webp": ".webp",
-                "video/mp4": ".mp4",
-                "video/quicktime": ".mov",
-                "video/x-msvideo": ".avi",
-                "video/webm": ".webm",
-                "video/x-matroska": ".mkv",
-                "audio/mpeg": ".mp3",
-                "audio/wav": ".wav",
-                "audio/mp4": ".m4a",
-            }
-
-            detected_ext = mime_to_ext.get(mime)
-            if detected_ext and detected_ext != original_ext:
-                return detected_ext
-            elif detected_ext:
-                return original_ext  # Extension is correct
-
-        except Exception as e:
-            self.log_message(
-                "EXTENSION_DETECTION_ERROR",
-                f"python-magic failed for {original_filename}",
-                str(e),
-            )
-
-        # Fallback: Check file signatures (magic bytes)
-        try:
-            with open(file_path, "rb") as f:
-                header = f.read(32)
-
-            # Check file signatures
-            if header.startswith(b"\xff\xd8\xff"):
-                detected_ext = ".jpg"
-            elif header.startswith(b"\x89PNG"):
-                detected_ext = ".png"
-            elif header.startswith(b"GIF87a") or header.startswith(b"GIF89a"):
-                detected_ext = ".gif"
-            elif header.startswith(b"RIFF") and b"WEBP" in header[:12]:
-                detected_ext = ".webp"
-            elif b"\x1a\x45\xdf\xa3" in header[:32]:  # EBML/WebM/MKV signature
-                # Distinguish WebM from MKV by reading more
-                with open(file_path, "rb") as f:
-                    more_data = f.read(4096)
-                if b"webm" in more_data.lower():
-                    detected_ext = ".webm"
-                else:
-                    detected_ext = ".mkv"
-            elif (
-                header[4:12] == b"ftypmp42"
-                or header[4:12] == b"ftypisom"
-                or header[4:8] == b"ftyp"
-            ):
-                detected_ext = ".mp4"
-            elif header[4:8] == b"moov" or header[4:8] == b"mdat":
-                detected_ext = ".mov"
-            elif header.startswith(b"ID3") or header.startswith(b"\xff\xfb"):
-                detected_ext = ".mp3"
-            else:
-                # Unknown format, keep original
-                return original_ext
-
-            if detected_ext != original_ext:
-                return detected_ext
-
-        except Exception as e:
-            self.log_message(
-                "EXTENSION_DETECTION_ERROR",
-                f"Signature check failed for {original_filename}",
-                str(e),
-            )
-
-        # Keep original extension if all detection methods failed
-        return original_ext
-
     def scan_conversations(self) -> List[Dict]:
         """
         Scan Voice/Calls directory for all text conversation HTML files
@@ -731,9 +630,11 @@ class GoogleVoicePreprocessor:
                     if result:
                         matched_filename, source_path = result
 
-                        # Detect actual file type and correct extension if needed
-                        correct_ext = self.detect_and_correct_extension(
-                            source_path, matched_filename
+                        # Detect actual file type and correct extension if needed using shared utility
+                        correct_ext = detect_and_correct_extension(
+                            source_path,
+                            matched_filename,
+                            log_callback=lambda msg, details: self.log_message("EXTENSION_CORRECTED", msg, details),
                         )
                         original_ext = Path(matched_filename).suffix.lower()
 
@@ -841,7 +742,6 @@ class GoogleVoicePreprocessor:
 
     def save_metadata(self, conversations: List[Dict]) -> None:
         """Save cleaned metadata to metadata.json"""
-        import json
 
         try:
             # Add export info

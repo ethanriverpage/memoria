@@ -11,11 +11,10 @@ import logging
 import os
 import re
 import shutil
-import uuid
 from datetime import datetime
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from common.dependency_checker import (
     check_exiftool,
@@ -27,8 +26,18 @@ from common.exiftool_batch import (
     batch_validate_exif,
     batch_write_metadata_discord,
 )
+from common.processing import (
+    print_processing_summary,
+    temp_processing_directory,
+)
 from common.progress import PHASE_PROCESS, progress_bar
-from common.utils import default_worker_count, get_media_type, sanitize_filename, should_cleanup_temp
+from common.utils import (
+    default_worker_count,
+    get_media_type,
+    is_preprocessed_directory,
+    sanitize_filename,
+    update_file_timestamps,
+)
 from processors.base import ProcessorBase
 from processors.discord.preprocess import DiscordPreprocessor
 
@@ -57,7 +66,8 @@ def detect(input_path: Path) -> bool:
             if index_file.exists():
                 # Verify at least one channel folder exists
                 channel_folders = [
-                    d for d in messages_dir.iterdir()
+                    d
+                    for d in messages_dir.iterdir()
                     if d.is_dir() and d.name.startswith("c")
                 ]
                 if channel_folders:
@@ -76,14 +86,19 @@ def detect(input_path: Path) -> bool:
                 if isinstance(metadata, dict) and "conversations" in metadata:
                     export_info = metadata.get("export_info", {})
                     # Check for Discord-specific indicators
-                    if "downloads_successful" in export_info or "downloads_failed" in export_info:
+                    if (
+                        "downloads_successful" in export_info
+                        or "downloads_failed" in export_info
+                    ):
                         return True
                     # Check for Discord-style conversation structure
                     conversations = metadata.get("conversations", {})
                     if conversations:
                         # Check first conversation for Discord-specific fields
                         first_conv = next(iter(conversations.values()), {})
-                        if "guild_name" in first_conv or "original_urls" in str(first_conv):
+                        if "guild_name" in first_conv or "original_urls" in str(
+                            first_conv
+                        ):
                             return True
 
             except (json.JSONDecodeError, KeyError):
@@ -139,11 +154,11 @@ class DiscordProcessor(ProcessorBase):
             return False
 
         try:
-            # Use output directory directly
+            # Create messages subdirectory under output
             if output_dir:
-                processor_output = str(output_dir)
+                processor_output = str(Path(output_dir) / "messages")
             else:
-                processor_output = kwargs.get("output", "final_discord")
+                processor_output = kwargs.get("output", "final_discord/messages")
 
             # Call processing logic
             process_logic(
@@ -156,9 +171,7 @@ class DiscordProcessor(ProcessorBase):
             return True
 
         except Exception as e:
-            logger.error(f"Error in DiscordProcessor: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception(f"Error in DiscordProcessor: {e}")
             return False
 
 
@@ -269,7 +282,9 @@ def generate_output_filename(
         channel_part = "group"
     else:
         # Server channel - use channel name
-        channel_part = sanitize_filename(channel_title.split(" in ")[0] if " in " in channel_title else channel_title)
+        channel_part = sanitize_filename(
+            channel_title.split(" in ")[0] if " in " in channel_title else channel_title
+        )
 
     # Truncate channel part if too long
     if len(channel_part) > 30:
@@ -286,41 +301,13 @@ def generate_output_filename(
     # Add sequence number for duplicates
     sequence = 2
     while True:
-        filename = f"discord-{export_username}-{channel_part}-{date_key}_{sequence}{extension}"
+        filename = (
+            f"discord-{export_username}-{channel_part}-{date_key}_{sequence}{extension}"
+        )
         if filename not in used_filenames:
             used_filenames.add(filename)
             return filename
         sequence += 1
-
-
-def update_filesystem_timestamps(file_path: Path, message: dict) -> bool:
-    """Update filesystem timestamps to match message date.
-
-    Args:
-        file_path: Path to the file
-        message: Message metadata with 'timestamp' field
-
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        timestamp_str = message.get("timestamp", "")
-        if not timestamp_str:
-            return False
-
-        # Remove " UTC" suffix if present
-        timestamp_clean = timestamp_str.replace(" UTC", "").strip()
-        date_obj = datetime.strptime(timestamp_clean, "%Y-%m-%d %H:%M:%S")
-
-        # Convert to Unix timestamp
-        timestamp = date_obj.timestamp()
-
-        # Update both access time and modification time
-        os.utime(file_path, (timestamp, timestamp))
-        return True
-    except Exception as e:
-        logger.warning(f"Failed to update timestamps for {file_path}: {e}")
-        return False
 
 
 def _process_file_worker(args_tuple):
@@ -341,29 +328,16 @@ def _process_file_worker(args_tuple):
         # Copy file to output
         shutil.copy2(media_path, output_path)
 
-        # Update filesystem timestamps
-        update_filesystem_timestamps(output_path, message_info["message"])
+        # Update filesystem timestamps - Discord uses "YYYY-MM-DD HH:MM:SS UTC" format
+        timestamp_str = message_info["message"].get("timestamp", "")
+        if timestamp_str:
+            update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
 
         return (True, str(output_path), message_info, export_username)
 
     except Exception as e:
         logger.error(f"Error processing {media_path.name}: {e}")
         return (False, None, message_info, export_username)
-
-
-def is_preprocessed(input_dir: Path) -> bool:
-    """Check if input directory is already preprocessed.
-
-    Args:
-        input_dir: Path to input directory
-
-    Returns:
-        True if already preprocessed, False if raw export
-    """
-    metadata_file = input_dir / "metadata.json"
-    media_dir = input_dir / "media"
-
-    return metadata_file.exists() and media_dir.exists()
 
 
 def process_logic(
@@ -398,208 +372,204 @@ def process_logic(
 
     # Determine if input needs preprocessing
     output_dir = Path(output_dir)
-    temp_dir_created = None
 
-    try:
-        if is_preprocessed(input_dir):
-            logger.info(f"Input directory is already preprocessed: {input_dir}")
-            working_dir = input_dir
-        else:
-            logger.info(f"Input directory is raw export: {input_dir}")
-            logger.info("Running preprocessing (downloading attachments)...")
+    # Check if input is already preprocessed
+    if is_preprocessed_directory(str(input_dir)):
+        logger.info(f"Input directory is already preprocessed: {input_dir}")
+        _process_working_directory(input_dir, output_dir, workers)
+    else:
+        logger.info(f"Input directory is raw export: {input_dir}")
+        logger.info("Running preprocessing (downloading attachments)...")
 
-            # Create temp directory for preprocessing
-            temp_base = Path(temp_dir).resolve()
-            temp_base.mkdir(parents=True, exist_ok=True)
-
-            # Create unique temp subdirectory
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            unique_id = str(uuid.uuid4())[:8]
-            temp_dir_created = temp_base / f"discord_temp_{timestamp}_{unique_id}"
-            temp_dir_created.mkdir(parents=True, exist_ok=True)
-
-            logger.info(f"Preprocessing to: {temp_dir_created}")
+        # Use context manager for temp directory with automatic cleanup
+        with temp_processing_directory(temp_dir, "discord") as temp_dir_path:
+            logger.info(f"Preprocessing to: {temp_dir_path}")
 
             # Run preprocessing
-            final_output_path = Path(output_dir) / "messages"
-
+            # Note: output_dir already has /messages appended by the caller (process method)
             preprocessor = DiscordPreprocessor(
                 export_path=input_dir,
-                output_dir=temp_dir_created,
+                output_dir=temp_dir_path,
                 workers=workers,
-                final_output_dir=final_output_path,
+                final_output_dir=output_dir,
             )
             preprocessor.process()
 
-            working_dir = temp_dir_created
-            logger.info(f"Preprocessing complete. Using: {working_dir}")
+            logger.info(f"Preprocessing complete. Using: {temp_dir_path}")
+            _process_working_directory(temp_dir_path, output_dir, workers)
 
-        # Configuration
-        metadata_file = working_dir / "metadata.json"
-        media_dir = working_dir / "media"
 
-        # Check for metadata file
-        if not metadata_file.exists():
-            logger.error(f"Metadata file not found: {metadata_file}")
-            return
+def _process_working_directory(
+    working_dir: Path, output_dir: Path, workers: Optional[int]
+):
+    """Process a working directory (preprocessed export)
 
-        # Check for media directory
-        if not media_dir.exists():
-            logger.warning(f"Media directory not found: {media_dir}")
-            logger.warning("No media files to process.")
-            return
+    Args:
+        working_dir: Path to preprocessed directory with metadata.json and media/
+        output_dir: Output directory for processed files
+        workers: Number of parallel workers
+    """
+    # Configuration
+    metadata_file = working_dir / "metadata.json"
+    media_dir = working_dir / "media"
 
-        # Load metadata
-        logger.info(f"Loading metadata from {metadata_file}...")
-        metadata = load_metadata(metadata_file)
+    # Check for metadata file
+    if not metadata_file.exists():
+        logger.error(f"Metadata file not found: {metadata_file}")
+        return
 
-        export_username = metadata.get("export_info", {}).get(
-            "export_username", "unknown"
-        )
-        logger.info(f"Export username: {export_username}")
+    # Check for media directory
+    if not media_dir.exists():
+        logger.warning(f"Media directory not found: {media_dir}")
+        logger.warning("No media files to process.")
+        return
 
-        # Build filename index
-        logger.info("Building filename index...")
-        filename_index = build_filename_index(metadata)
-        logger.info(f"Found {len(filename_index)} media files in metadata")
+    # Load metadata
+    logger.info(f"Loading metadata from {metadata_file}...")
+    metadata = load_metadata(metadata_file)
 
-        # Scan media directory for actual files
-        logger.info(f"Scanning media directory: {media_dir}")
-        media_files = list(media_dir.glob("*"))
-        media_files = [f for f in media_files if f.is_file() and get_media_type(f)]
-        logger.info(f"Found {len(media_files)} media files on disk")
+    export_username = metadata.get("export_info", {}).get("export_username", "unknown")
+    logger.info(f"Export username: {export_username}")
 
-        if not media_files:
-            logger.warning("No media files found to process.")
-            return
+    # Build filename index
+    logger.info("Building filename index...")
+    filename_index = build_filename_index(metadata)
+    logger.info(f"Found {len(filename_index)} media files in metadata")
 
-        # Create output directory with messages subdirectory
-        messages_output_dir = output_dir / "messages"
-        messages_output_dir.mkdir(exist_ok=True, parents=True)
+    # Scan media directory for actual files
+    logger.info(f"Scanning media directory: {media_dir}")
+    media_files = list(media_dir.glob("*"))
+    media_files = [f for f in media_files if f.is_file() and get_media_type(f)]
+    logger.info(f"Found {len(media_files)} media files on disk")
 
-        # Match files to metadata and generate output filenames
-        logger.info("\nMatching files to metadata...")
-        matched_files = []
-        unmatched_files = []
-        used_filenames = set()
+    if not media_files:
+        logger.warning("No media files found to process.")
+        return
 
-        for media_file in media_files:
-            if media_file.name in filename_index:
-                message_info = filename_index[media_file.name]
-                # Generate output filename
-                ext = media_file.suffix.lower()
-                output_filename = generate_output_filename(
-                    message_info, export_username, ext, used_filenames
-                )
-                matched_files.append((media_file, message_info, output_filename))
-            else:
-                unmatched_files.append(media_file)
+    # Create output directory (subdirectory already set by caller)
+    output_dir.mkdir(exist_ok=True, parents=True)
 
-        logger.info(f"Matched {len(matched_files)} files")
-        logger.info(f"Unmatched {len(unmatched_files)} files")
+    # Match files to metadata and generate output filenames
+    logger.info("\nMatching files to metadata...")
+    matched_files = []
+    unmatched_files = []
+    used_filenames = set()
 
-        # Process matched files
-        logger.info(f"\nProcessing {len(matched_files)} files to {messages_output_dir}/")
-        logger.info("=" * 50)
+    for media_file in media_files:
+        if media_file.name in filename_index:
+            message_info = filename_index[media_file.name]
+            # Generate output filename
+            ext = media_file.suffix.lower()
+            output_filename = generate_output_filename(
+                message_info, export_username, ext, used_filenames
+            )
+            matched_files.append((media_file, message_info, output_filename))
+        else:
+            unmatched_files.append(media_file)
 
-        # Determine number of workers
-        num_workers = workers if workers is not None else default_worker_count()
-        logger.info(f"Using {num_workers} parallel workers")
+    logger.info(f"Matched {len(matched_files)} files")
+    logger.info(f"Unmatched {len(unmatched_files)} files")
 
-        # Prepare arguments for parallel processing
-        process_args = []
-        for media_file, message_info, output_filename in matched_files:
-            process_args.append((
+    # Process matched files
+    logger.info(f"\nProcessing {len(matched_files)} files to {output_dir}/")
+    logger.info("=" * 50)
+
+    # Determine number of workers
+    num_workers = workers if workers is not None else default_worker_count()
+    logger.info(f"Using {num_workers} parallel workers")
+
+    # Prepare arguments for parallel processing
+    process_args = []
+    for media_file, message_info, output_filename in matched_files:
+        process_args.append(
+            (
                 media_file,
                 message_info,
                 export_username,
-                messages_output_dir,
+                output_dir,
                 output_filename,
-            ))
-
-        # Process files in parallel
-        success_count = 0
-        failed_count = 0
-
-        if num_workers > 1:
-            with Pool(processes=num_workers) as pool:
-                results = list(
-                    progress_bar(
-                        pool.imap(_process_file_worker, process_args),
-                        PHASE_PROCESS,
-                        "Processing files",
-                        total=len(process_args),
-                    )
-                )
-        else:
-            # Single-threaded for debugging
-            results = []
-            for args_tuple in progress_bar(process_args, PHASE_PROCESS, "Processing files"):
-                results.append(_process_file_worker(args_tuple))
-
-        # Collect results for EXIF processing
-        file_paths = []
-        file_info = []
-
-        for success, output_path, message_info, exp_username in results:
-            if success and output_path:
-                success_count += 1
-                file_paths.append(output_path)
-                file_info.append((output_path, message_info, exp_username))
-            else:
-                failed_count += 1
-
-        logger.info(f"\nCopied {success_count} files ({len(file_info)} for EXIF processing)")
-
-        # Batch process EXIF operations
-        exif_rebuilt_count = 0
-        if file_paths:
-            logger.info("Batch processing EXIF metadata...")
-
-            # Batch validate and rebuild
-            corrupted_files = batch_validate_exif(file_paths)
-            if corrupted_files:
-                logger.info(f"Rebuilding {len(corrupted_files)} corrupted EXIF structures...")
-                batch_rebuild_exif(list(corrupted_files))
-                exif_rebuilt_count = len(corrupted_files)
-
-            # Batch read and write metadata
-            existing_metadata_map = batch_read_existing_metadata(file_paths)
-            batch_write_metadata_discord(file_info, existing_metadata_map)
-
-        # Handle unmatched files
-        if unmatched_files:
-            logger.info(f"\nProcessing {len(unmatched_files)} unmatched files...")
-            failed_matching_dir = messages_output_dir / "issues" / "failed-matching" / "media"
-            failed_matching_dir.mkdir(exist_ok=True, parents=True)
-
-            for media_file in unmatched_files:
-                try:
-                    shutil.copy2(media_file, failed_matching_dir / media_file.name)
-                except Exception as e:
-                    logger.error(f"Error copying unmatched file {media_file.name}: {e}")
-
-        # Summary
-        logger.info("\n" + "=" * 50)
-        logger.info("Processing complete!")
-        logger.info(f"  Successfully processed: {success_count}")
-        logger.info(f"  Failed: {failed_count}")
-        logger.info(f"  EXIF structures rebuilt: {exif_rebuilt_count}")
-        logger.info(f"  Unmatched: {len(unmatched_files)}")
-        logger.info(f"  Total: {len(media_files)}")
-        logger.info(f"Processed files saved to: {messages_output_dir.absolute()}")
-
-        if unmatched_files:
-            logger.info(
-                f"Unmatched files saved to: {(messages_output_dir / 'issues' / 'failed-matching' / 'media').absolute()}"
             )
+        )
 
-    finally:
-        # Clean up temp directory if it was created
-        if temp_dir_created and temp_dir_created.exists():
-            if should_cleanup_temp():
-                logger.info(f"\nCleaning up temporary directory: {temp_dir_created}")
-                shutil.rmtree(temp_dir_created)
-            else:
-                logger.info(f"\nTemp cleanup disabled. Temporary directory preserved at: {temp_dir_created}")
+    # Process files in parallel
+    success_count = 0
+    failed_count = 0
 
+    if num_workers > 1:
+        with Pool(processes=num_workers) as pool:
+            results = list(
+                progress_bar(
+                    pool.imap(_process_file_worker, process_args),
+                    PHASE_PROCESS,
+                    "Processing files",
+                    total=len(process_args),
+                )
+            )
+    else:
+        # Single-threaded for debugging
+        results = []
+        for args_tuple in progress_bar(process_args, PHASE_PROCESS, "Processing files"):
+            results.append(_process_file_worker(args_tuple))
+
+    # Collect results for EXIF processing
+    file_paths = []
+    file_info = []
+
+    for success, output_path, message_info, exp_username in results:
+        if success and output_path:
+            success_count += 1
+            file_paths.append(output_path)
+            file_info.append((output_path, message_info, exp_username))
+        else:
+            failed_count += 1
+
+    logger.info(
+        f"\nCopied {success_count} files ({len(file_info)} for EXIF processing)"
+    )
+
+    # Batch process EXIF operations
+    exif_rebuilt_count = 0
+    if file_paths:
+        logger.info("Batch processing EXIF metadata...")
+
+        # Batch validate and rebuild
+        corrupted_files = batch_validate_exif(file_paths)
+        if corrupted_files:
+            logger.info(
+                f"Rebuilding {len(corrupted_files)} corrupted EXIF structures..."
+            )
+            batch_rebuild_exif(list(corrupted_files))
+            exif_rebuilt_count = len(corrupted_files)
+
+        # Batch read and write metadata
+        existing_metadata_map = batch_read_existing_metadata(file_paths)
+        batch_write_metadata_discord(file_info, existing_metadata_map)
+
+    # Handle unmatched files
+    if unmatched_files:
+        logger.info(f"\nProcessing {len(unmatched_files)} unmatched files...")
+        failed_matching_dir = output_dir / "issues" / "failed-matching" / "media"
+        failed_matching_dir.mkdir(exist_ok=True, parents=True)
+
+        for media_file in unmatched_files:
+            try:
+                shutil.copy2(media_file, failed_matching_dir / media_file.name)
+            except Exception as e:
+                logger.error(f"Error copying unmatched file {media_file.name}: {e}")
+
+    # Print summary using shared utility
+    print_processing_summary(
+        success=success_count,
+        failed=failed_count,
+        total=len(media_files),
+        output_dir=str(output_dir),
+        extra_stats={
+            "EXIF structures rebuilt": exif_rebuilt_count,
+            "Unmatched": len(unmatched_files),
+        },
+    )
+
+    if unmatched_files:
+        logger.info(
+            f"Unmatched files saved to: {(output_dir / 'issues' / 'failed-matching' / 'media').absolute()}"
+        )
