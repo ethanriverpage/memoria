@@ -8,7 +8,6 @@ It supports cross-export consolidation for deduplication across multiple devices
 
 import json
 import logging
-import os
 import shutil
 from datetime import datetime
 from multiprocessing import Pool
@@ -156,7 +155,7 @@ class IMessageProcessor(ProcessorBase):
         )
 
     @staticmethod
-    def process(input_dir: str, output_dir: str = None, **kwargs) -> bool:
+    def process(input_dir: str, output_dir: Optional[str] = None, **kwargs) -> bool:
         """Process a single iMessage export.
 
         Delegates to process_consolidated with a single-element list,

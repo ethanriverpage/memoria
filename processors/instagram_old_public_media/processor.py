@@ -13,6 +13,7 @@ import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from common.progress import PHASE_PROCESS, progress_bar
 from processors.instagram_old_public_media.preprocess import OldInstagramPreprocessor
@@ -96,7 +97,7 @@ class OldInstagramPublicMediaProcessor(ProcessorBase):
         return 30  # Low priority - least specific pattern
 
     @staticmethod
-    def process(input_dir: str, output_dir: str = None, **kwargs) -> bool:
+    def process(input_dir: str, output_dir: Optional[str] = None, **kwargs) -> bool:
         """Process old Instagram export
 
         Args:

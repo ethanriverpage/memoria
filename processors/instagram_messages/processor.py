@@ -12,6 +12,7 @@ import re
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.exiftool_batch import (
@@ -108,7 +109,7 @@ class InstagramMessagesProcessor(ProcessorBase):
         return 70  # High priority - specific path
 
     @staticmethod
-    def process(input_dir: str, output_dir: str = None, **kwargs) -> bool:
+    def process(input_dir: str, output_dir: Optional[str] = None, **kwargs) -> bool:
         """Process Instagram Messages export
 
         Args:

@@ -32,6 +32,9 @@ try:
     HAS_TQDM = True
 except ImportError:
     HAS_TQDM = False
+    # Define a pass-through tqdm replacement
+    def tqdm(iterable, **kwargs):  # type: ignore[misc]
+        return iterable
     print("Warning: tqdm not available, progress bars disabled")
 
 # Module-level logger
@@ -43,7 +46,7 @@ class ExportComparator:
     
     def __init__(self, dir1: Path, dir2: Path, log_file: Path, 
                  skip_content: bool = False, skip_metadata: bool = False,
-                 ignore_patterns: List[str] = None):
+                 ignore_patterns: Optional[List[str]] = None):
         self.dir1 = dir1.resolve()
         self.dir2 = dir2.resolve()
         self.log_file = log_file
@@ -114,7 +117,7 @@ class ExportComparator:
         
         return dirs
     
-    def _compute_file_hash(self, filepath: Path, algorithm: str = 'sha256') -> str:
+    def _compute_file_hash(self, filepath: Path, algorithm: str = 'sha256') -> Optional[str]:
         """Compute hash of file contents"""
         hash_func = hashlib.new(algorithm)
         

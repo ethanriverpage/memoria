@@ -101,6 +101,7 @@ def batch_rebuild_exif(file_paths: List[str]) -> None:
     chunk_size = 500
     for i in range(0, len(file_paths), chunk_size):
         chunk = file_paths[i : i + chunk_size]
+        argfile_path: Optional[str] = None
 
         try:
             # Create temporary argfile for batch processing
@@ -149,7 +150,7 @@ def batch_rebuild_exif(file_paths: List[str]) -> None:
             logger.warning(f"Failed to batch rebuild EXIF for chunk: {e}")
             # Try to clean up argfile if it exists
             try:
-                if "argfile_path" in locals():
+                if argfile_path is not None:
                     os.unlink(argfile_path)
             except Exception:
                 pass
@@ -330,6 +331,7 @@ def batch_write_metadata_google_photos(
     for chunk in chunked_progress(
         file_info, chunk_size, PHASE_EXIF, "Writing metadata"
     ):
+        argfile_path: Optional[str] = None
         try:
             # Create temporary argfile for batch processing
             with tempfile.NamedTemporaryFile(
@@ -436,7 +438,7 @@ def batch_write_metadata_google_photos(
                 f"Failed to batch write metadata for google_photos chunk: {e}"
             )
             try:
-                if "argfile_path" in locals():
+                if argfile_path is not None:
                     os.unlink(argfile_path)
             except Exception:
                 pass
@@ -460,6 +462,7 @@ def batch_write_metadata_google_chat(
     for chunk in chunked_progress(
         file_info, chunk_size, PHASE_EXIF, "Writing metadata"
     ):
+        argfile_path: Optional[str] = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -528,7 +531,7 @@ def batch_write_metadata_google_chat(
         except Exception as e:
             logger.warning(f"Failed to batch write metadata for google_chat chunk: {e}")
             try:
-                if "argfile_path" in locals():
+                if argfile_path is not None:
                     os.unlink(argfile_path)
             except Exception:
                 pass
@@ -552,6 +555,7 @@ def batch_write_metadata_google_voice(
     for chunk in chunked_progress(
         file_info, chunk_size, PHASE_EXIF, "Writing metadata"
     ):
+        argfile_path: Optional[str] = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -622,7 +626,7 @@ def batch_write_metadata_google_voice(
                 f"Failed to batch write metadata for google_voice chunk: {e}"
             )
             try:
-                if "argfile_path" in locals():
+                if argfile_path is not None:
                     os.unlink(argfile_path)
             except Exception:
                 pass
@@ -648,6 +652,7 @@ def batch_write_metadata_instagram_messages(
     for chunk in chunked_progress(
         file_info, chunk_size, PHASE_EXIF, "Writing metadata"
     ):
+        argfile_path: Optional[str] = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -720,7 +725,7 @@ def batch_write_metadata_instagram_messages(
                 f"Failed to batch write metadata for instagram_messages chunk: {e}"
             )
             try:
-                if "argfile_path" in locals():
+                if argfile_path is not None:
                     os.unlink(argfile_path)
             except Exception:
                 pass
@@ -746,6 +751,7 @@ def batch_write_metadata_instagram_public(
     for chunk in chunked_progress(
         file_info, chunk_size, PHASE_EXIF, "Writing metadata"
     ):
+        argfile_path: Optional[str] = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -846,7 +852,7 @@ def batch_write_metadata_instagram_public(
                 f"Failed to batch write metadata for instagram_public chunk: {e}"
             )
             try:
-                if "argfile_path" in locals():
+                if argfile_path is not None:
                     os.unlink(argfile_path)
             except Exception:
                 pass
@@ -870,6 +876,7 @@ def batch_write_metadata_instagram_old_public(
     for chunk in chunked_progress(
         file_info, chunk_size, PHASE_EXIF, "Writing metadata"
     ):
+        argfile_path: Optional[str] = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -974,7 +981,7 @@ def batch_write_metadata_instagram_old_public(
                 f"Failed to batch write metadata for instagram_old_public chunk: {e}"
             )
             try:
-                if "argfile_path" in locals():
+                if argfile_path is not None:
                     os.unlink(argfile_path)
             except Exception:
                 pass
@@ -1009,6 +1016,7 @@ def batch_write_metadata_snapchat_memories(
     for chunk in chunked_progress(
         filtered_info, chunk_size, PHASE_EXIF, "Writing metadata"
     ):
+        argfile_path: Optional[str] = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -1092,7 +1100,7 @@ def batch_write_metadata_snapchat_memories(
                 f"Failed to batch write metadata for snapchat_memories chunk: {e}"
             )
             try:
-                if "argfile_path" in locals():
+                if argfile_path is not None:
                     os.unlink(argfile_path)
             except Exception:
                 pass
@@ -1127,6 +1135,7 @@ def batch_write_metadata_snapchat_messages(
     for chunk in chunked_progress(
         filtered_info, chunk_size, PHASE_EXIF, "Writing metadata"
     ):
+        argfile_path: Optional[str] = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -1263,7 +1272,7 @@ def batch_write_metadata_snapchat_messages(
                 f"Failed to batch write metadata for snapchat_messages chunk: {e}"
             )
             try:
-                if "argfile_path" in locals():
+                if argfile_path is not None:
                     os.unlink(argfile_path)
             except Exception:
                 pass
@@ -1299,6 +1308,7 @@ def batch_write_metadata_snapchat(
     for chunk in chunked_progress(
         filtered_info, chunk_size, PHASE_EXIF, "Writing metadata"
     ):
+        argfile_path: Optional[str] = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -1440,7 +1450,7 @@ def batch_write_metadata_snapchat(
                 f"Failed to batch write metadata for snapchat unified chunk: {e}"
             )
             try:
-                if "argfile_path" in locals():
+                if argfile_path is not None:
                     os.unlink(argfile_path)
             except Exception:
                 pass
@@ -1516,6 +1526,7 @@ def batch_write_metadata_imessage(
     for chunk in chunked_progress(
         file_info, chunk_size, PHASE_EXIF, "Writing metadata"
     ):
+        argfile_path: Optional[str] = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -1690,7 +1701,7 @@ def batch_write_metadata_imessage(
         except Exception as e:
             logger.warning(f"Failed to batch write metadata for imessage chunk: {e}")
             try:
-                if "argfile_path" in locals():
+                if argfile_path is not None:
                     os.unlink(argfile_path)
             except Exception:
                 pass
@@ -1720,6 +1731,7 @@ def batch_write_metadata_discord(
     for chunk in chunked_progress(
         file_info, chunk_size, PHASE_EXIF, "Writing metadata"
     ):
+        argfile_path: Optional[str] = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -1824,7 +1836,7 @@ def batch_write_metadata_discord(
         except Exception as e:
             logger.warning(f"Failed to batch write metadata for discord chunk: {e}")
             try:
-                if "argfile_path" in locals():
+                if argfile_path is not None:
                     os.unlink(argfile_path)
             except Exception:
                 pass

@@ -7,7 +7,7 @@ Supports various NAS systems (QNAP, Synology), photo management tools, and OS-sp
 """
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 
 class BannedFilesFilter:
@@ -25,7 +25,7 @@ class BannedFilesFilter:
         ".photostructure",  # PhotoStructure application directory
     ]
 
-    def __init__(self, additional_patterns: List[str] = None):
+    def __init__(self, additional_patterns: Optional[List[str]] = None):
         """
         Initialize the filter with optional additional patterns
 

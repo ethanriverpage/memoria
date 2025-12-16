@@ -13,6 +13,7 @@ import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from common.progress import PHASE_PROCESS, progress_bar
 from processors.google_voice.preprocess import GoogleVoicePreprocessor
@@ -100,7 +101,7 @@ class GoogleVoiceProcessor(ProcessorBase):
         return 50  # Medium priority
 
     @staticmethod
-    def process(input_dir: str, output_dir: str = None, **kwargs) -> bool:
+    def process(input_dir: str, output_dir: Optional[str] = None, **kwargs) -> bool:
         """Process Google Voice export
 
         Args:

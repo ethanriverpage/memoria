@@ -171,15 +171,17 @@ def decode_attributed_body(blob: bytes) -> Tuple[Optional[str], dict]:
     return text, metadata
 
 
-def strip_placeholders(text: str) -> str:
+def strip_placeholders(text: Optional[str]) -> str:
     """Remove placeholder characters and clean up whitespace.
 
     Args:
-        text: Raw message text
+        text: Raw message text (can be None)
 
     Returns:
-        Cleaned text with placeholders removed
+        Cleaned text with placeholders removed, or empty string if None
     """
+    if text is None:
+        return ""
     return text.replace("\ufffc", "").replace("\ufffd", "").strip()
 
 
@@ -943,7 +945,7 @@ class IMessagePreprocessor:
         correct_ext = detect_and_correct_extension(
             source_path,
             source_path.name,
-            log_callback=lambda msg, details: self.log_message("EXTENSION_CORRECTED", msg, details),
+            log_callback=lambda msg, details: logger.debug(f"EXTENSION_CORRECTED: {msg} ({details})"),
         )
 
         # Check if extension needs correction

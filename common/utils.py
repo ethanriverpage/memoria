@@ -10,11 +10,6 @@ from pathlib import Path
 from typing import Optional
 
 # Re-export logging functions from centralized logging module for backwards compatibility
-from common.logging_config import (
-    setup_logging,
-    add_export_log_handler,
-    remove_export_log_handler,
-)
 
 
 # ============================================================================
@@ -280,7 +275,7 @@ def is_preprocessed_directory(input_dir: str) -> bool:
 
 def update_file_timestamps(
     file_path,
-    timestamp_str: str,
+    timestamp_str: Optional[str],
     timestamp_format: str = "%Y-%m-%d %H:%M:%S",
 ) -> bool:
     """Update filesystem access and modification timestamps to match content date.
@@ -290,7 +285,7 @@ def update_file_timestamps(
 
     Args:
         file_path: Path to the file (string or Path object)
-        timestamp_str: Timestamp string to parse (e.g., "2024-01-15 10:30:00")
+        timestamp_str: Timestamp string to parse (e.g., "2024-01-15 10:30:00"), or None
         timestamp_format: strptime format string for parsing timestamp_str
                          Common formats:
                          - "%Y-%m-%d %H:%M:%S" (default)

@@ -13,7 +13,6 @@ this processor parses the filename metadata and CSV files directly.
 
 import json
 import logging
-import os
 import shutil
 import uuid
 from datetime import datetime
@@ -152,7 +151,7 @@ class ImazingProcessor(ProcessorBase):
         return False
 
     @staticmethod
-    def process(input_dir: str, output_dir: str = None, **kwargs) -> bool:
+    def process(input_dir: str, output_dir: Optional[str] = None, **kwargs) -> bool:
         """Process an iMazing iMessage export.
 
         Args:

@@ -627,7 +627,7 @@ class SnapchatPreprocessor:
         
         return metadata
 
-    def create_metadata(self, chat_history: Dict, file_catalog: Dict) -> Dict:
+    def create_metadata(self, chat_history: Dict, file_catalog: Dict) -> Tuple[Dict, List]:
         """
         Create cleaned metadata structure
 
