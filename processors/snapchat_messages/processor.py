@@ -712,14 +712,12 @@ def process_logic(
             logger.info(f"Preprocessing to: {temp_dir_path}")
 
             # Run preprocessing with final output directory for failure tracking
-            # Use messages subdirectory for processor-specific output
-            final_output_path = output_dir / "messages"
-
+            # Note: output_dir already has /messages appended by the caller (process method)
             preprocessor = SnapchatPreprocessor(
                 export_path=Path(input_dir),
                 output_dir=temp_dir_path,
                 workers=workers,
-                final_output_dir=final_output_path,
+                final_output_dir=output_dir,
                 username_override=username_override,
             )
             preprocessor.process()

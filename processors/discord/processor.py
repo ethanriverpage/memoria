@@ -66,7 +66,8 @@ def detect(input_path: Path) -> bool:
             if index_file.exists():
                 # Verify at least one channel folder exists
                 channel_folders = [
-                    d for d in messages_dir.iterdir()
+                    d
+                    for d in messages_dir.iterdir()
                     if d.is_dir() and d.name.startswith("c")
                 ]
                 if channel_folders:
@@ -85,14 +86,19 @@ def detect(input_path: Path) -> bool:
                 if isinstance(metadata, dict) and "conversations" in metadata:
                     export_info = metadata.get("export_info", {})
                     # Check for Discord-specific indicators
-                    if "downloads_successful" in export_info or "downloads_failed" in export_info:
+                    if (
+                        "downloads_successful" in export_info
+                        or "downloads_failed" in export_info
+                    ):
                         return True
                     # Check for Discord-style conversation structure
                     conversations = metadata.get("conversations", {})
                     if conversations:
                         # Check first conversation for Discord-specific fields
                         first_conv = next(iter(conversations.values()), {})
-                        if "guild_name" in first_conv or "original_urls" in str(first_conv):
+                        if "guild_name" in first_conv or "original_urls" in str(
+                            first_conv
+                        ):
                             return True
 
             except (json.JSONDecodeError, KeyError):
@@ -167,6 +173,7 @@ class DiscordProcessor(ProcessorBase):
         except Exception as e:
             logger.error(f"Error in DiscordProcessor: {e}")
             import traceback
+
             traceback.print_exc()
             return False
 
@@ -278,7 +285,9 @@ def generate_output_filename(
         channel_part = "group"
     else:
         # Server channel - use channel name
-        channel_part = sanitize_filename(channel_title.split(" in ")[0] if " in " in channel_title else channel_title)
+        channel_part = sanitize_filename(
+            channel_title.split(" in ")[0] if " in " in channel_title else channel_title
+        )
 
     # Truncate channel part if too long
     if len(channel_part) > 30:
@@ -295,7 +304,9 @@ def generate_output_filename(
     # Add sequence number for duplicates
     sequence = 2
     while True:
-        filename = f"discord-{export_username}-{channel_part}-{date_key}_{sequence}{extension}"
+        filename = (
+            f"discord-{export_username}-{channel_part}-{date_key}_{sequence}{extension}"
+        )
         if filename not in used_filenames:
             used_filenames.add(filename)
             return filename
@@ -378,13 +389,12 @@ def process_logic(
             logger.info(f"Preprocessing to: {temp_dir_path}")
 
             # Run preprocessing
-            final_output_path = output_dir / "messages"
-
+            # Note: output_dir already has /messages appended by the caller (process method)
             preprocessor = DiscordPreprocessor(
                 export_path=input_dir,
                 output_dir=temp_dir_path,
                 workers=workers,
-                final_output_dir=final_output_path,
+                final_output_dir=output_dir,
             )
             preprocessor.process()
 
@@ -392,7 +402,9 @@ def process_logic(
             _process_working_directory(temp_dir_path, output_dir, workers)
 
 
-def _process_working_directory(working_dir: Path, output_dir: Path, workers: Optional[int]):
+def _process_working_directory(
+    working_dir: Path, output_dir: Path, workers: Optional[int]
+):
     """Process a working directory (preprocessed export)
 
     Args:
@@ -419,9 +431,7 @@ def _process_working_directory(working_dir: Path, output_dir: Path, workers: Opt
     logger.info(f"Loading metadata from {metadata_file}...")
     metadata = load_metadata(metadata_file)
 
-    export_username = metadata.get("export_info", {}).get(
-        "export_username", "unknown"
-    )
+    export_username = metadata.get("export_info", {}).get("export_username", "unknown")
     logger.info(f"Export username: {export_username}")
 
     # Build filename index
@@ -474,13 +484,15 @@ def _process_working_directory(working_dir: Path, output_dir: Path, workers: Opt
     # Prepare arguments for parallel processing
     process_args = []
     for media_file, message_info, output_filename in matched_files:
-        process_args.append((
-            media_file,
-            message_info,
-            export_username,
-            output_dir,
-            output_filename,
-        ))
+        process_args.append(
+            (
+                media_file,
+                message_info,
+                export_username,
+                output_dir,
+                output_filename,
+            )
+        )
 
     # Process files in parallel
     success_count = 0
@@ -514,7 +526,9 @@ def _process_working_directory(working_dir: Path, output_dir: Path, workers: Opt
         else:
             failed_count += 1
 
-    logger.info(f"\nCopied {success_count} files ({len(file_info)} for EXIF processing)")
+    logger.info(
+        f"\nCopied {success_count} files ({len(file_info)} for EXIF processing)"
+    )
 
     # Batch process EXIF operations
     exif_rebuilt_count = 0
@@ -524,7 +538,9 @@ def _process_working_directory(working_dir: Path, output_dir: Path, workers: Opt
         # Batch validate and rebuild
         corrupted_files = batch_validate_exif(file_paths)
         if corrupted_files:
-            logger.info(f"Rebuilding {len(corrupted_files)} corrupted EXIF structures...")
+            logger.info(
+                f"Rebuilding {len(corrupted_files)} corrupted EXIF structures..."
+            )
             batch_rebuild_exif(list(corrupted_files))
             exif_rebuilt_count = len(corrupted_files)
 
@@ -560,4 +576,3 @@ def _process_working_directory(working_dir: Path, output_dir: Path, workers: Opt
         logger.info(
             f"Unmatched files saved to: {(output_dir / 'issues' / 'failed-matching' / 'media').absolute()}"
         )
-

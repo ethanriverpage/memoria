@@ -368,7 +368,7 @@ def _process_file_worker(args_tuple):
 
         # Update timestamps
         timestamp_str = _extract_message_timestamp(message)
-        update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S UTC")
+        update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
 
         return (True, str(output_path), message, export_username)
 
@@ -428,9 +428,7 @@ def process_logic(
         # Single preprocessed export - use directly
         working_dir = input_paths[0]
         logger.info(f"Using preprocessed export: {working_dir}")
-        return _process_working_directory(
-            working_dir, messages_output_dir, workers
-        )
+        return _process_working_directory(working_dir, messages_output_dir, workers)
     else:
         # Need to run preprocessing (handles raw exports and consolidation)
         logger.info("Running preprocessing...")
@@ -484,9 +482,7 @@ def _process_working_directory(
     logger.info(f"Loading metadata from {metadata_file}...")
     metadata = load_metadata(metadata_file)
 
-    export_username = metadata.get("export_info", {}).get(
-        "export_username", "unknown"
-    )
+    export_username = metadata.get("export_info", {}).get("export_username", "unknown")
     logger.info(f"Export identifier: {export_username}")
 
     # Build filename index

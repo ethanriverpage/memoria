@@ -371,7 +371,7 @@ def _process_file_worker(args_tuple):
 
         # Update timestamps
         timestamp_str = _extract_message_timestamp(message)
-        update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S UTC")
+        update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
 
         return (True, str(output_path), message, export_username)
 

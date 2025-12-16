@@ -51,9 +51,7 @@ ALL_MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 
 # Filename pattern for iMazing exports:
 # "YYYY-MM-DD HH MM SS - Contact Name - OriginalFile.ext"
-FILENAME_PATTERN = re.compile(
-    r"^(\d{4}-\d{2}-\d{2} \d{2} \d{2} \d{2}) - (.+?) - (.+)$"
-)
+FILENAME_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2} \d{2} \d{2}) - (.+?) - (.+)$")
 
 
 def parse_imazing_filename(filename: str) -> Optional[Dict]:
@@ -450,8 +448,8 @@ class ImazingPreprocessor:
         """
         original_name = source_path.name
 
-        def log_correction(msg):
-            logger.debug(msg)
+        def log_correction(msg, details):
+            logger.debug(f"{msg} - {details}")
             self.stats["extensions_corrected"] += 1
 
         return detect_and_correct_extension(
@@ -539,7 +537,11 @@ class ImazingPreprocessor:
             if csv_info:
                 msg_type = csv_info.get("type", "")
                 is_sender = msg_type == "Outgoing"
-                sender = "me" if is_sender else csv_info.get("sender_name", "") or conversation_name
+                sender = (
+                    "me"
+                    if is_sender
+                    else csv_info.get("sender_name", "") or conversation_name
+                )
                 content = csv_info.get("text", "")
             else:
                 # Without CSV, we can't determine direction
@@ -597,9 +599,7 @@ class ImazingPreprocessor:
                             "source_export": self.export_path.name,
                             "conversation_id": fp["conversation"],
                             "conversation_type": (
-                                "group"
-                                if is_group_chat(fp["conversation"])
-                                else "dm"
+                                "group" if is_group_chat(fp["conversation"]) else "dm"
                             ),
                             "conversation_title": fp["conversation"],
                             "sender": file_sender,
@@ -737,4 +737,3 @@ class ImazingPreprocessor:
         print(f"Files copied:               {self.stats['files_copied']:>6}")
         print(f"Extensions corrected:       {self.stats['extensions_corrected']:>6}")
         print("=" * 60)
-
