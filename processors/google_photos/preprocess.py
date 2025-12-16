@@ -20,8 +20,9 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 import multiprocessing
-from tqdm import tqdm
 import xxhash
+
+from common.progress import PHASE_PREPROCESS, futures_progress
 import magic
 
 from common.utils import ALL_MEDIA_EXTENSIONS
@@ -1152,7 +1153,7 @@ class GooglePhotosPreprocessor:
             }
             
             # Collect results as they complete
-            for future in tqdm(as_completed(future_to_album), total=len(future_to_album), desc="Processing albums", unit="album"):
+            for future in futures_progress(future_to_album, PHASE_PREPROCESS, "Parsing albums", unit="album"):
                 album_name = future_to_album[future]
                 try:
                     album_data = future.result()

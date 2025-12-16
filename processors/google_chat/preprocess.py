@@ -21,8 +21,9 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 import multiprocessing
-from tqdm import tqdm
 import magic
+
+from common.progress import PHASE_PREPROCESS, futures_progress
 
 from common.utils import ALL_MEDIA_EXTENSIONS
 from common.filter_banned_files import BannedFilesFilter
@@ -782,7 +783,7 @@ class GoogleChatPreprocessor:
             }
             
             # Collect results as they complete
-            for future in tqdm(as_completed(future_to_conversation), total=len(future_to_conversation), desc="Processing conversations", unit="conv"):
+            for future in futures_progress(future_to_conversation, PHASE_PREPROCESS, "Parsing conversations", unit="conv"):
                 conversation_id = future_to_conversation[future]
                 try:
                     conversation_data = future.result()

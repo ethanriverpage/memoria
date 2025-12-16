@@ -58,6 +58,7 @@ This will process all subdirectories in `/path/to/all-exports` that match suppor
 ### Required Arguments
 
 **Path to export** (positional argument):
+
 ```bash
 ./memoria.py /path/to/export
 ```
@@ -65,6 +66,7 @@ This will process all subdirectories in `/path/to/all-exports` that match suppor
 OR
 
 **Multiple exports** (using `--originals`):
+
 ```bash
 ./memoria.py --originals /path/to/parent-directory
 ```
@@ -166,6 +168,7 @@ Memoria automatically detects which processors match your export structure:
 ```
 
 The unified processor:
+
 1. Scans the input directory
 2. Identifies applicable processors based on directory structure
 3. Runs all matching processors
@@ -180,11 +183,13 @@ See which processors are available:
 ```
 
 Output example:
+
 ```
 Available processors:
   - GooglePhotosProcessor (priority: 100)
   - GoogleChatProcessor (priority: 90)
   - GoogleVoiceProcessor (priority: 85)
+  - DiscordProcessor (priority: 70)
   - InstagramMessagesProcessor (priority: 80)
   - InstagramPublicMediaProcessor (priority: 75)
   - InstagramOldPublicMediaProcessor (priority: 70)
@@ -197,16 +202,19 @@ Available processors:
 Process exports separately from uploading:
 
 1. **First**: Process without uploading
+
 ```bash
 ./memoria.py /path/to/export -o /path/to/output --skip-upload
 ```
 
 2. **Later**: Upload processed files
+
 ```bash
 ./memoria.py /path/to/export --upload-only /path/to/output
 ```
 
 This is useful for:
+
 - Processing on one machine, uploading from another
 - Processing multiple exports before uploading
 - Re-uploading after Immich configuration changes
@@ -263,6 +271,7 @@ Files are renamed to include metadata:
 **Format**: `{platform}_{username}_{original_filename}_{timestamp}.{ext}`
 
 Examples:
+
 ```
 google-photos_john.doe_IMG_1234_20230115_103045.jpg
 instagram_jane_doe_photo_20230220_142211.jpg
@@ -282,6 +291,7 @@ Control workers processing files within a single export:
 Higher values = faster processing but more CPU/memory usage.
 
 **Recommendations**:
+
 - Default (CPU count - 1): Good for most cases
 - Lower (2-4): For systems with limited resources or during other tasks
 - Higher (8-16): For powerful systems processing large exports
@@ -297,6 +307,7 @@ Process multiple exports simultaneously:
 This processes 2 exports at once, each using its own worker pool.
 
 **Recommendations**:
+
 - Sequential (default): Safest, lowest memory usage
 - 2-3 parallel: Good balance for most systems
 - 4+ parallel: Only for powerful systems with lots of RAM
@@ -339,9 +350,11 @@ Uploads are automatically organized into albums:
 
 | Platform | Album Path |
 |----------|-----------|
+| Discord | `Discord/{username}` |
 | Google Photos | `Google Photos/{username}` |
 | Google Chat | `Google Chat/{username}` |
 | Google Voice | `Google Voice/{username}` |
+| iMessage | `iMessage/{device}` |
 | Instagram Messages | `Instagram/{username}/messages` |
 | Instagram Posts | `Instagram/{username}/posts` |
 | Snapchat Memories | `Snapchat/{username}/memories` |
@@ -356,6 +369,7 @@ IMMICH_IGNORE_PATTERNS=**/issues/**,**/needs matching/**,**/drafts/**
 ```
 
 Default patterns:
+
 - `**/issues/**`: Files in "issues" directories
 - `**/needs matching/**`: Files needing manual review
 
@@ -408,6 +422,7 @@ DISABLE_TEMP_CLEANUP=1 ./memoria.py /path/to/export --verbose
 ```
 
 This creates:
+
 - Detailed log file in `logs/` directory
 - Preserves temporary preprocessing data
 - Shows DEBUG-level console output
@@ -421,6 +436,7 @@ TEMP_DIR=/mnt/fast-storage/temp ./memoria.py /path/to/export
 ```
 
 Useful for:
+
 - Using faster storage (SSD) for temp files
 - Separating temp data from main storage
 - Systems with limited space on default temp location
@@ -459,6 +475,7 @@ Use `--list-processors` with verbose mode to see detection:
 ```
 
 While there's no formal dry-run mode, you can:
+
 1. Process with `--skip-upload` first
 2. Review the output
 3. Delete and reprocess if needed
@@ -516,6 +533,7 @@ cat logs/memoria_*.log
 - [Upload Queuing](Upload-Queuing) - Upload queuing for parallel processing
 - [Immich Upload](Immich-Upload) - Immich upload configuration
 - [Google Export](Google-Export) - Google-specific guide
+- [iMessage Export](iMessage-Export) - iMessage-specific guide
+- [Discord Export](Discord-Export) - Discord-specific guide
 - [Instagram Export](Instagram-Export) - Instagram-specific guide
 - [Snapchat Export](Snapchat-Export) - Snapchat-specific guide
-

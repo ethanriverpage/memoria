@@ -15,7 +15,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from tqdm import tqdm
+from common.progress import PHASE_PROCESS, progress_bar
 
 # Import overlay embedding functions from common.overlay
 from common.overlay import (
@@ -529,10 +529,11 @@ def process_logic(
     with multiprocessing.Pool(processes=num_workers) as pool:
         # Create files and show progress
         results = list(
-            tqdm(
+            progress_bar(
                 pool.imap(create_memory_file, processing_tasks),
+                PHASE_PROCESS,
+                "Creating files",
                 total=len(processing_tasks),
-                desc="Creating files with overlays",
             )
         )
 

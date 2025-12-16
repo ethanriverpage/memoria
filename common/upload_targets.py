@@ -52,6 +52,27 @@ def build_upload_targets(
         messages_path = out_base / "messages"
         return [(str(messages_path), album)]
 
+    # Handle Discord
+    if processor_name == "Discord":
+        username = extract_username_from_export_dir(input_dir, "discord")
+        album = f"Discord/{username}"
+        messages_path = out_base / "messages"
+        return [(str(messages_path), album)]
+
+    # Handle iMessage (including iMazing exports)
+    if processor_name in ("iMessage", "iMessage-iMazing"):
+        # Extract device identifier from directory name (e.g., "iph13p" from "iph13p-messages-20220426")
+        input_path = Path(input_dir)
+        dir_name = input_path.name
+        # Pattern: {device}-messages-YYYYMMDD or mac-messages-YYYYMMDD
+        if "-messages-" in dir_name:
+            device = dir_name.split("-messages-")[0]
+        else:
+            device = "unknown"
+        album = f"iMessage/{device}"
+        messages_path = out_base / "messages"
+        return [(str(messages_path), album)]
+
     # Handle Snapchat Memories with subdirectory
     if processor_name == "Snapchat Memories":
         username = extract_username_from_export_dir(input_dir, "snapchat")

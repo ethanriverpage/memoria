@@ -7,7 +7,7 @@ Supports detection of multiple processors per input directory.
 """
 
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional
 from processors.base import ProcessorBase
 
 
@@ -85,3 +85,40 @@ class ProcessorRegistry:
             Number of registered processors
         """
         return len(self.processors)
+
+    def get_by_name(self, name: str) -> Optional[ProcessorBase]:
+        """Find processor by name (case-insensitive).
+
+        Args:
+            name: Processor name to search for
+
+        Returns:
+            Matching processor class, or None if not found
+        """
+        name_lower = name.lower()
+        for processor in self.processors:
+            if processor.get_name().lower() == name_lower:
+                return processor
+        return None
+
+    def group_for_consolidation(
+        self, input_paths: List[Path]
+    ) -> Dict[ProcessorBase, List[Path]]:
+        """Group input paths by processor for consolidation.
+
+        Only groups paths for processors that support consolidation and
+        have more than one matching export.
+
+        Args:
+            input_paths: List of input directory paths to analyze
+
+        Returns:
+            Dict mapping processor -> list of paths it can handle
+        """
+        groups = {}
+        for processor in self.processors:
+            if processor.supports_consolidation():
+                matching = [p for p in input_paths if processor.detect(p)]
+                if len(matching) > 1:
+                    groups[processor] = matching
+        return groups

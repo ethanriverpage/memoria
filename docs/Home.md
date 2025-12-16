@@ -10,6 +10,14 @@ The program handles all the tedious work: parsing platform-specific metadata for
 
 Memoria can process exports from the following platforms:
 
+### Apple
+
+- **iMessage** - Messages from Mac and iPhone backups with cross-export deduplication
+
+### Discord
+
+- **Discord** - Message attachments from DMs, group DMs, and server channels
+
 ### Google Services
 
 - **Google Photos** - Albums, shared libraries, and photo metadata
@@ -38,7 +46,9 @@ New to Memoria? Start here:
 
 Detailed export setup and structure requirements for each platform:
 
+- **[Discord Schema](Discord-Schema)** - Discord data export structure and format
 - **[Google Export Guide](Google-Export)** - Google Photos, Chat, and Voice
+- **[iMessage Export Guide](iMessage-Export)** - Mac and iPhone message exports
 - **[Instagram Export Guide](Instagram-Export)** - Messages, posts, and legacy formats
 - **[Snapchat Export Guide](Snapchat-Export)** - Memories and messages
 
@@ -68,7 +78,9 @@ For all command-line options, see the [Usage Guide](Usage).
 
 ### Platform-Specific Guides
 
+- **[Discord Schema](Discord-Schema)** - Discord data export structure and format
 - **[Google Export Guide](Google-Export)** - Google Photos, Chat, and Voice export setup
+- **[iMessage Export Guide](iMessage-Export)** - Mac and iPhone message exports
 - **[Instagram Export Guide](Instagram-Export)** - Instagram Messages, posts, and legacy formats
 - **[Snapchat Export Guide](Snapchat-Export)** - Snapchat Memories and Messages setup
 
@@ -96,7 +108,7 @@ For all command-line options, see the [Usage Guide](Usage).
 
 1. **First Time?** Start with the [Getting Started](Getting-Started) guide for setup instructions
 2. **Important Behaviors**: Read [Common Gotchas](Common-Gotchas) to avoid surprises
-3. **Export Setup**: See platform-specific guides ([Google](Google-Export), [Instagram](Instagram-Export), [Snapchat](Snapchat-Export)) for export preparation
+3. **Export Setup**: See platform-specific guides ([Discord](Discord-Schema), [Google](Google-Export), [iMessage](iMessage-Export), [Instagram](Instagram-Export), [Snapchat](Snapchat-Export)) for export preparation
 4. **Questions?** Check the [FAQ](FAQ) for common questions and answers
 5. **Performance**: Use `--workers` to control parallelism (see [Usage Guide](Usage))
 6. **Multiple Exports**: Use `--originals` to batch process (see [Parallel Processing](Parallel-Processing))
@@ -128,4 +140,3 @@ Common issues:
 - **"No processors matched input directory"**: Check export structure against platform guides
 - **Import errors**: Try installing in development mode: `pip install -e .`
 - **Performance issues**: See [Usage Guide](Usage#performance-tips) for optimization
-

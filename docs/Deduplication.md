@@ -105,8 +105,20 @@ ImageDescription field stores source information without album:
 
 Live Photo pairs (JPG+MOV) are deduplicated together, maintaining their association with the same sequence number.
 
+## Other Processors with Deduplication
+
+### iMessage
+
+The iMessage processor also supports content-based deduplication using xxHash64, with cross-export consolidation:
+
+- **Single export**: Deduplicates identical files sent to multiple conversations
+- **Multiple exports**: Deduplicates across all exports when processed together
+- **Metadata preservation**: All occurrences are tracked with `source_export` field
+
+See [iMessage Export Guide](iMessage-Export#deduplication) for details.
+
 ## Related Documentation
 
 - [Google Export](Google-Export) - Google Photos export guide
+- [iMessage Export](iMessage-Export) - iMessage export guide
 - [Usage](Usage) - Command-line options
-

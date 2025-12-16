@@ -21,8 +21,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 import multiprocessing
-from tqdm import tqdm
-
+from common.progress import PHASE_PREPROCESS, futures_progress
 from common.utils import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, ALL_MEDIA_EXTENSIONS
 from common.filter_banned_files import BannedFilesFilter
 from common.failure_tracker import FailureTracker
@@ -444,7 +443,7 @@ class OldInstagramPreprocessor:
             }
             
             # Collect results as they complete
-            for future in tqdm(as_completed(future_to_post), total=len(future_to_post), desc="Processing posts", unit="post"):
+            for future in futures_progress(future_to_post, PHASE_PREPROCESS, "Parsing posts", unit="post"):
                 try:
                     post_data = future.result()
                     all_posts.append(post_data)

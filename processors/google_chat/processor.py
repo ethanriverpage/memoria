@@ -15,8 +15,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from tqdm import tqdm
-
+from common.progress import PHASE_PROCESS, progress_bar
 from processors.google_chat.preprocess import GoogleChatPreprocessor
 from processors.base import ProcessorBase
 from common.dependency_checker import check_exiftool, print_exiftool_error
@@ -488,10 +487,11 @@ def process_logic(
         # Process batches in parallel
         with multiprocessing.Pool(processes=num_workers) as pool:
             batch_results = list(
-                tqdm(
+                progress_bar(
                     pool.imap(process_media_batch, batched_tasks),
+                    PHASE_PROCESS,
+                    "Creating files",
                     total=len(batched_tasks),
-                    desc="Processing batches",
                 )
             )
 

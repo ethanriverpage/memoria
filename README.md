@@ -131,6 +131,7 @@ Every processed file gets comprehensive EXIF metadata written using ExifTool:
 **Description Format Examples**
 
 ```text
+Source: iMessage/mac - John Doe in "DM with +14045551234"
 Source: Instagram/username/messages - Best Friends - John Doe
 Source: Google Photos/john.doe@gmail.com
 Source: Snapchat/username/memories - Story from 2023-01-15
@@ -150,6 +151,7 @@ Files are renamed with descriptive, sortable names that include platform, userna
 | Platform | Example Filename |
 |----------|------------------|
 | Google Chat | `gchat-john.doe-Family Chat-20230115.jpg` |
+| iMessage | `imessage-mac-14045551234-20230115.heic` |
 | Instagram Messages | `instagram-messages-jane_doe-Best Friends-20230220_1.mp4` |
 | Snapchat Messages | `snap-messages-user123-john-20230310.jpg` |
 | Instagram Posts | `insta-posts-user123-20230405.jpg` |
@@ -172,9 +174,9 @@ platform-username-YYYYMMDD/
 ├── Google Chat/
 │   └── john.doe/
 │       └── gchat-john.doe-*.jpg
-├── messages/              # Instagram/Snapchat Messages
-│   └── username/
-│       └── *-messages-*.jpg
+├── messages/              # iMessage/Instagram/Snapchat Messages
+│   └── imessage-mac-*.heic
+│   └── *-messages-*.jpg
 └── memories/              # Snapchat Memories
     └── username/
         └── snap-*.mp4
@@ -232,6 +234,7 @@ Memoria can process exports from the following platforms:
 
 | Platform | Service | What's Supported |
 |----------|---------|------------------|
+| **Apple** | iMessage | Mac and iPhone message exports with cross-export deduplication |
 | **Google** | Photos | Albums, shared libraries, and photo metadata |
 | | Chat | Group and direct message media |
 | | Voice | SMS messages and media |
@@ -291,6 +294,7 @@ Before processing, export your data from the platforms:
 
 | Platform | Guide | What to Export |
 |----------|-------|----------------|
+| Apple | [iMessage Export Guide](../../wiki/iMessage-Export) | Messages from Mac or iPhone |
 | Google | [Google Export Guide](../../wiki/Google-Export) | Photos, Chat, Voice |
 | Instagram | [Instagram Export Guide](../../wiki/Instagram-Export) | Messages, Posts, Stories |
 | Snapchat | [Snapchat Export Guide](../../wiki/Snapchat-Export) | Memories, Messages |
@@ -313,6 +317,7 @@ Before processing, export your data from the platforms:
 <br>
 
 - **[Google Export](../../wiki/Google-Export)** - Google Photos, Chat, and Voice export setup
+- **[iMessage Export](../../wiki/iMessage-Export)** - Mac and iPhone message exports
 - **[Instagram Export](../../wiki/Instagram-Export)** - Instagram Messages, posts, and legacy formats
 - **[Snapchat Export](../../wiki/Snapchat-Export)** - Snapchat Memories and Messages setup
 

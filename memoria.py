@@ -236,6 +236,7 @@ def _process_export_worker(
     export_idx: int,
     total_exports: int,
     upload_queue=None,
+    processor_filter: str = None,
 ) -> tuple[str, int, int]:
     """Worker function for parallel processing of exports
 
@@ -256,6 +257,7 @@ def _process_export_worker(
         export_idx: Index of this export (for display)
         total_exports: Total number of exports being processed
         upload_queue: Optional multiprocessing queue to collect upload tasks
+        processor_filter: Optional processor name to filter to (case-insensitive)
 
     Returns:
         Tuple of (export_name, success_count, failed_count)
@@ -283,6 +285,7 @@ def _process_export_worker(
         args.output = output_base
         args.verbose = verbose
         args.workers = workers
+        args.processor = processor_filter
 
         # Adjust output path for multi-export mode
         if output_base and total_exports > 1:
@@ -371,11 +374,26 @@ def process_single_export(
         if detection_cache is not None and cache_key:
             detection_cache[cache_key] = matching_processors
 
+    # Filter to specified processor if --processor is used
+    processor_filter = getattr(args, "processor", None)
+    if processor_filter:
+        matching_processors = [
+            p
+            for p in matching_processors
+            if p.get_name().lower() == processor_filter.lower()
+        ]
+
     if not matching_processors:
-        print(f"ERROR: No processors matched input directory: {input_path}")
-        show_supported_formats()
-        print("Run with --list-processors to see all available processors.")
-        return 0, 1
+        if processor_filter:
+            # Specified processor not found in this export - warning, not error
+            print(f"No {processor_filter} exports found in: {input_path}")
+            return 0, 0, []
+        else:
+            # No processors matched at all - this is an error
+            print(f"ERROR: No processors matched input directory: {input_path}")
+            show_supported_formats()
+            print("Run with --list-processors to see all available processors.")
+            return 0, 1, []
 
     # Show detected processors
     print(f"Detected {len(matching_processors)} processor(s):")
@@ -858,6 +876,11 @@ Examples:
         help="Directory containing multiple export folders to process",
     )
     parser.add_argument(
+        "--processor",
+        metavar="NAME",
+        help="Only run the specified processor (case-insensitive). Use --list-processors to see available names.",
+    )
+    parser.add_argument(
         "--parallel-exports",
         type=int,
         default=None,
@@ -957,6 +980,15 @@ Examples:
     # Initialize registry and load all processors
     registry = ProcessorRegistry()
     load_all_processors(registry)
+
+    # Validate --processor argument if provided
+    if args.processor:
+        if not registry.get_by_name(args.processor):
+            print(f"ERROR: Unknown processor '{args.processor}'")
+            print("Available processors:")
+            for p in registry.get_all_processors():
+                print(f"  - {p.get_name()}")
+            return 1
 
     # Handle --list-processors
     if args.list_processors:
@@ -1096,6 +1128,10 @@ Examples:
     # Read temp_dir from environment variable
     temp_dir = os.environ.get("TEMP_DIR", "../pre")
 
+    # Read consolidation mode from environment variable (defaults to True)
+    env_consolidate = os.environ.get("CONSOLIDATE_EXPORTS")
+    consolidate_exports = parse_bool_env(env_consolidate) if env_consolidate else True
+
     # Preflight Immich availability when uploads are enabled
     immich_enabled = not args.skip_upload
     immich_ready = False
@@ -1143,6 +1179,74 @@ Examples:
 
     # Resolve output base path once to avoid redundant Path operations
     output_base_str = args.output if args.output else None
+    output_base = Path(args.output) if args.output else None
+
+    # Handle consolidation mode
+    consolidated_paths = set()
+    if consolidate_exports and len(dirs_to_process) > 1:
+        consolidation_groups = registry.group_for_consolidation(dirs_to_process)
+
+        # Filter to specified processor if --processor is used
+        if args.processor:
+            target_name = args.processor.lower()
+            consolidation_groups = {
+                p: paths
+                for p, paths in consolidation_groups.items()
+                if p.get_name().lower() == target_name
+            }
+
+        for processor, paths in consolidation_groups.items():
+            separator = "=" * 70
+            print(separator)
+            print(f"Consolidating {len(paths)} {processor.get_name()} exports...")
+            print(separator)
+            for p in paths:
+                print(f"  - {p.name}")
+            print()
+
+            # Determine output directory for consolidated export
+            if output_base:
+                if args.processor:
+                    # Single processor specified - use output directory directly
+                    consolidated_output = str(output_base)
+                else:
+                    # Multiple processors possible - add suffix to distinguish
+                    consolidated_output = str(
+                        output_base
+                        / f"{processor.get_name().lower().replace(' ', '_')}_consolidated"
+                    )
+            else:
+                consolidated_output = None
+
+            try:
+                success = processor.process_consolidated(
+                    [str(p) for p in paths],
+                    consolidated_output,
+                    verbose=args.verbose,
+                    workers=args.workers,
+                    temp_dir=temp_dir,
+                )
+
+                if success:
+                    consolidated_paths.update(paths)
+                    total_exports_success += 1
+                    export_results.append(
+                        (f"{processor.get_name()} (consolidated)", "SUCCESS")
+                    )
+                else:
+                    total_exports_failed += 1
+                    export_results.append(
+                        (f"{processor.get_name()} (consolidated)", "FAILED")
+                    )
+            except Exception as e:
+                print(f"ERROR: Consolidation failed for {processor.get_name()}: {e}")
+                total_exports_failed += 1
+                export_results.append(
+                    (f"{processor.get_name()} (consolidated)", "ERROR")
+                )
+
+        # Remove consolidated exports from normal processing
+        dirs_to_process = [d for d in dirs_to_process if d not in consolidated_paths]
 
     try:
         if parallel_exports > 1 and len(dirs_to_process) > 1:
@@ -1200,6 +1304,7 @@ Examples:
                         idx,
                         len(dirs_to_process),
                         upload_queue,  # Pass the upload queue
+                        args.processor,  # Pass the processor filter
                     )
                     future_to_export[future] = (idx, export_dir)
 
@@ -1252,7 +1357,6 @@ Examples:
             # ============== SEQUENTIAL PROCESSING MODE ==============
             # Initialize detection cache for multi-export processing
             detection_cache = {} if len(dirs_to_process) > 1 else None
-            output_base = Path(args.output) if args.output else None
 
             for export_idx, export_dir in enumerate(dirs_to_process, 1):
                 # Set up per-export logging
