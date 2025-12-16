@@ -8,7 +8,7 @@ unified detection and processing.
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, List
+from typing import List
 
 
 class ProcessorBase(ABC):

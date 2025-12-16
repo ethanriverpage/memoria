@@ -10,21 +10,24 @@ import json
 import logging
 import os
 import shutil
-import uuid
 from datetime import datetime
 from multiprocessing import Pool
 from pathlib import Path
 from typing import List, Optional
 
 from common.dependency_checker import check_exiftool, print_exiftool_error
-from common.progress import PHASE_PROCESS, progress_bar
 from common.exiftool_batch import (
     batch_read_existing_metadata,
     batch_rebuild_exif,
     batch_validate_exif,
     batch_write_metadata_imessage,
 )
-from common.utils import default_worker_count, sanitize_filename
+from common.processing import (
+    print_processing_summary,
+    temp_processing_directory,
+)
+from common.progress import PHASE_PROCESS, progress_bar
+from common.utils import default_worker_count, sanitize_filename, update_file_timestamps
 from processors.base import ProcessorBase
 from processors.imessage.preprocess import IMessagePreprocessor
 
@@ -138,9 +141,15 @@ class IMessageProcessor(ProcessorBase):
         Returns:
             True if processing succeeded, False otherwise
         """
+        # Create messages subdirectory under output
+        if output_dir:
+            processor_output = str(Path(output_dir) / "messages")
+        else:
+            processor_output = kwargs.get("output", "final_imessage/messages")
+
         return process_logic(
             input_dirs=input_dirs,
-            output_dir=output_dir,
+            output_dir=processor_output,
             temp_dir=kwargs.get("temp_dir", "../pre"),
             verbose=kwargs.get("verbose", False),
             workers=kwargs.get("workers"),
@@ -323,38 +332,21 @@ def generate_imessage_filename(
         sequence += 1
 
 
-def update_filesystem_timestamps(file_path: Path, message: dict) -> bool:
-    """Update filesystem timestamps to match message date.
+def _extract_message_timestamp(message: dict) -> str | None:
+    """Extract timestamp string from iMessage message metadata.
 
     Args:
-        file_path: Path to the file
         message: Message metadata with 'created' or 'primary_created' field
 
     Returns:
-        True if successful, False otherwise
+        Timestamp string or None if not found
     """
-    try:
-        # Get date string
-        if "primary_created" in message:
-            date_str = message["primary_created"]
-        elif "messages" in message and message["messages"]:
-            date_str = message["messages"][0].get("created")
-        else:
-            date_str = message.get("created")
-
-        if not date_str:
-            return False
-
-        # Parse date
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S UTC")
-        timestamp = date_obj.timestamp()
-
-        # Update timestamps
-        os.utime(file_path, (timestamp, timestamp))
-        return True
-    except Exception as e:
-        logger.warning(f"Failed to update timestamps for {file_path}: {e}")
-        return False
+    if "primary_created" in message:
+        return message["primary_created"]
+    elif "messages" in message and message["messages"]:
+        return message["messages"][0].get("created")
+    else:
+        return message.get("created")
 
 
 def _process_file_worker(args_tuple):
@@ -375,7 +367,8 @@ def _process_file_worker(args_tuple):
         shutil.copy2(media_path, output_path)
 
         # Update timestamps
-        update_filesystem_timestamps(output_path, message)
+        timestamp_str = _extract_message_timestamp(message)
+        update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S UTC")
 
         return (True, str(output_path), message, export_username)
 
@@ -400,7 +393,7 @@ def process_logic(
 
     Args:
         input_dirs: List of input directories (raw exports or preprocessed)
-        output_dir: Output directory for processed files
+        output_dir: Output directory for processed files (final path, no subdirs created)
         temp_dir: Directory for temporary preprocessing files
         verbose: Enable verbose logging
         workers: Number of parallel workers
@@ -420,45 +413,36 @@ def process_logic(
     # Convert to paths
     input_paths = [Path(d) for d in input_dirs]
 
-    # Determine output directory
+    # Determine output directory (use as-is, subdirectory created by caller)
     if output_dir:
-        output_path = Path(output_dir)
+        messages_output_dir = Path(output_dir)
     else:
-        output_path = Path("final_imessage")
+        messages_output_dir = Path("final_imessage/messages")
 
-    # Create output subdirectory for messages
-    messages_output_dir = output_path / "messages"
     messages_output_dir.mkdir(parents=True, exist_ok=True)
 
     # Check if all inputs are already preprocessed
     all_preprocessed = all(is_preprocessed(p) for p in input_paths)
-    temp_dir_created = None
-    working_dir = None
 
-    try:
-        if all_preprocessed and len(input_paths) == 1:
-            # Single preprocessed export - use directly
-            working_dir = input_paths[0]
-            logger.info(f"Using preprocessed export: {working_dir}")
-        else:
-            # Need to run preprocessing (handles raw exports and consolidation)
-            logger.info("Running preprocessing...")
+    if all_preprocessed and len(input_paths) == 1:
+        # Single preprocessed export - use directly
+        working_dir = input_paths[0]
+        logger.info(f"Using preprocessed export: {working_dir}")
+        return _process_working_directory(
+            working_dir, messages_output_dir, workers
+        )
+    else:
+        # Need to run preprocessing (handles raw exports and consolidation)
+        logger.info("Running preprocessing...")
 
-            # Create temp directory
-            temp_base = Path(temp_dir).resolve()
-            temp_base.mkdir(parents=True, exist_ok=True)
-
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            unique_id = str(uuid.uuid4())[:8]
-            temp_dir_created = temp_base / f"imessage_temp_{timestamp}_{unique_id}"
-            temp_dir_created.mkdir(parents=True, exist_ok=True)
-
-            logger.info(f"Preprocessing to: {temp_dir_created}")
+        # Use context manager for temp directory with automatic cleanup
+        with temp_processing_directory(temp_dir, "imessage") as temp_dir_path:
+            logger.info(f"Preprocessing to: {temp_dir_path}")
 
             # Run preprocessor with all exports
             preprocessor = IMessagePreprocessor(
                 export_paths=input_paths,
-                output_dir=temp_dir_created,
+                output_dir=temp_dir_path,
                 workers=workers,
             )
 
@@ -466,141 +450,144 @@ def process_logic(
                 logger.error("Preprocessing failed")
                 return False
 
-            working_dir = temp_dir_created
-            logger.info(f"Preprocessing complete. Using: {working_dir}")
+            logger.info(f"Preprocessing complete. Using: {temp_dir_path}")
+            return _process_working_directory(
+                temp_dir_path, messages_output_dir, workers
+            )
 
-        # Load metadata
-        metadata_file = working_dir / "metadata.json"
-        media_dir = working_dir / "media"
 
-        if not metadata_file.exists():
-            logger.error(f"Metadata file not found: {metadata_file}")
-            return False
+def _process_working_directory(
+    working_dir: Path, output_dir: Path, workers: Optional[int]
+) -> bool:
+    """Process a working directory (preprocessed export).
 
-        if not media_dir.exists():
-            logger.error(f"Media directory not found: {media_dir}")
-            return False
+    Args:
+        working_dir: Path to preprocessed directory with metadata.json and media/
+        output_dir: Output directory for processed files
+        workers: Number of parallel workers
 
-        logger.info(f"Loading metadata from {metadata_file}...")
-        metadata = load_metadata(metadata_file)
+    Returns:
+        True if processing succeeded, False otherwise
+    """
+    # Load metadata
+    metadata_file = working_dir / "metadata.json"
+    media_dir = working_dir / "media"
 
-        export_username = metadata.get("export_info", {}).get(
-            "export_username", "unknown"
-        )
-        logger.info(f"Export identifier: {export_username}")
+    if not metadata_file.exists():
+        logger.error(f"Metadata file not found: {metadata_file}")
+        return False
 
-        # Build filename index
-        filename_index = build_filename_index(metadata)
-        logger.info(f"Found {len(filename_index)} media files to process")
+    if not media_dir.exists():
+        logger.error(f"Media directory not found: {media_dir}")
+        return False
 
-        # Scan media directory
-        media_files = list(media_dir.iterdir())
-        media_files = [f for f in media_files if f.is_file()]
-        logger.info(f"Found {len(media_files)} files in media directory")
+    logger.info(f"Loading metadata from {metadata_file}...")
+    metadata = load_metadata(metadata_file)
 
-        # Match files to messages and pre-generate filenames
-        logger.info("Matching files and generating filenames...")
-        used_filenames = set()
-        matched_files = []
+    export_username = metadata.get("export_info", {}).get(
+        "export_username", "unknown"
+    )
+    logger.info(f"Export identifier: {export_username}")
 
-        for media_file in media_files:
-            if media_file.name in filename_index:
-                message = filename_index[media_file.name]
-                file_ext = media_file.suffix.lower()
+    # Build filename index
+    filename_index = build_filename_index(metadata)
+    logger.info(f"Found {len(filename_index)} media files to process")
 
-                output_filename = generate_imessage_filename(
-                    message, export_username, file_ext, used_filenames
-                )
-                matched_files.append((media_file, message, output_filename))
-            else:
-                logger.warning(f"No metadata for file: {media_file.name}")
+    # Scan media directory
+    media_files = list(media_dir.iterdir())
+    media_files = [f for f in media_files if f.is_file()]
+    logger.info(f"Found {len(media_files)} files in media directory")
 
-        logger.info(f"Matched {len(matched_files)} files")
+    # Match files to messages and pre-generate filenames
+    logger.info("Matching files and generating filenames...")
+    used_filenames = set()
+    matched_files = []
 
-        # Process files
-        logger.info(f"Processing files to {messages_output_dir}/")
-        logger.info("=" * 50)
+    for media_file in media_files:
+        if media_file.name in filename_index:
+            message = filename_index[media_file.name]
+            file_ext = media_file.suffix.lower()
 
-        num_workers = workers if workers is not None else default_worker_count()
-        logger.info(f"Using {num_workers} workers")
-
-        # Prepare arguments
-        process_args = [
-            (media_file, message, export_username, messages_output_dir, output_filename)
-            for media_file, message, output_filename in matched_files
-        ]
-
-        # Phase 1: Copy and rename files
-        results = []
-        if num_workers > 1:
-            with Pool(processes=num_workers) as pool:
-                results = list(
-                    progress_bar(
-                        pool.imap(_process_file_worker, process_args),
-                        PHASE_PROCESS,
-                        "Copying files",
-                        total=len(process_args),
-                    )
-                )
+            output_filename = generate_imessage_filename(
+                message, export_username, file_ext, used_filenames
+            )
+            matched_files.append((media_file, message, output_filename))
         else:
-            for args in progress_bar(process_args, PHASE_PROCESS, "Copying files"):
-                results.append(_process_file_worker(args))
+            logger.warning(f"No metadata for file: {media_file.name}")
 
-        # Collect successful files for EXIF processing
-        success_count = 0
-        failed_count = 0
-        file_paths = []
-        file_info = []
+    logger.info(f"Matched {len(matched_files)} files")
 
-        for success, output_path, message, exp_username in results:
-            if success and output_path:
-                success_count += 1
-                file_paths.append(output_path)
-                file_info.append((output_path, message, exp_username))
-            else:
-                failed_count += 1
+    # Process files
+    print(f"\nProcessing files to {output_dir}/")
+    logger.info("=" * 50)
 
-        logger.info(f"Copied {success_count} files ({failed_count} failed)")
+    num_workers = workers if workers is not None else default_worker_count()
+    logger.info(f"Using {num_workers} workers")
 
-        # Phase 2: Batch EXIF processing
-        exif_rebuilt_count = 0
-        if file_paths:
-            logger.info("Batch processing EXIF metadata...")
+    # Prepare arguments
+    process_args = [
+        (media_file, message, export_username, output_dir, output_filename)
+        for media_file, message, output_filename in matched_files
+    ]
 
-            # Validate and rebuild corrupted EXIF
-            corrupted_files = batch_validate_exif(file_paths)
-            if corrupted_files:
-                logger.info(
-                    f"Rebuilding {len(corrupted_files)} corrupted EXIF structures..."
+    # Phase 1: Copy and rename files
+    results = []
+    if num_workers > 1:
+        with Pool(processes=num_workers) as pool:
+            results = list(
+                progress_bar(
+                    pool.imap(_process_file_worker, process_args),
+                    PHASE_PROCESS,
+                    "Copying files",
+                    total=len(process_args),
                 )
-                batch_rebuild_exif(list(corrupted_files))
-                exif_rebuilt_count = len(corrupted_files)
+            )
+    else:
+        for args in progress_bar(process_args, PHASE_PROCESS, "Copying files"):
+            results.append(_process_file_worker(args))
 
-            # Read existing metadata and write new EXIF data
-            existing_metadata_map = batch_read_existing_metadata(file_paths)
-            batch_write_metadata_imessage(file_info, existing_metadata_map)
-            logger.info(f"EXIF metadata written for {len(file_info)} files")
+    # Collect successful files for EXIF processing
+    success_count = 0
+    failed_count = 0
+    file_paths = []
+    file_info = []
 
-        # Summary
-        logger.info("")
-        logger.info("=" * 50)
-        logger.info("Processing complete!")
-        logger.info(f"  Successfully processed: {success_count}")
-        logger.info(f"  Failed: {failed_count}")
-        logger.info(f"  EXIF structures rebuilt: {exif_rebuilt_count}")
-        logger.info(f"Processed files saved to: {messages_output_dir.absolute()}")
+    for success, output_path, message, exp_username in results:
+        if success and output_path:
+            success_count += 1
+            file_paths.append(output_path)
+            file_info.append((output_path, message, exp_username))
+        else:
+            failed_count += 1
 
-        return True
+    logger.info(f"Copied {success_count} files ({failed_count} failed)")
 
-    finally:
-        # Clean up temp directory
-        if temp_dir_created and temp_dir_created.exists():
-            from common.utils import should_cleanup_temp
+    # Phase 2: Batch EXIF processing
+    exif_rebuilt_count = 0
+    if file_paths:
+        logger.info("Batch processing EXIF metadata...")
 
-            if should_cleanup_temp():
-                logger.info(f"Cleaning up temporary directory: {temp_dir_created}")
-                shutil.rmtree(temp_dir_created)
-            else:
-                logger.info(
-                    f"Temp cleanup disabled. Directory preserved: {temp_dir_created}"
-                )
+        # Validate and rebuild corrupted EXIF
+        corrupted_files = batch_validate_exif(file_paths)
+        if corrupted_files:
+            logger.info(
+                f"Rebuilding {len(corrupted_files)} corrupted EXIF structures..."
+            )
+            batch_rebuild_exif(list(corrupted_files))
+            exif_rebuilt_count = len(corrupted_files)
+
+        # Read existing metadata and write new EXIF data
+        existing_metadata_map = batch_read_existing_metadata(file_paths)
+        batch_write_metadata_imessage(file_info, existing_metadata_map)
+        logger.info(f"EXIF metadata written for {len(file_info)} files")
+
+    # Print summary using shared utility
+    print_processing_summary(
+        success=success_count,
+        failed=failed_count,
+        total=len(matched_files),
+        output_dir=str(output_dir),
+        extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
+    )
+
+    return True

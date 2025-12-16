@@ -18,11 +18,11 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import sys
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 import multiprocessing
 from common.progress import PHASE_PREPROCESS, futures_progress
-from common.utils import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, ALL_MEDIA_EXTENSIONS
+from common.utils import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from common.filter_banned_files import BannedFilesFilter
 from common.failure_tracker import FailureTracker
 

@@ -17,14 +17,14 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 import sys
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 import multiprocessing
 import xxhash
 
 from common.progress import PHASE_PREPROCESS, futures_progress
-import magic
 
+from common.file_utils import detect_and_correct_extension
 from common.utils import ALL_MEDIA_EXTENSIONS
 from common.filter_banned_files import BannedFilesFilter
 from common.failure_tracker import FailureTracker
@@ -755,89 +755,6 @@ class GooglePhotosPreprocessor:
             )
             return None
 
-    def detect_and_correct_extension(
-        self, file_path: Path, original_filename: str
-    ) -> str:
-        """
-        Detect actual file type and return correct extension
-        (Reused from GoogleChatPreprocessor)
-        """
-        original_ext = Path(original_filename).suffix.lower()
-
-        # Try python-magic first (most reliable)
-        try:
-            mime = magic.from_file(str(file_path), mime=True)
-
-            # Map common MIME types to extensions
-            mime_to_ext = {
-                "image/jpeg": ".jpg",
-                "image/png": ".png",
-                "image/gif": ".gif",
-                "image/webp": ".webp",
-                "image/heic": ".heic",
-                "video/mp4": ".mp4",
-                "video/quicktime": ".mov",
-                "video/x-msvideo": ".avi",
-                "video/webm": ".webm",
-                "video/x-matroska": ".mkv",
-            }
-
-            detected_ext = mime_to_ext.get(mime)
-            if detected_ext and detected_ext != original_ext:
-                return detected_ext
-            elif detected_ext:
-                return original_ext
-
-        except Exception as e:
-            self.log_message(
-                "EXTENSION_DETECTION_ERROR",
-                f"python-magic failed for {original_filename}",
-                str(e),
-            )
-
-        # Fallback: Check file signatures (magic bytes)
-        try:
-            with open(file_path, "rb") as f:
-                header = f.read(32)
-
-            if header.startswith(b"\xff\xd8\xff"):
-                detected_ext = ".jpg"
-            elif header.startswith(b"\x89PNG"):
-                detected_ext = ".png"
-            elif header.startswith(b"GIF87a") or header.startswith(b"GIF89a"):
-                detected_ext = ".gif"
-            elif header.startswith(b"RIFF") and b"WEBP" in header[:12]:
-                detected_ext = ".webp"
-            elif b"\x1a\x45\xdf\xa3" in header[:32]:
-                with open(file_path, "rb") as f:
-                    more_data = f.read(4096)
-                if b"webm" in more_data.lower():
-                    detected_ext = ".webm"
-                else:
-                    detected_ext = ".mkv"
-            elif (
-                header[4:12] == b"ftypmp42"
-                or header[4:12] == b"ftypisom"
-                or header[4:8] == b"ftyp"
-            ):
-                detected_ext = ".mp4"
-            elif header[4:8] == b"moov" or header[4:8] == b"mdat":
-                detected_ext = ".mov"
-            else:
-                return original_ext
-
-            if detected_ext != original_ext:
-                return detected_ext
-
-        except Exception as e:
-            self.log_message(
-                "EXTENSION_DETECTION_ERROR",
-                f"Signature check failed for {original_filename}",
-                str(e),
-            )
-
-        return original_ext
-
     def _compute_file_hash(self, file_path: Path) -> str:
         """
         Compute xxHash64 of file for deduplication (fast, non-cryptographic)
@@ -871,8 +788,12 @@ class GooglePhotosPreprocessor:
         image_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic"}
         video_extensions = {".mov", ".mp4", ".avi", ".webm", ".mkv"}
 
-        # Detect and correct extension if needed
-        correct_ext = self.detect_and_correct_extension(source_path, filename)
+        # Detect and correct extension if needed using shared utility
+        correct_ext = detect_and_correct_extension(
+            source_path,
+            filename,
+            log_callback=lambda msg, details: self.log_message("EXTENSION_CORRECTED", msg, details),
+        )
         original_ext = Path(filename).suffix.lower()
 
         if correct_ext != original_ext:
@@ -950,8 +871,6 @@ class GooglePhotosPreprocessor:
         # Handle filename collisions (thread-safe)
         with self.destination_lock:
             if dest_filename in self.destination_files:
-                existing_source = self.destination_files[dest_filename]
-                
                 # Different file with same name - create unique name
                 base, ext = filename.rsplit(".", 1) if "." in filename else (filename, "")
                 counter = 1
@@ -1242,7 +1161,7 @@ class GooglePhotosPreprocessor:
         # Calculate and display space savings
         if self.stats['deduplicated_files'] > 0:
             unique_files = len(self.file_hashes)
-            print(f"\nDEDUPLICATION SUMMARY:")
+            print("\nDEDUPLICATION SUMMARY:")
             print(f"  Unique media files:             {unique_files:>6}")
             print(f"  Duplicate instances avoided:    {self.stats['deduplicated_files']:>6}")
             print(f"  Space savings: Deduplicated {self.stats['deduplicated_files']} files")

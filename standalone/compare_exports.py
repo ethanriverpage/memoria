@@ -18,7 +18,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Set, Tuple, Any, Optional
+from typing import Dict, List, Set, Any, Optional
 from collections import defaultdict
 
 # Try to import tqdm for progress bars
@@ -466,18 +466,18 @@ class ExportComparator:
         self.logger.info("COMPARISON SUMMARY")
         self.logger.info("="*80)
         
-        self.logger.info(f"\nDirectories compared:")
+        self.logger.info("\nDirectories compared:")
         self.logger.info(f"  Dir1: {self.dir1}")
         self.logger.info(f"  Dir2: {self.dir2}")
         
-        self.logger.info(f"\nFile counts:")
+        self.logger.info("\nFile counts:")
         self.logger.info(f"  Total files in dir1: {self.stats['total_files_dir1']}")
         self.logger.info(f"  Total files in dir2: {self.stats['total_files_dir2']}")
         self.logger.info(f"  Matched files: {self.stats['matched_files']}")
         self.logger.info(f"  Files only in dir1: {self.stats['files_only_in_dir1']}")
         self.logger.info(f"  Files only in dir2: {self.stats['files_only_in_dir2']}")
         
-        self.logger.info(f"\nDifferences found:")
+        self.logger.info("\nDifferences found:")
         self.logger.info(f"  Size mismatches: {self.stats['size_mismatches']}")
         self.logger.info(f"  Content mismatches: {self.stats['content_mismatches']}")
         self.logger.info(f"  Metadata mismatches: {self.stats['metadata_mismatches']}")

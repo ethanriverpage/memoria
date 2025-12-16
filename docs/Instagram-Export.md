@@ -132,13 +132,13 @@ Processed messages are placed in a flat structure with conversation names embedd
 
 ```
 output/messages/
-├── instagram-messages-username-conversation1-20230115_1.jpg
+├── instagram-messages-username-conversation1-20230115.jpg
 ├── instagram-messages-username-conversation1-20230115_2.mp4
-├── instagram-messages-username-conversation2-20230220_1.jpg
+├── instagram-messages-username-conversation2-20230220.jpg
 └── ...
 ```
 
-Files are named: `instagram-messages-{username}-{conversation}-{YYYYMMDD}_{sequence}.{ext}`
+Files are named: `instagram-messages-{username}-{conversation}-{YYYYMMDD}.{ext}` (with `_N` suffix for duplicates)
 
 ### Embedded Metadata
 
@@ -398,7 +398,7 @@ Processed Instagram content is organized by type:
 ```
 /path/to/output/
 ├── messages/              # Instagram Messages (flat structure)
-│   ├── instagram-messages-username-conv1-20230115_1.jpg
+│   ├── instagram-messages-username-conv1-20230115.jpg
 │   └── ...
 └── public-media/          # Instagram Public Media (new & old format)
     ├── posts/

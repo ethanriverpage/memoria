@@ -4,28 +4,34 @@ Google Photos Media Processor
 This processor is designed to be used through memoria.py.
 It handles renaming Google Photos media files, embedding metadata, and updating filesystem timestamps.
 """
+
 import json
 import logging
-import multiprocessing
 import os
-import re
 import shutil
-import sys
-import uuid
 from datetime import datetime
 from pathlib import Path
 
-from common.progress import PHASE_PROCESS, progress_bar
-from processors.google_photos.preprocess import GooglePhotosPreprocessor
-from processors.base import ProcessorBase
 from common.dependency_checker import check_exiftool, print_exiftool_error
-from common.utils import get_media_type, get_gps_format
 from common.exiftool_batch import (
     batch_validate_exif,
     batch_rebuild_exif,
     batch_read_existing_metadata,
     batch_write_metadata_google_photos,
 )
+from common.processing import (
+    process_batches_parallel,
+    print_processing_summary,
+    temp_processing_directory,
+)
+from common.utils import (
+    default_worker_count,
+    extract_username_from_export_dir,
+    is_preprocessed_directory,
+    update_file_timestamps,
+)
+from processors.base import ProcessorBase
+from processors.google_photos.preprocess import GooglePhotosPreprocessor
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -103,11 +109,11 @@ class GooglePhotosProcessor(ProcessorBase):
             return False
 
         try:
-            # Choose human-readable subdirectory under provided base output
+            # Choose content-type subdirectory under provided base output
             if output_dir:
-                processor_output = str(Path(output_dir) / "Google Photos")
+                processor_output = str(Path(output_dir) / "photos")
             else:
-                processor_output = kwargs.get("output", "final_googlephotos")
+                processor_output = kwargs.get("output", "final_googlephotos/photos")
 
             # Call processing logic directly
             process_logic(
@@ -192,53 +198,20 @@ def get_live_photo_group_key(media_data):
     return (timestamp, base_name)
 
 
-def update_filesystem_timestamps(file_path, media_data):
-    """Update filesystem creation and modification timestamps to match capture date
-
-    Args:
-        file_path: Path to the file
-        media_data: Dict containing media metadata with 'capture_timestamp' field
-
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    try:
-        # Parse date from media_data
-        # Format: "2018-01-10T00:30:37Z" (ISO 8601)
-        timestamp_str = media_data.get("capture_timestamp")
-
-        # Skip if no timestamp
-        if timestamp_str is None:
-            return False
-
-        # Parse ISO 8601 format
-        date_obj = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-
-        # Convert to Unix timestamp
-        timestamp = date_obj.timestamp()
-
-        # Update both access time and modification time
-        os.utime(file_path, (timestamp, timestamp))
-        return True
-    except Exception as e:
-        logger.warning(f"Failed to update timestamps for {file_path}: {e}")
-        return False
-
-
 def process_media_batch(batch_args):
     """Process a batch of media files (worker function for multiprocessing)
-    
+
     Args:
-        batch_args: List of tuples, each containing (media_file, media_data, 
+        batch_args: List of tuples, each containing (media_file, media_data,
                     album_name, output_filename, media_dir, output_dir, export_username)
-    
+
     Returns:
         List of (success, failed, exif_rebuilt) tuples
     """
     # Phase 1: Copy all files
     file_paths = []
     file_info = []
-    
+
     for args_tuple in batch_args:
         (
             media_file,
@@ -249,61 +222,48 @@ def process_media_batch(batch_args):
             output_dir,
             export_username,
         ) = args_tuple
-        
+
         media_path = os.path.join(media_dir, media_file)
         output_path = os.path.join(output_dir, output_filename)
-        
+
         if not os.path.exists(media_path):
             logger.warning(f"Media file not found: {media_path}")
             continue
-        
+
         try:
             shutil.copy2(media_path, output_path)
             file_paths.append(output_path)
             file_info.append((output_path, media_data, album_name, export_username))
         except Exception as e:
             logger.error(f"Failed to copy {media_file}: {e}")
-    
+
     if not file_paths:
         return [(False, True, False)] * len(batch_args)
-    
+
     # Phase 2: Batch validate and rebuild
     corrupted_files = batch_validate_exif(file_paths)
     if corrupted_files:
         batch_rebuild_exif(list(corrupted_files))
-    
+
     # Phase 3: Batch read metadata, then batch write
     existing_metadata_map = batch_read_existing_metadata(file_paths)
     batch_write_metadata_google_photos(file_info, existing_metadata_map)
-    
+
     # Phase 4: Update timestamps and compile results
     results = []
     for output_path, media_data, _, _ in file_info:
-        update_filesystem_timestamps(output_path, media_data)
+        # Google Photos uses ISO 8601 format: "2018-01-10T00:30:37Z"
+        timestamp_str = media_data.get("capture_timestamp")
+        if timestamp_str:
+            update_file_timestamps(output_path, timestamp_str, "%Y-%m-%dT%H:%M:%S")
         exif_rebuilt = output_path in corrupted_files
         results.append((True, False, exif_rebuilt))
-    
+
     # Add failed results for files that didn't get copied
     while len(results) < len(batch_args):
         results.append((False, True, False))
-    
+
     return results
-
-
-def is_preprocessed(input_dir):
-    """Check if input directory is already preprocessed
-
-    Args:
-        input_dir: Path to input directory
-
-    Returns:
-        bool: True if already preprocessed, False if raw export
-    """
-    input_path = Path(input_dir)
-    metadata_file = input_path / "metadata.json"
-    media_dir = input_path / "media"
-
-    return metadata_file.exists() and media_dir.exists()
 
 
 def process_logic(
@@ -333,243 +293,214 @@ def process_logic(
     logger.info("Google Photos Media Processor")
     logger.info("=" * 50)
 
-    # Determine if input needs preprocessing
-    temp_dir_created = None
+    # Check if input is already preprocessed
+    if is_preprocessed_directory(input_dir):
+        logger.info(f"Input directory is already preprocessed: {input_dir}")
+        _process_working_directory(input_dir, output_dir, workers)
+    else:
+        logger.info(f"Input directory is raw export: {input_dir}")
+        logger.info("Running preprocessing...")
 
-    try:
-        if is_preprocessed(input_dir):
-            logger.info(f"Input directory is already preprocessed: {input_dir}")
-            working_dir = input_dir
-        else:
-            logger.info(f"Input directory is raw export: {input_dir}")
-            logger.info("Running preprocessing...")
-
-            # Create temp directory for preprocessing
-            temp_base = Path(temp_dir).resolve()
-            temp_base.mkdir(parents=True, exist_ok=True)
-
-            # Create unique temp subdirectory
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            unique_id = str(uuid.uuid4())[:8]
-            temp_dir_created = temp_base / f"temp_{timestamp}_{unique_id}"
-            temp_dir_created.mkdir(parents=True, exist_ok=True)
-
-            logger.info(f"Preprocessing to: {temp_dir_created}")
+        # Use context manager for temp directory with automatic cleanup
+        with temp_processing_directory(temp_dir, "gphotos") as temp_dir_path:
+            logger.info(f"Preprocessing to: {temp_dir_path}")
 
             # Run preprocessing with final output directory for failure tracking
-            # output_dir is already the processor-specific path
             final_output_path = Path(output_dir)
             preprocessor = GooglePhotosPreprocessor(
                 export_path=Path(input_dir),
-                output_dir=temp_dir_created,
+                output_dir=temp_dir_path,
                 workers=workers,
                 final_output_dir=final_output_path,
             )
             preprocessor.process()
 
-            working_dir = str(temp_dir_created)
-            logger.info(f"Preprocessing complete. Using: {working_dir}")
+            logger.info(f"Preprocessing complete. Using: {temp_dir_path}")
+            _process_working_directory(str(temp_dir_path), output_dir, workers)
 
-        # Configuration
-        metadata_file = os.path.join(working_dir, "metadata.json")
-        media_dir = os.path.join(working_dir, "media")
 
-        # Check for metadata file (should exist after preprocessing or if already preprocessed)
-        if not os.path.exists(metadata_file):
-            logger.error(f"Metadata file not found: {metadata_file}")
-            return
+def _process_working_directory(working_dir, output_dir, workers):
+    """Process a working directory (preprocessed export)
 
-        # Check for media directory
-        if not os.path.exists(media_dir):
-            logger.error(f"Media directory not found: {media_dir}")
-            return
+    Args:
+        working_dir: Path to preprocessed directory with metadata.json and media/
+        output_dir: Output directory for processed files
+        workers: Number of parallel workers
+    """
+    # Configuration
+    metadata_file = os.path.join(working_dir, "metadata.json")
+    media_dir = os.path.join(working_dir, "media")
 
-        # Load metadata
-        logger.info(f"Loading metadata from {metadata_file}...")
-        with open(metadata_file, "r", encoding="utf-8") as f:
-            metadata_json = json.load(f)
+    # Check for metadata file (should exist after preprocessing or if already preprocessed)
+    if not os.path.exists(metadata_file):
+        logger.error(f"Metadata file not found: {metadata_file}")
+        return
 
-        export_info = metadata_json.get("export_info", {})
-        media_files = metadata_json.get("media_files", [])
+    # Check for media directory
+    if not os.path.exists(media_dir):
+        logger.error(f"Media directory not found: {media_dir}")
+        return
 
-        # Count total media files
-        total_media_files = len(media_files)
+    # Load metadata
+    logger.info(f"Loading metadata from {metadata_file}...")
+    with open(metadata_file, "r", encoding="utf-8") as f:
+        metadata_json = json.load(f)
 
-        print(f"Found {total_media_files} media files to process")
-        logger.info(f"Found {total_media_files} media files to process")
+    export_info = metadata_json.get("export_info", {})
+    media_files = metadata_json.get("media_files", [])
 
-        # Extract export username from export_name
-        # Pattern: "google-{username}-{date}" (date can be YYYYMMDD or YYYY-MM-DD)
-        export_name = export_info.get("export_name", "")
-        from common.utils import extract_username_from_export_dir
-        export_username = extract_username_from_export_dir(export_name, "google")
+    # Count total media files
+    total_media_files = len(media_files)
 
-        logger.info(f"Export username: {export_username}")
+    print(f"Found {total_media_files} media files to process")
+    logger.info(f"Found {total_media_files} media files to process")
 
-        # Create output directory
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+    # Extract export username from export_name
+    # Pattern: "google-{username}-{date}" (date can be YYYYMMDD or YYYY-MM-DD)
+    export_name = export_info.get("export_name", "")
+    export_username = extract_username_from_export_dir(export_name, "google")
 
-        # Determine number of workers
-        from common.utils import default_worker_count
+    logger.info(f"Export username: {export_username}")
 
-        num_workers = workers if workers is not None else default_worker_count()
-        logger.debug(f"Using {num_workers} parallel workers")
+    # Create output directory
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-        # Pre-generate all output filenames to avoid race conditions
-        logger.debug("Pre-generating filenames...")
+    # Determine number of workers
+    num_workers = workers if workers is not None else default_worker_count()
+    logger.debug(f"Using {num_workers} parallel workers")
 
-        # First pass: Analyze all files to determine duplicates and group live photos
-        # Map: base_filename -> list of (media_data, file_ext)
-        base_filename_map = {}
-        # Map: live_photo_group_key -> list of (media_data, file_ext, base_filename)
-        live_photo_groups = {}
+    # Pre-generate all output filenames to avoid race conditions
+    logger.debug("Pre-generating filenames...")
 
-        for media_data in media_files:
-            media_file = media_data.get("filename")
+    # First pass: Analyze all files to determine duplicates and group live photos
+    # Map: base_filename -> list of (media_data, file_ext)
+    base_filename_map = {}
+    # Map: live_photo_group_key -> list of (media_data, file_ext, base_filename)
+    live_photo_groups = {}
 
-            if not media_file:
-                logger.warning("Skipping media file without filename")
-                continue
+    for media_data in media_files:
+        media_file = media_data.get("filename")
 
-            # Get file extension
-            file_ext = os.path.splitext(media_file)[1].lower()
+        if not media_file:
+            logger.warning("Skipping media file without filename")
+            continue
 
-            # Generate base filename
-            base_filename = generate_base_filename(media_data, export_username)
+        # Get file extension
+        file_ext = os.path.splitext(media_file)[1].lower()
 
-            # Track all files with this base filename
-            if base_filename not in base_filename_map:
-                base_filename_map[base_filename] = []
-            base_filename_map[base_filename].append((media_data, file_ext))
+        # Generate base filename
+        base_filename = generate_base_filename(media_data, export_username)
 
-            # Group live photos together
-            live_photo_key = get_live_photo_group_key(media_data)
-            if live_photo_key not in live_photo_groups:
-                live_photo_groups[live_photo_key] = []
-            live_photo_groups[live_photo_key].append((media_data, file_ext, base_filename))
+        # Track all files with this base filename
+        if base_filename not in base_filename_map:
+            base_filename_map[base_filename] = []
+        base_filename_map[base_filename].append((media_data, file_ext))
 
-        # Second pass: Generate filenames with sequences only where needed
-        # Map: base_filename -> current sequence number for that base
-        sequence_counters = {}
-        # Track which live photo groups have been assigned sequences
-        live_photo_sequences = {}
+        # Group live photos together
+        live_photo_key = get_live_photo_group_key(media_data)
+        if live_photo_key not in live_photo_groups:
+            live_photo_groups[live_photo_key] = []
+        live_photo_groups[live_photo_key].append((media_data, file_ext, base_filename))
 
-        processing_tasks = []
+    # Second pass: Generate filenames with sequences only where needed
+    # Map: base_filename -> current sequence number for that base
+    sequence_counters = {}
+    # Track which live photo groups have been assigned sequences
+    live_photo_sequences = {}
 
-        for media_data in media_files:
-            media_file = media_data.get("filename")
+    processing_tasks = []
 
-            if not media_file:
-                continue
+    for media_data in media_files:
+        media_file = media_data.get("filename")
 
-            # Get file extension
-            file_ext = os.path.splitext(media_file)[1].lower()
+        if not media_file:
+            continue
 
-            # Generate base filename
-            base_filename = generate_base_filename(media_data, export_username)
+        # Get file extension
+        file_ext = os.path.splitext(media_file)[1].lower()
 
-            # Check if this file is part of a live photo group
-            live_photo_key = get_live_photo_group_key(media_data)
+        # Generate base filename
+        base_filename = generate_base_filename(media_data, export_username)
 
-            # Determine if we need a sequence number
-            files_with_same_base = base_filename_map[base_filename]
-            needs_sequence = len(files_with_same_base) > 1
+        # Check if this file is part of a live photo group
+        live_photo_key = get_live_photo_group_key(media_data)
 
-            # For live photos, all files in the group should get the same sequence
-            if live_photo_key in live_photo_sequences:
-                # This live photo group already has a sequence assigned
-                sequence = live_photo_sequences[live_photo_key]
-            elif needs_sequence:
-                # Initialize or increment sequence for this base filename
-                if base_filename not in sequence_counters:
-                    sequence_counters[base_filename] = 0
-                sequence_counters[base_filename] += 1
-                sequence = sequence_counters[base_filename]
+        # Determine if we need a sequence number
+        files_with_same_base = base_filename_map[base_filename]
+        needs_sequence = len(files_with_same_base) > 1
 
-                # If this is a live photo, record the sequence for all files in the group
-                live_photo_group = live_photo_groups[live_photo_key]
-                if len(live_photo_group) > 1:
-                    live_photo_sequences[live_photo_key] = sequence
-            else:
-                sequence = None
+        # For live photos, all files in the group should get the same sequence
+        if live_photo_key in live_photo_sequences:
+            # This live photo group already has a sequence assigned
+            sequence = live_photo_sequences[live_photo_key]
+        elif needs_sequence:
+            # Initialize or increment sequence for this base filename
+            if base_filename not in sequence_counters:
+                sequence_counters[base_filename] = 0
+            sequence_counters[base_filename] += 1
+            sequence = sequence_counters[base_filename]
 
-            # Generate final filename
-            if sequence is not None:
-                output_filename = f"{base_filename}_{sequence}{file_ext}"
-            else:
-                output_filename = f"{base_filename}{file_ext}"
+            # If this is a live photo, record the sequence for all files in the group
+            live_photo_group = live_photo_groups[live_photo_key]
+            if len(live_photo_group) > 1:
+                live_photo_sequences[live_photo_key] = sequence
+        else:
+            sequence = None
 
-            # Get primary album name for metadata (use first album in list)
-            albums_list = media_data.get("albums", [])
-            album_name = albums_list[0] if albums_list else "unknown"
+        # Generate final filename
+        if sequence is not None:
+            output_filename = f"{base_filename}_{sequence}{file_ext}"
+        else:
+            output_filename = f"{base_filename}{file_ext}"
 
-            # Create task tuple for worker
-            processing_tasks.append(
-                (
-                    media_file,
-                    media_data,
-                    album_name,
-                    output_filename,
-                    media_dir,
-                    output_dir,
-                    export_username,
-                )
+        # Get primary album name for metadata (use first album in list)
+        albums_list = media_data.get("albums", [])
+        album_name = albums_list[0] if albums_list else "unknown"
+
+        # Create task tuple for worker
+        processing_tasks.append(
+            (
+                media_file,
+                media_data,
+                album_name,
+                output_filename,
+                media_dir,
+                output_dir,
+                export_username,
             )
+        )
 
-        # Process media files in parallel
-        print(f"\nProcessing media files to {output_dir}/")
-        logger.info("=" * 50)
+    # Process media files in parallel
+    print(f"\nProcessing media files to {output_dir}/")
+    logger.info("=" * 50)
 
-        success_count = 0
-        failed_count = 0
-        exif_rebuilt_count = 0
+    # Use shared batch processing utility
+    results = process_batches_parallel(
+        tasks=processing_tasks,
+        worker_fn=process_media_batch,
+        num_workers=num_workers,
+        batch_size=100,
+        description="Creating files",
+    )
 
-        # Group tasks into batches of 100 files each
-        batch_size = 100
-        batched_tasks = []
-        for i in range(0, len(processing_tasks), batch_size):
-            batched_tasks.append(processing_tasks[i:i + batch_size])
+    # Aggregate results
+    success_count = 0
+    failed_count = 0
+    exif_rebuilt_count = 0
 
-        # Process batches in parallel
-        with multiprocessing.Pool(processes=num_workers) as pool:
-            batch_results = list(
-                progress_bar(
-                    pool.imap(process_media_batch, batched_tasks),
-                    PHASE_PROCESS,
-                    "Creating files",
-                    total=len(batched_tasks),
-                )
-            )
+    for success, failed, exif_rebuilt in results:
+        if success:
+            success_count += 1
+        if failed:
+            failed_count += 1
+        if exif_rebuilt:
+            exif_rebuilt_count += 1
 
-        # Flatten results
-        results = []
-        for batch_result in batch_results:
-            results.extend(batch_result)
-
-        # Aggregate results
-        for success, failed, exif_rebuilt in results:
-            if success:
-                success_count += 1
-            if failed:
-                failed_count += 1
-            if exif_rebuilt:
-                exif_rebuilt_count += 1
-
-        # Summary
-        print("\n" + "=" * 50)
-        print("Processing complete!")
-        print(f"  Successfully processed: {success_count}")
-        print(f"  Failed: {failed_count}")
-        print(f"  EXIF structures rebuilt: {exif_rebuilt_count}")
-        print(f"  Total: {len(processing_tasks)}")
-        print(f"\nFinal files saved to: {os.path.abspath(output_dir)}")
-
-    finally:
-        # Clean up temp directory if it was created
-        if temp_dir_created and temp_dir_created.exists():
-            from common.utils import should_cleanup_temp
-            if should_cleanup_temp():
-                logger.debug(f"Cleaning up temporary directory: {temp_dir_created}")
-                shutil.rmtree(temp_dir_created)
-            else:
-                logger.info(f"Temp cleanup disabled. Temporary directory preserved at: {temp_dir_created}")
+    # Print summary using shared utility
+    print_processing_summary(
+        success=success_count,
+        failed=failed_count,
+        total=len(processing_tasks),
+        output_dir=output_dir,
+        extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
+    )

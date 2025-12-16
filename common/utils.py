@@ -383,3 +383,101 @@ def should_cleanup_temp() -> bool:
         True
     """
     return not parse_bool_env(os.getenv("DISABLE_TEMP_CLEANUP", ""))
+
+
+# ============================================================================
+# Directory and File Utilities
+# ============================================================================
+
+
+def is_preprocessed_directory(input_dir: str) -> bool:
+    """Check if directory has been preprocessed.
+
+    A preprocessed directory contains:
+    - metadata.json: Consolidated metadata from the preprocessing step
+    - media/: Directory containing copied/organized media files
+
+    This is used by processors to determine whether to run preprocessing
+    or use an already-preprocessed directory.
+
+    Args:
+        input_dir: Path to the directory to check
+
+    Returns:
+        True if directory contains metadata.json and media/, False otherwise
+
+    Example:
+        >>> is_preprocessed_directory("/path/to/raw_export")
+        False
+        >>> is_preprocessed_directory("/path/to/preprocessed_export")
+        True
+    """
+    input_path = Path(input_dir)
+    metadata_file = input_path / "metadata.json"
+    media_dir = input_path / "media"
+
+    return metadata_file.exists() and media_dir.exists()
+
+
+def update_file_timestamps(
+    file_path,
+    timestamp_str: str,
+    timestamp_format: str = "%Y-%m-%d %H:%M:%S",
+) -> bool:
+    """Update filesystem access and modification timestamps to match content date.
+
+    Sets both the access time and modification time of a file to match
+    a timestamp extracted from the file's metadata (e.g., capture date).
+
+    Args:
+        file_path: Path to the file (string or Path object)
+        timestamp_str: Timestamp string to parse (e.g., "2024-01-15 10:30:00")
+        timestamp_format: strptime format string for parsing timestamp_str
+                         Common formats:
+                         - "%Y-%m-%d %H:%M:%S" (default)
+                         - "%Y-%m-%d %H:%M:%S UTC" (with UTC suffix)
+                         - "%Y-%m-%dT%H:%M:%SZ" (ISO 8601)
+
+    Returns:
+        True if timestamps were updated successfully, False otherwise
+
+    Example:
+        >>> update_file_timestamps(
+        ...     "/path/to/photo.jpg",
+        ...     "2024-01-15 10:30:00",
+        ...     "%Y-%m-%d %H:%M:%S"
+        ... )
+        True
+    """
+    from datetime import datetime
+
+    logger = logging.getLogger(__name__)
+
+    try:
+        # Handle None or empty timestamp
+        if not timestamp_str:
+            return False
+
+        # Handle common timestamp suffixes
+        clean_timestamp = timestamp_str
+        if clean_timestamp.endswith(" UTC"):
+            clean_timestamp = clean_timestamp[:-4]
+        if clean_timestamp.endswith("Z"):
+            clean_timestamp = clean_timestamp[:-1]
+            # Adjust format if it was ISO 8601
+            if "T" in clean_timestamp and timestamp_format == "%Y-%m-%d %H:%M:%S":
+                timestamp_format = "%Y-%m-%dT%H:%M:%S"
+
+        # Parse the timestamp
+        date_obj = datetime.strptime(clean_timestamp, timestamp_format)
+
+        # Convert to Unix timestamp
+        timestamp = date_obj.timestamp()
+
+        # Update both access time and modification time
+        os.utime(file_path, (timestamp, timestamp))
+        return True
+
+    except (ValueError, TypeError, OSError) as e:
+        logger.warning(f"Failed to update timestamps for {file_path}: {e}")
+        return False

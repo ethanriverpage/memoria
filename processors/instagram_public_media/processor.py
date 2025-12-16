@@ -10,23 +10,28 @@ import multiprocessing
 import os
 import re
 import shutil
-import subprocess
-import sys
-import uuid
 from datetime import datetime
 from pathlib import Path
 
-from common.progress import PHASE_PROCESS, progress_bar
-from processors.instagram_public_media.preprocess import InstagramPreprocessor
-from processors.base import ProcessorBase
 from common.dependency_checker import check_exiftool, print_exiftool_error
-from common.utils import extract_username_from_export_dir, should_cleanup_temp
 from common.exiftool_batch import (
     batch_validate_exif,
     batch_rebuild_exif,
     batch_read_existing_metadata,
     batch_write_metadata_instagram_public,
 )
+from common.processing import (
+    print_processing_summary,
+    temp_processing_directory,
+)
+from common.progress import PHASE_PROCESS, progress_bar
+from common.utils import (
+    extract_username_from_export_dir,
+    is_preprocessed_directory,
+    update_file_timestamps,
+)
+from processors.base import ProcessorBase
+from processors.instagram_public_media.preprocess import InstagramPreprocessor
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -220,38 +225,6 @@ def generate_unique_filename(
         sequence += 1
 
 
-def update_filesystem_timestamps(file_path, post_data):
-    """Update filesystem creation and modification timestamps to match post date
-
-    Args:
-        file_path: Path to the file
-        post_data: Dict containing post metadata with 'timestamp' field
-
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    try:
-        # Parse date from post_data
-        # Format: "2025-08-17 11:23:00"
-        date_str = post_data["timestamp"]
-
-        # Skip if no timestamp
-        if date_str is None:
-            return False
-
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
-
-        # Convert to Unix timestamp
-        timestamp = date_obj.timestamp()
-
-        # Update both access time and modification time
-        os.utime(file_path, (timestamp, timestamp))
-        return True
-    except Exception as e:
-        logger.warning(f"Failed to update timestamps for {file_path}: {e}")
-        return False
-
-
 def process_media_batch(batch_args):
     """Process a batch of media files (worker function for multiprocessing)
     
@@ -307,7 +280,7 @@ def process_media_batch(batch_args):
     # Phase 4: Update timestamps and compile results
     results = []
     for output_path, post_data, _, _ in file_info:
-        update_filesystem_timestamps(output_path, post_data)
+        update_file_timestamps(output_path, post_data.get("timestamp"))
         exif_rebuilt = output_path in corrupted_files
         results.append((True, False, exif_rebuilt))
     
@@ -316,22 +289,6 @@ def process_media_batch(batch_args):
         results.append((False, True, False))
     
     return results
-
-
-def is_preprocessed(input_dir):
-    """Check if input directory is already preprocessed
-
-    Args:
-        input_dir: Path to input directory
-
-    Returns:
-        bool: True if already preprocessed, False if raw export
-    """
-    input_path = Path(input_dir)
-    metadata_file = input_path / "metadata.json"
-    media_dir = input_path / "media"
-
-    return metadata_file.exists() and media_dir.exists()
 
 
 def process_logic(
@@ -357,181 +314,169 @@ def process_logic(
     logger.info("Instagram Media Processor")
     logger.info("=" * 50)
 
-    # Determine if input needs preprocessing
-    temp_dir_created = None
+    # Check if input is already preprocessed
+    if is_preprocessed_directory(input_dir):
+        logger.info(f"Input directory is already preprocessed: {input_dir}")
+        _process_working_directory(input_dir, output_dir, workers)
+    else:
+        logger.info(f"Input directory is raw export: {input_dir}")
+        logger.info("Running preprocessing...")
 
-    try:
-        if is_preprocessed(input_dir):
-            logger.info(f"Input directory is already preprocessed: {input_dir}")
-            working_dir = input_dir
-        else:
-            logger.info(f"Input directory is raw export: {input_dir}")
-            logger.info("Running preprocessing...")
-
-            # Create temp directory for preprocessing
-            temp_base = Path(temp_dir).resolve()
-            temp_base.mkdir(parents=True, exist_ok=True)
-
-            # Create unique temp subdirectory
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            unique_id = str(uuid.uuid4())[:8]
-            temp_dir_created = temp_base / f"temp_{timestamp}_{unique_id}"
-            temp_dir_created.mkdir(parents=True, exist_ok=True)
-
-            logger.info(f"Preprocessing to: {temp_dir_created}")
+        # Use context manager for temp directory with automatic cleanup
+        with temp_processing_directory(temp_dir, "instagram") as temp_dir_path:
+            logger.info(f"Preprocessing to: {temp_dir_path}")
 
             # Run preprocessing with final output directory for failure tracking
-            # output_dir is already the processor-specific path
             final_output_path = Path(output_dir)
             preprocessor = InstagramPreprocessor(
                 export_path=Path(input_dir),
-                output_dir=temp_dir_created,
+                output_dir=temp_dir_path,
                 workers=workers,
                 final_output_dir=final_output_path,
             )
             preprocessor.process()
 
-            working_dir = str(temp_dir_created)
-            logger.info(f"Preprocessing complete. Using: {working_dir}")
+            logger.info(f"Preprocessing complete. Using: {temp_dir_path}")
+            _process_working_directory(str(temp_dir_path), output_dir, workers)
 
-        # Configuration
-        metadata_file = os.path.join(working_dir, "metadata.json")
-        media_dir = os.path.join(working_dir, "media")
 
-        # Check for metadata file (should exist after preprocessing or if already preprocessed)
-        if not os.path.exists(metadata_file):
-            logger.error(f"Metadata file not found: {metadata_file}")
-            return
+def _process_working_directory(working_dir, output_dir, workers):
+    """Process a working directory (preprocessed export)
 
-        # Check for media directory
-        if not os.path.exists(media_dir):
-            logger.error(f"Media directory not found: {media_dir}")
-            return
+    Args:
+        working_dir: Path to preprocessed directory with metadata.json and media/
+        output_dir: Output directory for processed files
+        workers: Number of parallel workers
+    """
+    # Configuration
+    metadata_file = os.path.join(working_dir, "metadata.json")
+    media_dir = os.path.join(working_dir, "media")
 
-        # Load metadata
-        logger.info(f"Loading metadata from {metadata_file}...")
-        with open(metadata_file, "r", encoding="utf-8") as f:
-            metadata_json = json.load(f)
+    # Check for metadata file (should exist after preprocessing or if already preprocessed)
+    if not os.path.exists(metadata_file):
+        logger.error(f"Metadata file not found: {metadata_file}")
+        return
 
-        export_info = metadata_json.get("export_info", {})
-        media_posts = metadata_json.get("media", [])
+    # Check for media directory
+    if not os.path.exists(media_dir):
+        logger.error(f"Media directory not found: {media_dir}")
+        return
 
-        logger.info(f"Found {len(media_posts)} posts to process")
+    # Load metadata
+    logger.info(f"Loading metadata from {metadata_file}...")
+    with open(metadata_file, "r", encoding="utf-8") as f:
+        metadata_json = json.load(f)
 
-        # Extract export username from export_info
-        export_name = export_info.get("export_name", "")
-        if export_name:
-            export_username = extract_username_from_export_dir(export_name, "instagram")
-        else:
-            export_username = "unknown"
+    export_info = metadata_json.get("export_info", {})
+    media_posts = metadata_json.get("media", [])
 
-        logger.info(f"Export username: {export_username}")
+    logger.info(f"Found {len(media_posts)} posts to process")
 
-        # Create output directory
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+    # Extract export username from export_info
+    export_name = export_info.get("export_name", "")
+    if export_name:
+        export_username = extract_username_from_export_dir(export_name, "instagram")
+    else:
+        export_username = "unknown"
 
-        # Determine number of workers
-        from common.utils import default_worker_count
+    logger.info(f"Export username: {export_username}")
 
-        num_workers = workers if workers is not None else default_worker_count()
-        logger.debug(f"Using {num_workers} parallel workers")
+    # Create output directory
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-        # Pre-generate all output filenames to avoid race conditions
-        logger.debug("Pre-generating filenames...")
-        used_filenames = set()
-        processing_tasks = []
-        media_types_set = set()
+    # Determine number of workers
+    from common.utils import default_worker_count
 
-        for post in media_posts:
-            media_type = post.get("media_type", "unknown")
-            media_files = post.get("media_files", [])
-            media_types_set.add(media_type)
+    num_workers = workers if workers is not None else default_worker_count()
+    logger.debug(f"Using {num_workers} parallel workers")
 
-            for media_file in media_files:
-                # Get file extension
-                file_ext = os.path.splitext(media_file)[1].lower()
+    # Pre-generate all output filenames to avoid race conditions
+    logger.debug("Pre-generating filenames...")
+    used_filenames = set()
+    processing_tasks = []
+    media_types_set = set()
 
-                # Generate output filename
-                output_filename = generate_unique_filename(
-                    post, media_type, export_username, file_ext, used_filenames
-                )
+    for post in media_posts:
+        media_type = post.get("media_type", "unknown")
+        media_files = post.get("media_files", [])
+        media_types_set.add(media_type)
 
-                # Create task tuple for worker
-                processing_tasks.append(
-                    (
-                        media_file,
-                        post,
-                        output_filename,
-                        media_dir,
-                        output_dir,
-                        export_username,
-                        media_type,
-                    )
-                )
+        for media_file in media_files:
+            # Get file extension
+            file_ext = os.path.splitext(media_file)[1].lower()
 
-        # Create subdirectories for each media type
-        logger.debug(f"Creating subdirectories for {len(media_types_set)} media types...")
-        for media_type in media_types_set:
-            media_type_dir = os.path.join(output_dir, media_type)
-            Path(media_type_dir).mkdir(parents=True, exist_ok=True)
-            logger.debug(f"Created directory: {media_type_dir}")
+            # Generate output filename
+            output_filename = generate_unique_filename(
+                post, media_type, export_username, file_ext, used_filenames
+            )
 
-        # Process media files in parallel
-        print(f"\nProcessing media files to {output_dir}/")
-        logger.info("=" * 50)
-
-        success_count = 0
-        failed_count = 0
-        exif_rebuilt_count = 0
-
-        # Group tasks into batches of 100 files each
-        batch_size = 100
-        batched_tasks = []
-        for i in range(0, len(processing_tasks), batch_size):
-            batched_tasks.append(processing_tasks[i:i + batch_size])
-
-        # Process batches in parallel
-        with multiprocessing.Pool(processes=num_workers) as pool:
-            batch_results = list(
-                progress_bar(
-                    pool.imap(process_media_batch, batched_tasks),
-                    PHASE_PROCESS,
-                    "Creating files",
-                    total=len(batched_tasks),
+            # Create task tuple for worker
+            processing_tasks.append(
+                (
+                    media_file,
+                    post,
+                    output_filename,
+                    media_dir,
+                    output_dir,
+                    export_username,
+                    media_type,
                 )
             )
 
-        # Flatten results
-        results = []
-        for batch_result in batch_results:
-            results.extend(batch_result)
+    # Create subdirectories for each media type
+    logger.debug(f"Creating subdirectories for {len(media_types_set)} media types...")
+    for media_type in media_types_set:
+        media_type_dir = os.path.join(output_dir, media_type)
+        Path(media_type_dir).mkdir(parents=True, exist_ok=True)
+        logger.debug(f"Created directory: {media_type_dir}")
 
-        # Aggregate results
-        for success, failed, exif_rebuilt in results:
-            if success:
-                success_count += 1
-            if failed:
-                failed_count += 1
-            if exif_rebuilt:
-                exif_rebuilt_count += 1
+    # Process media files in parallel
+    print(f"\nProcessing media files to {output_dir}/")
+    logger.info("=" * 50)
 
-        # Summary
-        print("\n" + "=" * 50)
-        print("Processing complete!")
-        print(f"  Successfully processed: {success_count}")
-        print(f"  Failed: {failed_count}")
-        print(f"  EXIF structures rebuilt: {exif_rebuilt_count}")
-        print(f"  Total: {len(processing_tasks)}")
-        print(f"\nFinal files saved to: {os.path.abspath(output_dir)}")
-        print(f"Files organized into {len(media_types_set)} media type subfolders:")
-        for media_type in sorted(media_types_set):
-            print(f"  - {media_type}/")
+    success_count = 0
+    failed_count = 0
+    exif_rebuilt_count = 0
 
-    finally:
-        # Clean up temp directory if it was created
-        if temp_dir_created and temp_dir_created.exists():
-            if should_cleanup_temp():
-                logger.debug(f"Cleaning up temporary directory: {temp_dir_created}")
-                shutil.rmtree(temp_dir_created)
-            else:
-                logger.info(f"Temp cleanup disabled. Temporary directory preserved at: {temp_dir_created}")
+    # Group tasks into batches of 100 files each
+    batch_size = 100
+    batched_tasks = []
+    for i in range(0, len(processing_tasks), batch_size):
+        batched_tasks.append(processing_tasks[i : i + batch_size])
+
+    # Process batches in parallel
+    with multiprocessing.Pool(processes=num_workers) as pool:
+        batch_results = list(
+            progress_bar(
+                pool.imap(process_media_batch, batched_tasks),
+                PHASE_PROCESS,
+                "Creating files",
+                total=len(batched_tasks),
+            )
+        )
+
+    # Flatten results
+    results = []
+    for batch_result in batch_results:
+        results.extend(batch_result)
+
+    # Aggregate results
+    for success, failed, exif_rebuilt in results:
+        if success:
+            success_count += 1
+        if failed:
+            failed_count += 1
+        if exif_rebuilt:
+            exif_rebuilt_count += 1
+
+    # Print summary using shared utility
+    print_processing_summary(
+        success=success_count,
+        failed=failed_count,
+        total=len(processing_tasks),
+        output_dir=output_dir,
+        extra_stats={
+            "EXIF structures rebuilt": exif_rebuilt_count,
+            "Media type subfolders": len(media_types_set),
+        },
+    )

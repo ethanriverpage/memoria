@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime
 from multiprocessing import Pool
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.exiftool_batch import (
@@ -29,7 +29,7 @@ from common.exiftool_batch import (
     batch_write_metadata_imessage,
 )
 from common.progress import PHASE_PROCESS, progress_bar
-from common.utils import default_worker_count, sanitize_filename
+from common.utils import default_worker_count, sanitize_filename, update_file_timestamps
 from processors.base import ProcessorBase
 from processors.imessage_imazing.preprocess import ImazingPreprocessor
 
@@ -335,38 +335,21 @@ def generate_imessage_filename(
         sequence += 1
 
 
-def update_filesystem_timestamps(file_path: Path, message: dict) -> bool:
-    """Update filesystem timestamps to match message date.
+def _extract_message_timestamp(message: dict) -> str | None:
+    """Extract timestamp string from iMazing message metadata.
 
     Args:
-        file_path: Path to the file
         message: Message metadata with 'created' or 'primary_created' field
 
     Returns:
-        True if successful, False otherwise
+        Timestamp string or None if not found
     """
-    try:
-        # Get date string
-        if "primary_created" in message:
-            date_str = message["primary_created"]
-        elif "messages" in message and message["messages"]:
-            date_str = message["messages"][0].get("created")
-        else:
-            date_str = message.get("created")
-
-        if not date_str:
-            return False
-
-        # Parse date
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S UTC")
-        timestamp = date_obj.timestamp()
-
-        # Update timestamps
-        os.utime(file_path, (timestamp, timestamp))
-        return True
-    except Exception as e:
-        logger.warning(f"Failed to update timestamps for {file_path}: {e}")
-        return False
+    if "primary_created" in message:
+        return message["primary_created"]
+    elif "messages" in message and message["messages"]:
+        return message["messages"][0].get("created")
+    else:
+        return message.get("created")
 
 
 def _process_file_worker(args_tuple):
@@ -387,7 +370,8 @@ def _process_file_worker(args_tuple):
         shutil.copy2(media_path, output_path)
 
         # Update timestamps
-        update_filesystem_timestamps(output_path, message)
+        timestamp_str = _extract_message_timestamp(message)
+        update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S UTC")
 
         return (True, str(output_path), message, export_username)
 

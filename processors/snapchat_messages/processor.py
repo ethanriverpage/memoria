@@ -9,37 +9,38 @@ import logging
 import os
 import re
 import shutil
-import subprocess
-import sys
-import uuid
 from datetime import datetime
 from multiprocessing import Pool
 from pathlib import Path
 from typing import Optional
 
-from common.progress import PHASE_PROCESS, progress_bar
-
-# Import overlay embedding functions
-from common.overlay import (
-    create_image_with_overlay,
-    create_video_with_overlay,
-)
-
-from processors.snapchat_messages.preprocess import SnapchatPreprocessor
-from processors.base import ProcessorBase
 from common.dependency_checker import (
     check_exiftool,
     check_ffmpeg,
     print_exiftool_error,
     print_ffmpeg_error,
 )
-from common.utils import get_media_type, should_cleanup_temp, sanitize_filename
 from common.exiftool_batch import (
     batch_validate_exif,
     batch_rebuild_exif,
     batch_read_existing_metadata,
     batch_write_metadata_snapchat_messages,
 )
+from common.overlay import (
+    create_image_with_overlay,
+    create_video_with_overlay,
+)
+from common.processing import print_processing_summary, temp_processing_directory
+from common.progress import PHASE_PROCESS, progress_bar
+from common.utils import (
+    default_worker_count,
+    get_media_type,
+    is_preprocessed_directory,
+    sanitize_filename,
+    update_file_timestamps,
+)
+from processors.base import ProcessorBase
+from processors.snapchat_messages.preprocess import SnapchatPreprocessor
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -193,11 +194,11 @@ class SnapchatMessagesProcessor(ProcessorBase):
             else:
                 actual_input_dir = input_dir
 
-            # Use output directory directly
+            # Create messages subdirectory under output
             if output_dir:
-                processor_output = str(output_dir)
+                processor_output = str(Path(output_dir) / "messages")
             else:
-                processor_output = kwargs.get("output", "final_snapmsgs")
+                processor_output = kwargs.get("output", "final_snapmsgs/messages")
 
             # Call processing logic directly
             process_logic(
@@ -459,8 +460,13 @@ def generate_chat_filename(
         sequence += 1
 
 
-def update_filesystem_timestamps(file_path: Path, message: dict) -> bool:
+def _update_snapchat_timestamps(file_path: Path, message: dict) -> bool:
     """Update filesystem timestamps to match message date
+
+    Snapchat messages have complex timestamp handling with multiple formats:
+    - primary_created for merged messages
+    - created for single messages
+    - Formats: "YYYY-MM-DD HH:MM:SS UTC" or legacy "YYYY-MM-DD"
 
     Args:
         file_path: Path to the file
@@ -469,31 +475,25 @@ def update_filesystem_timestamps(file_path: Path, message: dict) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    try:
-        # Parse date from message - use primary_created for merged messages
-        if "primary_created" in message:
-            date_str = message["primary_created"]
-        else:
-            date_str = message.get("created")
+    # Parse date from message - use primary_created for merged messages
+    if "primary_created" in message:
+        date_str = message["primary_created"]
+    else:
+        date_str = message.get("created")
 
-        # All messages should have full timestamp format: YYYY-MM-DD HH:MM:SS UTC
-        # Fallback to date-only parsing for backwards compatibility with old metadata
-        if len(date_str) == 10 and date_str.count(":") == 0:
-            # Legacy date-only format: YYYY-MM-DD
-            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-        else:
-            # Standard timestamp format: YYYY-MM-DD HH:MM:SS UTC
-            date_obj = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S UTC")
-
-        # Convert to Unix timestamp
-        timestamp = date_obj.timestamp()
-
-        # Update both access time and modification time
-        os.utime(file_path, (timestamp, timestamp))
-        return True
-    except Exception as e:
-        logger.warning(f"Failed to update timestamps for {file_path}: {e}")
+    if not date_str:
         return False
+
+    # All messages should have full timestamp format: YYYY-MM-DD HH:MM:SS UTC
+    # Fallback to date-only parsing for backwards compatibility with old metadata
+    if len(date_str) == 10 and date_str.count(":") == 0:
+        # Legacy date-only format: YYYY-MM-DD
+        timestamp_format = "%Y-%m-%d"
+    else:
+        # Standard timestamp format: YYYY-MM-DD HH:MM:SS UTC
+        timestamp_format = "%Y-%m-%d %H:%M:%S"
+
+    return update_file_timestamps(file_path, date_str, timestamp_format)
 
 
 
@@ -602,7 +602,7 @@ def _create_file_worker(args_tuple):
                 )
 
                 if success:
-                    update_filesystem_timestamps(output_path, message)
+                    _update_snapchat_timestamps(output_path, message)
                     # MKV files already have metadata embedded
                     return (True, str(output_path), True, message, export_username)
                 else:
@@ -610,7 +610,7 @@ def _create_file_worker(args_tuple):
                     fallback_filename = output_filename.replace(".mkv", file_ext)
                     fallback_path = output_dir / fallback_filename
                     shutil.copy2(media_path, fallback_path)
-                    update_filesystem_timestamps(fallback_path, message)
+                    _update_snapchat_timestamps(fallback_path, message)
                     # Fallback file needs batch EXIF processing
                     return (True, str(fallback_path), False, message, export_username)
 
@@ -621,45 +621,29 @@ def _create_file_worker(args_tuple):
                 )
 
                 if success:
-                    update_filesystem_timestamps(output_path, message)
+                    _update_snapchat_timestamps(output_path, message)
                     # Image needs batch EXIF processing
                     return (True, str(output_path), False, message, export_username)
                 else:
                     # Fallback: copy original
                     shutil.copy2(media_path, output_path)
-                    update_filesystem_timestamps(output_path, message)
+                    _update_snapchat_timestamps(output_path, message)
                     return (True, str(output_path), False, message, export_username)
             else:
                 # Unknown file type with overlay - just copy
                 shutil.copy2(media_path, output_path)
-                update_filesystem_timestamps(output_path, message)
+                _update_snapchat_timestamps(output_path, message)
                 return (True, str(output_path), False, message, export_username)
         else:
             # No overlay - just copy
             shutil.copy2(media_path, output_path)
-            update_filesystem_timestamps(output_path, message)
+            _update_snapchat_timestamps(output_path, message)
             # File needs batch EXIF processing
             return (True, str(output_path), False, message, export_username)
 
     except Exception as e:
         logger.error(f"Error processing {media_path.name}: {e}")
         return (False, None, False, message, export_username)
-
-
-def is_preprocessed(input_dir):
-    """Check if input directory is already preprocessed
-
-    Args:
-        input_dir: Path to input directory
-
-    Returns:
-        bool: True if already preprocessed, False if raw export
-    """
-    input_path = Path(input_dir)
-    metadata_file = input_path / "metadata.json"
-    media_dir = input_path / "media"
-
-    return metadata_file.exists() and media_dir.exists()
 
 
 def process_logic(
@@ -712,298 +696,296 @@ def process_logic(
 
     # Determine if input needs preprocessing
     output_dir = Path(output_dir)
-    temp_dir_created = None
 
-    try:
-        if is_preprocessed(input_dir):
-            logger.info(f"Input directory is already preprocessed: {input_dir}")
-            working_dir = input_dir
-        else:
-            logger.info(f"Input directory is raw export: {input_dir}")
-            logger.info("Running preprocessing...")
+    # Check if input is already preprocessed
+    if is_preprocessed_directory(str(input_dir)):
+        logger.info(f"Input directory is already preprocessed: {input_dir}")
+        _process_snapchat_working_directory(
+            input_dir, output_dir, workers, log_filename
+        )
+    else:
+        logger.info(f"Input directory is raw export: {input_dir}")
+        logger.info("Running preprocessing...")
 
-            # Create temp directory for preprocessing
-            temp_base = Path(temp_dir).resolve()
-            temp_base.mkdir(parents=True, exist_ok=True)
-
-            # Create unique temp subdirectory
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            unique_id = str(uuid.uuid4())[:8]
-            temp_dir_created = temp_base / f"temp_{timestamp}_{unique_id}"
-            temp_dir_created.mkdir(parents=True, exist_ok=True)
-
-            logger.info(f"Preprocessing to: {temp_dir_created}")
+        # Use context manager for temp directory with automatic cleanup
+        with temp_processing_directory(temp_dir, "snap_msgs") as temp_dir_path:
+            logger.info(f"Preprocessing to: {temp_dir_path}")
 
             # Run preprocessing with final output directory for failure tracking
             # Use messages subdirectory for processor-specific output
-            final_output_path = Path(output_dir) / "messages"
-            
+            final_output_path = output_dir / "messages"
+
             preprocessor = SnapchatPreprocessor(
                 export_path=Path(input_dir),
-                output_dir=temp_dir_created,
+                output_dir=temp_dir_path,
                 workers=workers,
                 final_output_dir=final_output_path,
                 username_override=username_override,
             )
             preprocessor.process()
 
-            working_dir = temp_dir_created
-            logger.info(f"Preprocessing complete. Using: {working_dir}")
-
-        # Configuration
-        metadata_file = working_dir / "metadata.json"
-        media_dir = working_dir / "media"
-        overlays_dir = working_dir / "overlays"
-
-        # Check for metadata file (should exist after preprocessing or if already preprocessed)
-        if not metadata_file.exists():
-            logger.error(f"Metadata file not found: {metadata_file}")
-            return
-
-        # Check for media directory
-        if not media_dir.exists():
-            logger.error(f"Media directory not found: {media_dir}")
-            return
-
-        # Load metadata
-        logger.info(f"Loading metadata from {metadata_file}...")
-        metadata = load_metadata(metadata_file)
-
-        export_username = metadata.get("export_info", {}).get(
-            "export_username", "unknown"
-        )
-        logger.info(f"Export username: {export_username}")
-
-        # Build media index
-        logger.info("Building media index...")
-        media_index = build_media_index(metadata)
-        filename_index = build_filename_index(metadata)
-        logger.info(f"Found {len(media_index)} messages with media IDs")
-        logger.info(f"Found {len(filename_index)} orphaned media entries by filename")
-
-        # Scan media directory
-        logger.info(f"Scanning media directory: {media_dir}")
-        media_files = []
-        for ext in ["*.jpg", "*.jpeg", "*.png", "*.mp4", "*.mov", "*.webp"]:
-            media_files.extend(media_dir.glob(ext))
-
-        logger.info(f"Found {len(media_files)} media files")
-
-        # Create output directory with messages subdirectory
-        messages_output_dir = output_dir / "messages"
-        messages_output_dir.mkdir(exist_ok=True, parents=True)
-
-        # Match media files to messages
-        logger.info("\nMatching media files to messages...")
-        matched_files = []
-        unmatched_files = []
-
-        for media_file in media_files:
-            # Try to extract media_id from filename
-            media_id = extract_media_id_from_filename(media_file.name)
-
-            if media_id and media_id in media_index:
-                # Direct match by media_id
-                message = media_index[media_id]
-                matched_files.append((media_file, message))
-            elif media_file.name in filename_index:
-                # Match by filename (for orphaned media without media_id)
-                message = filename_index[media_file.name]
-                matched_files.append((media_file, message))
-            else:
-                # Could not match - add to unmatched
-                unmatched_files.append(media_file)
-
-        logger.info(f"Matched {len(matched_files)} files")
-        logger.info(f"Unmatched {len(unmatched_files)} files")
-
-        # Pre-generate all output filenames to ensure deterministic naming
-        logger.info("Pre-generating output filenames...")
-        used_filenames = set()
-        output_filenames = []  # List of output filenames in same order as matched_files
-
-        for media_file, message in matched_files:
-            is_video = get_media_type(media_file) == "video"
-            
-            # Get file extension for filename generation
-            file_ext = media_file.suffix.lower()
-
-            # Check if this file will get an overlay and become MKV
-            overlay_filename = message.get("overlay_file")
-            will_have_overlay = False
-            if overlay_filename:
-                potential_overlay = overlays_dir / overlay_filename
-                if potential_overlay.exists() and is_video:
-                    will_have_overlay = True
-
-            # Generate filename with appropriate extension
-            if will_have_overlay:
-                output_filename = generate_chat_filename(
-                    message, export_username, ".mkv", used_filenames
-                )
-            else:
-                output_filename = generate_chat_filename(
-                    message, export_username, file_ext, used_filenames
-                )
-
-            output_filenames.append(output_filename)
-
-        # Process matched files with parallel processing
-        logger.info(f"Processing {len(matched_files)} matched files to {messages_output_dir}/")
-        logger.info("=" * 50)
-
-        # Determine number of parallel workers
-        from common.utils import default_worker_count
-
-        num_workers = workers if workers is not None else default_worker_count()
-        logger.info(f"Using {num_workers} parallel workers")
-
-        # Prepare arguments for parallel processing
-        process_args = []
-        for idx, (media_file, message) in enumerate(matched_files):
-            output_filename = output_filenames[idx]
-            process_args.append(
-                (
-                    media_file,
-                    message,
-                    export_username,
-                    messages_output_dir,
-                    overlays_dir,
-                    output_filename,
-                )
+            logger.info(f"Preprocessing complete. Using: {temp_dir_path}")
+            _process_snapchat_working_directory(
+                temp_dir_path, output_dir, workers, log_filename
             )
 
-        # Process files in parallel
-        # Phase 1: Create all files with overlays in parallel
-        success_count = 0
-        failed_count = 0
 
-        if num_workers > 1:
-            with Pool(
-                processes=num_workers,
-                initializer=_init_worker_logging,
-                initargs=(log_filename,),
-            ) as pool:
-                results = list(
-                    progress_bar(
-                        pool.imap(_create_file_worker, process_args),
-                        PHASE_PROCESS,
-                        "Creating files",
-                        total=len(process_args),
-                    )
-                )
+def _process_snapchat_working_directory(working_dir, output_dir, workers, log_filename):
+    """Process a working directory (preprocessed Snapchat Messages export)
+
+    Args:
+        working_dir: Path to preprocessed directory with metadata.json and media/
+        output_dir: Output directory for processed files
+        workers: Number of parallel workers
+        log_filename: Log filename for worker processes
+    """
+    # Ensure working_dir is a Path
+    working_dir = Path(working_dir)
+
+    # Configuration
+    metadata_file = working_dir / "metadata.json"
+    media_dir = working_dir / "media"
+    overlays_dir = working_dir / "overlays"
+
+    # Check for metadata file (should exist after preprocessing or if already preprocessed)
+    if not metadata_file.exists():
+        logger.error(f"Metadata file not found: {metadata_file}")
+        return
+
+    # Check for media directory
+    if not media_dir.exists():
+        logger.error(f"Media directory not found: {media_dir}")
+        return
+
+    # Load metadata
+    logger.info(f"Loading metadata from {metadata_file}...")
+    metadata = load_metadata(metadata_file)
+
+    export_username = metadata.get("export_info", {}).get(
+        "export_username", "unknown"
+    )
+    logger.info(f"Export username: {export_username}")
+
+    # Build media index
+    logger.info("Building media index...")
+    media_index = build_media_index(metadata)
+    filename_index = build_filename_index(metadata)
+    logger.info(f"Found {len(media_index)} messages with media IDs")
+    logger.info(f"Found {len(filename_index)} orphaned media entries by filename")
+
+    # Scan media directory
+    logger.info(f"Scanning media directory: {media_dir}")
+    media_files = []
+    for ext in ["*.jpg", "*.jpeg", "*.png", "*.mp4", "*.mov", "*.webp"]:
+        media_files.extend(media_dir.glob(ext))
+
+    logger.info(f"Found {len(media_files)} media files")
+
+    # Create output directory (subdirectory already set by caller)
+    output_dir.mkdir(exist_ok=True, parents=True)
+
+    # Match media files to messages
+    logger.info("\nMatching media files to messages...")
+    matched_files = []
+    unmatched_files = []
+
+    for media_file in media_files:
+        # Try to extract media_id from filename
+        media_id = extract_media_id_from_filename(media_file.name)
+
+        if media_id and media_id in media_index:
+            # Direct match by media_id
+            message = media_index[media_id]
+            matched_files.append((media_file, message))
+        elif media_file.name in filename_index:
+            # Match by filename (for orphaned media without media_id)
+            message = filename_index[media_file.name]
+            matched_files.append((media_file, message))
         else:
-            # Single-threaded for debugging
-            results = []
-            for args_tuple in progress_bar(process_args, PHASE_PROCESS, "Creating files"):
-                results.append(_create_file_worker(args_tuple))
+            # Could not match - add to unmatched
+            unmatched_files.append(media_file)
 
-        # Phase 2: Collect non-MKV files for batch EXIF processing
-        file_paths = []
-        file_info = []
-        
-        for success, output_path, is_mkv, message, export_username in results:
-            if success and output_path:
-                success_count += 1
-                # Only add non-MKV files to batch processing list
-                # (MKV files already have metadata from overlay creation)
-                if not is_mkv:
-                    file_paths.append(output_path)
-                    file_info.append((output_path, message, export_username))
-            else:
-                failed_count += 1
-        
-        logger.info(f"\nCreated {success_count} files ({len(file_info)} need EXIF processing)")
-        
-        # Phase 3: Batch process EXIF operations on non-MKV files
-        exif_rebuilt_count = 0
-        if file_paths:
-            logger.info("Batch processing EXIF metadata...")
-            
-            # Batch validate and rebuild
-            corrupted_files = batch_validate_exif(file_paths)
-            if corrupted_files:
-                logger.info(f"Rebuilding {len(corrupted_files)} corrupted EXIF structures...")
-                batch_rebuild_exif(list(corrupted_files))
-                exif_rebuilt_count = len(corrupted_files)
-            
-            # Batch read and write metadata
-            existing_metadata_map = batch_read_existing_metadata(file_paths)
-            batch_write_metadata_snapchat_messages(file_info, existing_metadata_map)
+    logger.info(f"Matched {len(matched_files)} files")
+    logger.info(f"Unmatched {len(unmatched_files)} files")
 
-        # Handle unmatched files - copy to failed-matching directory
-        if unmatched_files:
-            logger.info(f"Processing {len(unmatched_files)} unmatched files...")
-            failed_matching_dir = messages_output_dir / "issues" / "failed-matching" / "media"
-            failed_matching_dir.mkdir(exist_ok=True, parents=True)
+    # Pre-generate all output filenames to ensure deterministic naming
+    logger.info("Pre-generating output filenames...")
+    used_filenames = set()
+    output_filenames = []  # List of output filenames in same order as matched_files
 
-            for media_file in unmatched_files:
-                try:
-                    # Copy to failed-matching directory with original filename
-                    shutil.copy2(media_file, failed_matching_dir / media_file.name)
-                except Exception as e:
-                    logger.error(f"Error copying unmatched file {media_file.name}: {e}")
+    for media_file, message in matched_files:
+        is_video = get_media_type(media_file) == "video"
 
-        # Summary
-        logger.info("\n" + "=" * 50)
-        logger.info("Processing complete!")
-        logger.info(f"  Successfully processed: {success_count}")
-        logger.info(f"  Failed: {failed_count}")
-        logger.info(f"  EXIF structures rebuilt: {exif_rebuilt_count}")
-        logger.info(f"  Unmatched: {len(unmatched_files)}")
-        logger.info(f"  Total: {len(media_files)}")
-        logger.info(f"Processed files saved to: {messages_output_dir.absolute()}")
+        # Get file extension for filename generation
+        file_ext = media_file.suffix.lower()
 
-        if unmatched_files:
-            logger.info(
-                f"Unmatched files saved to: {(messages_output_dir / 'issues' / 'failed-matching' / 'media').absolute()}"
+        # Check if this file will get an overlay and become MKV
+        overlay_filename = message.get("overlay_file")
+        will_have_overlay = False
+        if overlay_filename:
+            potential_overlay = overlays_dir / overlay_filename
+            if potential_overlay.exists() and is_video:
+                will_have_overlay = True
+
+        # Generate filename with appropriate extension
+        if will_have_overlay:
+            output_filename = generate_chat_filename(
+                message, export_username, ".mkv", used_filenames
+            )
+        else:
+            output_filename = generate_chat_filename(
+                message, export_username, file_ext, used_filenames
             )
 
-        logger.info("\nNote: Videos with overlays are saved as multi-track MKV files:")
-        logger.info("  • Track 0 (default): Video with overlay embedded")
-        logger.info("  • Track 1: Original video without overlay")
-        logger.info("  Switch tracks in VLC: Video > Video Track > Select track")
+        output_filenames.append(output_filename)
 
-        # Move any needs_matching folders from the preprocessing temp dir
-        # into the final processed output so they persist after cleanup.
-        try:
-            needs_matching_src = working_dir / "needs_matching"
-            if needs_matching_src.exists() and needs_matching_src.is_dir():
-                needs_matching_dest = messages_output_dir / "needs_matching"
-                needs_matching_dest.mkdir(parents=True, exist_ok=True)
+    # Process matched files with parallel processing
+    logger.info(f"Processing {len(matched_files)} matched files to {output_dir}/")
+    logger.info("=" * 50)
 
-                for child in needs_matching_src.iterdir():
-                    dest_path = needs_matching_dest / child.name
-                    try:
-                        # If destination exists, merge by moving contents where possible
-                        if dest_path.exists() and child.is_dir():
-                            # Move each item within the child directory
-                            for sub in child.iterdir():
-                                shutil.move(str(sub), str(dest_path / sub.name))
-                            try:
-                                child.rmdir()
-                            except Exception:
-                                pass
-                        else:
-                            shutil.move(str(child), str(dest_path))
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to move {child} to {dest_path}: {e}"
-                        )
+    # Determine number of parallel workers
+    num_workers = workers if workers is not None else default_worker_count()
+    logger.info(f"Using {num_workers} parallel workers")
 
-                logger.info(
-                    f"Ambiguous cases moved to: {needs_matching_dest.absolute()}"
+    # Prepare arguments for parallel processing
+    process_args = []
+    for idx, (media_file, message) in enumerate(matched_files):
+        output_filename = output_filenames[idx]
+        process_args.append(
+            (
+                media_file,
+                message,
+                export_username,
+                output_dir,
+                overlays_dir,
+                output_filename,
+            )
+        )
+
+    # Process files in parallel
+    # Phase 1: Create all files with overlays in parallel
+    success_count = 0
+    failed_count = 0
+
+    if num_workers > 1:
+        with Pool(
+            processes=num_workers,
+            initializer=_init_worker_logging,
+            initargs=(log_filename,),
+        ) as pool:
+            results = list(
+                progress_bar(
+                    pool.imap(_create_file_worker, process_args),
+                    PHASE_PROCESS,
+                    "Creating files",
+                    total=len(process_args),
                 )
-        except Exception as e:
-            logger.warning(
-                f"Failed to move needs_matching directory to output: {e}"
             )
+    else:
+        # Single-threaded for debugging
+        results = []
+        for args_tuple in progress_bar(process_args, PHASE_PROCESS, "Creating files"):
+            results.append(_create_file_worker(args_tuple))
 
-    finally:
-        # Clean up temp directory if it was created
-        if temp_dir_created and temp_dir_created.exists():
-            if should_cleanup_temp():
-                logger.info(f"\nCleaning up temporary directory: {temp_dir_created}")
-                shutil.rmtree(temp_dir_created)
-            else:
-                logger.info(f"\nTemp cleanup disabled. Temporary directory preserved at: {temp_dir_created}")
+    # Phase 2: Collect non-MKV files for batch EXIF processing
+    file_paths = []
+    file_info = []
+
+    for success, output_path, is_mkv, message, exp_username in results:
+        if success and output_path:
+            success_count += 1
+            # Only add non-MKV files to batch processing list
+            # (MKV files already have metadata from overlay creation)
+            if not is_mkv:
+                file_paths.append(output_path)
+                file_info.append((output_path, message, exp_username))
+        else:
+            failed_count += 1
+
+    logger.info(f"\nCreated {success_count} files ({len(file_info)} need EXIF processing)")
+
+    # Phase 3: Batch process EXIF operations on non-MKV files
+    exif_rebuilt_count = 0
+    if file_paths:
+        logger.info("Batch processing EXIF metadata...")
+
+        # Batch validate and rebuild
+        corrupted_files = batch_validate_exif(file_paths)
+        if corrupted_files:
+            logger.info(f"Rebuilding {len(corrupted_files)} corrupted EXIF structures...")
+            batch_rebuild_exif(list(corrupted_files))
+            exif_rebuilt_count = len(corrupted_files)
+
+        # Batch read and write metadata
+        existing_metadata_map = batch_read_existing_metadata(file_paths)
+        batch_write_metadata_snapchat_messages(file_info, existing_metadata_map)
+
+    # Handle unmatched files - copy to failed-matching directory
+    if unmatched_files:
+        logger.info(f"Processing {len(unmatched_files)} unmatched files...")
+        failed_matching_dir = output_dir / "issues" / "failed-matching" / "media"
+        failed_matching_dir.mkdir(exist_ok=True, parents=True)
+
+        for media_file in unmatched_files:
+            try:
+                # Copy to failed-matching directory with original filename
+                shutil.copy2(media_file, failed_matching_dir / media_file.name)
+            except Exception as e:
+                logger.error(f"Error copying unmatched file {media_file.name}: {e}")
+
+    # Print summary using shared utility
+    print_processing_summary(
+        success=success_count,
+        failed=failed_count,
+        total=len(media_files),
+        output_dir=str(output_dir),
+        extra_stats={
+            "EXIF structures rebuilt": exif_rebuilt_count,
+            "Unmatched": len(unmatched_files),
+        },
+    )
+
+    if unmatched_files:
+        logger.info(
+            f"Unmatched files saved to: {(output_dir / 'issues' / 'failed-matching' / 'media').absolute()}"
+        )
+
+    print("\nNote: Videos with overlays are saved as multi-track MKV files:")
+    print("  - Track 0 (default): Video with overlay embedded")
+    print("  - Track 1: Original video without overlay")
+    print("  Switch tracks in VLC: Video > Video Track > Select track")
+
+    # Move any needs_matching folders from the preprocessing temp dir
+    # into the final processed output so they persist after cleanup.
+    try:
+        needs_matching_src = working_dir / "needs_matching"
+        if needs_matching_src.exists() and needs_matching_src.is_dir():
+            needs_matching_dest = output_dir / "needs_matching"
+            needs_matching_dest.mkdir(parents=True, exist_ok=True)
+
+            for child in needs_matching_src.iterdir():
+                dest_path = needs_matching_dest / child.name
+                try:
+                    # If destination exists, merge by moving contents where possible
+                    if dest_path.exists() and child.is_dir():
+                        # Move each item within the child directory
+                        for sub in child.iterdir():
+                            shutil.move(str(sub), str(dest_path / sub.name))
+                        try:
+                            child.rmdir()
+                        except Exception:
+                            pass
+                    else:
+                        shutil.move(str(child), str(dest_path))
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to move {child} to {dest_path}: {e}"
+                    )
+
+            logger.info(
+                f"Ambiguous cases moved to: {needs_matching_dest.absolute()}"
+            )
+    except Exception as e:
+        logger.warning(
+            f"Failed to move needs_matching directory to output: {e}"
+        )

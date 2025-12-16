@@ -17,13 +17,10 @@ from datetime import datetime, timezone
 import re
 import sys
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 import multiprocessing
-from tqdm import tqdm
 import xxhash
 
-from common.utils import get_media_type
 from common.filter_banned_files import BannedFilesFilter
 from common.failure_tracker import FailureTracker
 

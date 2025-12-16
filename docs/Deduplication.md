@@ -55,7 +55,7 @@ Each file appears once with an array of all albums it belongs to.
 
 For a typical Google Photos export with duplicates across albums:
 
-```
+```text
 PREPROCESSING STATISTICS
 ======================================================================
 Total albums processed:                 123

@@ -151,7 +151,7 @@ def batch_rebuild_exif(file_paths: List[str]) -> None:
             try:
                 if "argfile_path" in locals():
                     os.unlink(argfile_path)
-            except:
+            except Exception:
                 pass
 
 
@@ -438,7 +438,7 @@ def batch_write_metadata_google_photos(
             try:
                 if "argfile_path" in locals():
                     os.unlink(argfile_path)
-            except:
+            except Exception:
                 pass
 
 
@@ -530,7 +530,7 @@ def batch_write_metadata_google_chat(
             try:
                 if "argfile_path" in locals():
                     os.unlink(argfile_path)
-            except:
+            except Exception:
                 pass
 
 
@@ -624,7 +624,7 @@ def batch_write_metadata_google_voice(
             try:
                 if "argfile_path" in locals():
                     os.unlink(argfile_path)
-            except:
+            except Exception:
                 pass
 
 
@@ -722,7 +722,7 @@ def batch_write_metadata_instagram_messages(
             try:
                 if "argfile_path" in locals():
                     os.unlink(argfile_path)
-            except:
+            except Exception:
                 pass
 
 
@@ -848,7 +848,7 @@ def batch_write_metadata_instagram_public(
             try:
                 if "argfile_path" in locals():
                     os.unlink(argfile_path)
-            except:
+            except Exception:
                 pass
 
 
@@ -976,7 +976,7 @@ def batch_write_metadata_instagram_old_public(
             try:
                 if "argfile_path" in locals():
                     os.unlink(argfile_path)
-            except:
+            except Exception:
                 pass
 
 
@@ -1094,7 +1094,7 @@ def batch_write_metadata_snapchat_memories(
             try:
                 if "argfile_path" in locals():
                     os.unlink(argfile_path)
-            except:
+            except Exception:
                 pass
 
 
@@ -1265,7 +1265,7 @@ def batch_write_metadata_snapchat_messages(
             try:
                 if "argfile_path" in locals():
                     os.unlink(argfile_path)
-            except:
+            except Exception:
                 pass
 
 
@@ -1442,7 +1442,7 @@ def batch_write_metadata_snapchat(
             try:
                 if "argfile_path" in locals():
                     os.unlink(argfile_path)
-            except:
+            except Exception:
                 pass
 
 
@@ -1692,7 +1692,7 @@ def batch_write_metadata_imessage(
             try:
                 if "argfile_path" in locals():
                     os.unlink(argfile_path)
-            except:
+            except Exception:
                 pass
 
 
@@ -1826,5 +1826,5 @@ def batch_write_metadata_discord(
             try:
                 if "argfile_path" in locals():
                     os.unlink(argfile_path)
-            except:
+            except Exception:
                 pass

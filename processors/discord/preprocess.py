@@ -14,7 +14,7 @@ import logging
 import re
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -27,7 +27,6 @@ import requests
 from common.filter_banned_files import BannedFilesFilter
 from common.failure_tracker import FailureTracker
 from common.progress import PHASE_PREPROCESS, futures_progress
-from common.utils import get_media_type
 
 # Set up logging
 logger = logging.getLogger(__name__)

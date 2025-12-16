@@ -20,6 +20,7 @@ import multiprocessing
 from pathlib import Path
 from importlib import import_module
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from queue import Empty as QueueEmpty
 
 # Add current directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -27,7 +28,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 from processors.registry import ProcessorRegistry
 from common.utils import (
     setup_logging,
-    extract_username_from_export_dir,
     add_export_log_handler,
     remove_export_log_handler,
 )
@@ -62,8 +62,6 @@ def upload_worker_thread(
         immich_skip_hash: Whether to skip hash checking
         stop_event: Event to signal thread should stop
     """
-    from common.immich_uploader import upload as immich_upload
-
     print("[Upload Worker] Started - will process uploads sequentially")
     print()
 
@@ -72,7 +70,7 @@ def upload_worker_thread(
             # Wait for an upload task (timeout so we can check stop_event)
             try:
                 export_name, upload_tasks = upload_queue.get(timeout=0.5)
-            except:
+            except (QueueEmpty, TimeoutError):
                 continue  # Queue empty, check stop_event and try again
 
             if upload_tasks is None:
@@ -262,13 +260,15 @@ def _process_export_worker(
     Returns:
         Tuple of (export_name, success_count, failed_count)
     """
-    import sys
-    from pathlib import Path
-
     # Recreate registry and load processors
+    # Note: sys.path modification needed for pickled worker processes
     sys.path.insert(0, str(Path(__file__).parent))
-    from processors.registry import ProcessorRegistry
-    from common.utils import add_export_log_handler, remove_export_log_handler
+    # Reimport needed for pickled worker processes
+    from processors.registry import ProcessorRegistry  # noqa: F811
+    from common.utils import (  # noqa: F811
+        add_export_log_handler,
+        remove_export_log_handler,
+    )
 
     registry = ProcessorRegistry()
     load_all_processors(registry)
@@ -279,7 +279,11 @@ def _process_export_worker(
     try:
         # Create a simple args namespace
         class Args:
-            pass
+            def __init__(self):
+                self.output = None
+                self.verbose = False
+                self.workers = None
+                self.processor = None
 
         args = Args()
         args.output = output_base
@@ -302,7 +306,7 @@ def _process_export_worker(
             print()
 
         # Process the export (no detection cache in parallel mode to avoid sharing issues)
-        success_count, failed_count, upload_tasks = process_single_export(
+        success_count, failed_count, _upload_tasks = process_single_export(
             export_dir,
             registry,
             args,
@@ -409,7 +413,7 @@ def process_single_export(
             Path(args.output).mkdir(parents=True, exist_ok=True)
         except Exception as e:
             print(f"ERROR: Failed to create output base directory '{args.output}': {e}")
-            return 0, 1
+            return 0, 1, []
 
     # Run ALL matching processors
     success_count = 0
@@ -560,7 +564,7 @@ def _collect_upload_files(path: Path, ignore_patterns: list[str]) -> list[Path]:
         return files_to_upload
 
     # Walk directory recursively
-    for root, dirs, files in os.walk(path):
+    for root, _dirs, files in os.walk(path):
         root_path = Path(root)
 
         # Check if this directory should be ignored
@@ -632,7 +636,7 @@ def upload_only_mode(
     """
     from datetime import datetime
 
-    print(f"Upload-only mode")
+    print("Upload-only mode")
     print(f"Original export: {input_path}")
     print(f"Processed output: {upload_path}")
     print()
@@ -658,7 +662,7 @@ def upload_only_mode(
         return 1
 
     # Detect processors from original export
-    print(f"Analyzing original export to detect processor types...")
+    print("Analyzing original export to detect processor types...")
     matching_processors = registry.detect_all(input_path)
 
     if not matching_processors:
@@ -710,7 +714,7 @@ def upload_only_mode(
 
     # Open log file for writing
     with open(log_file, "w", encoding="utf-8") as log:
-        log.write(f"Upload-Only Mode Log\n")
+        log.write("Upload-Only Mode Log\n")
         log.write(f"{'=' * 70}\n")
         log.write(f"Timestamp: {timestamp}\n")
         log.write(f"Original export: {input_path}\n")
@@ -747,7 +751,7 @@ def upload_only_mode(
                 if not targets:
                     print(f"No upload targets derived for {pname}")
                     log.write(f"Processor: {pname}\n")
-                    log.write(f"  No upload targets\n\n")
+                    log.write("  No upload targets\n\n")
                     continue
 
                 print(f"Found {len(targets)} upload target(s):")
@@ -771,7 +775,7 @@ def upload_only_mode(
 
                         for file_path in files_to_upload:
                             log.write(f"  {file_path}\n")
-                        log.write(f"\n")
+                        log.write("\n")
 
                         total_files_uploaded += len(files_to_upload)
 
@@ -815,7 +819,7 @@ def upload_only_mode(
 
         # Write summary to log
         log.write(f"{'=' * 70}\n")
-        log.write(f"SUMMARY\n")
+        log.write("SUMMARY\n")
         log.write(f"{'=' * 70}\n")
         log.write(f"Total files logged: {total_files_uploaded}\n")
         log.write(f"Upload tasks: {success_count} succeeded, {failed_count} failed\n")
@@ -1065,9 +1069,6 @@ Examples:
         dirs_to_process = [input_path]
 
     # Resolve Immich configuration
-    import os
-    import multiprocessing
-
     cpu_count = multiprocessing.cpu_count()
 
     # Validate and set parallel_exports
@@ -1095,7 +1096,7 @@ Examples:
                 f"         will create ~{total_processes} processes on {cpu_count} CPU cores"
             )
             print(
-                f"         This may cause performance degradation due to over-subscription."
+                "         This may cause performance degradation due to over-subscription."
             )
             print()
 
@@ -1134,7 +1135,6 @@ Examples:
 
     # Preflight Immich availability when uploads are enabled
     immich_enabled = not args.skip_upload
-    immich_ready = False
     if immich_enabled:
         # Only check for Immich if credentials are configured
         if not immich_url or not immich_key:
@@ -1145,13 +1145,11 @@ Examples:
             print_immich_error()
             print("Continuing without upload (use --skip-upload to hide this message).")
             immich_enabled = False
-        else:
-            immich_ready = verify_auth(immich_url, immich_key)
-            if not immich_ready:
-                print(
-                    "WARNING: Immich authentication failed (server-info). Skipping upload."
-                )
-                immich_enabled = False
+        elif not verify_auth(immich_url, immich_key):
+            print(
+                "WARNING: Immich authentication failed (server-info). Skipping upload."
+            )
+            immich_enabled = False
 
     # Handle upload-only mode
     if args.upload_only:
@@ -1312,7 +1310,7 @@ Examples:
                 for future in as_completed(future_to_export):
                     idx, export_dir = future_to_export[future]
                     try:
-                        export_name, success_count, failed_count = future.result()
+                        export_name, _success_count, failed_count = future.result()
 
                         if failed_count == 0:
                             total_exports_success += 1
@@ -1381,12 +1379,11 @@ Examples:
                             # Create a subdirectory for this export within the base output dir
                             export_output_dir = str(output_base / export_dir.name)
                             # Temporarily override args.output for this export
-                            original_output = str(output_base)
                             args.output = export_output_dir
 
                     # Process this export
                     try:
-                        success_count, failed_count, upload_tasks = (
+                        success_count, failed_count, _upload_tasks = (
                             process_single_export(
                                 export_dir,
                                 registry,

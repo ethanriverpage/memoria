@@ -10,7 +10,6 @@ import multiprocessing
 import os
 import re
 import shutil
-import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +18,12 @@ from common.progress import PHASE_PROCESS, progress_bar
 from processors.google_voice.preprocess import GoogleVoicePreprocessor
 from processors.base import ProcessorBase
 from common.dependency_checker import check_exiftool, print_exiftool_error
-from common.utils import sanitize_filename, should_cleanup_temp
+from common.utils import (
+    is_preprocessed_directory,
+    sanitize_filename,
+    should_cleanup_temp,
+    update_file_timestamps,
+)
 from common.exiftool_batch import (
     batch_validate_exif,
     batch_rebuild_exif,
@@ -202,38 +206,6 @@ def generate_unique_filename(
         sequence += 1
 
 
-def update_filesystem_timestamps(file_path, message_data):
-    """Update filesystem creation and modification timestamps to match message date
-
-    Args:
-        file_path: Path to the file
-        message_data: Dict containing message metadata with 'timestamp' field
-
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    try:
-        # Parse date from message_data
-        # Format: "2016-08-23 16:27:32"
-        date_str = message_data["timestamp"]
-
-        # Skip if no timestamp
-        if date_str is None:
-            return False
-
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
-
-        # Convert to Unix timestamp
-        timestamp = date_obj.timestamp()
-
-        # Update both access time and modification time
-        os.utime(file_path, (timestamp, timestamp))
-        return True
-    except Exception as e:
-        logger.warning(f"Failed to update timestamps for {file_path}: {e}")
-        return False
-
-
 def process_media_batch(batch_args):
     """Process a batch of media files (worker function for multiprocessing)
     
@@ -288,7 +260,7 @@ def process_media_batch(batch_args):
     # Phase 4: Update timestamps and compile results
     results = []
     for output_path, message_data, _, _ in file_info:
-        update_filesystem_timestamps(output_path, message_data)
+        update_file_timestamps(output_path, message_data.get("timestamp"))
         exif_rebuilt = output_path in corrupted_files
         results.append((True, False, exif_rebuilt))
     
@@ -297,22 +269,6 @@ def process_media_batch(batch_args):
         results.append((False, True, False))
     
     return results
-
-
-def is_preprocessed(input_dir):
-    """Check if input directory is already preprocessed
-
-    Args:
-        input_dir: Path to input directory
-
-    Returns:
-        bool: True if already preprocessed, False if raw export
-    """
-    input_path = Path(input_dir)
-    metadata_file = input_path / "metadata.json"
-    media_dir = input_path / "media"
-
-    return metadata_file.exists() and media_dir.exists()
 
 
 def process_logic(
@@ -346,7 +302,7 @@ def process_logic(
     temp_dir_created = None
 
     try:
-        if is_preprocessed(input_dir):
+        if is_preprocessed_directory(input_dir):
             logger.info(f"Input directory is already preprocessed: {input_dir}")
             working_dir = input_dir
         else:

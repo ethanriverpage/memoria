@@ -17,7 +17,7 @@ from datetime import datetime
 import sys
 import argparse
 from bs4 import BeautifulSoup
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 import multiprocessing
 from common.filter_banned_files import BannedFilesFilter

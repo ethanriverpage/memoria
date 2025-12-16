@@ -19,7 +19,7 @@ import xxhash
 
 # Import utilities from common module
 sys.path.insert(0, str(Path(__file__).parent))
-from common.utils import get_media_type, is_supported_media
+from common.utils import is_supported_media
 from common.filter_banned_files import BannedFilesFilter
 
 
@@ -137,7 +137,7 @@ def collect_media_files(
                     else:
                         skipped_unsupported += 1
 
-    print(f"\nScan complete:")
+    print("\nScan complete:")
     print(f"  Media files found: {len(media_files):,}")
     print(f"  Banned files skipped: {skipped_banned:,}")
     print(f"  Overlay/thumbnail files skipped: {skipped_overlay_thumbnail:,}")
@@ -211,7 +211,6 @@ def scan_media_directories(
 
     if hash_map_raw:
         # Convert string paths back to Path objects
-        already_processed = set()
         for paths in hash_map_raw.values():
             already_processed.update(paths)
         print(f"Resuming with {len(already_processed):,} already processed files")
@@ -277,7 +276,7 @@ def scan_media_directories(
             if use_checkpoint and processed % checkpoint_interval == 0:
                 save_checkpoint(hash_map_raw, checkpoint_file)
 
-    print(f"\n\nHashing complete!")
+    print("\n\nHashing complete!")
     print(f"Successfully processed: {processed:,}")
     print(f"Errors: {errors}")
 
@@ -372,7 +371,7 @@ def print_summary(results: Dict):
     print(f"\nTotal unique files (by hash): {results['total_unique_files']:,}")
     print(f"Files that have duplicates: {results['total_files_with_duplicates']:,}")
     print(f"Total duplicate instances: {results['total_duplicate_instances']:,}")
-    print(f"\nWasted space from duplicates:")
+    print("\nWasted space from duplicates:")
     print(f"  {results['wasted_space_mb']:.2f} MB")
     print(f"  {results['wasted_space_gb']:.2f} GB")
 
