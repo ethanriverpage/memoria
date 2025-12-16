@@ -729,17 +729,20 @@ def _pass3_combine_tracks(with_overlay_path: Path, original_video_path: Path) ->
     return temp_dual_path
 
 
-def _build_message_description(metadata: dict, export_username: str) -> str:
+def _build_message_description(metadata: Optional[dict], export_username: str) -> str:
     """
     Build rich description for Snapchat Messages.
 
     Args:
-        metadata: Metadata dict with conversation fields
+        metadata: Metadata dict with conversation fields (can be None)
         export_username: Username for source path
 
     Returns:
         Multi-line description string
     """
+    if metadata is None:
+        return f"Source: Snapchat/{export_username}/messages"
+    
     conv_type = metadata.get("conversation_type")
     conv_id = metadata.get("conversation_id")
 

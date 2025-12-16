@@ -6,7 +6,6 @@ It handles processing Snapchat chat media with overlays and metadata embedding.
 """
 import json
 import logging
-import os
 import re
 import shutil
 from datetime import datetime
@@ -154,7 +153,7 @@ class SnapchatMessagesProcessor(ProcessorBase):
         return 85  # High priority - runs before memories
 
     @staticmethod
-    def process(input_dir: str, output_dir: str = None, **kwargs) -> bool:
+    def process(input_dir: str, output_dir: Optional[str] = None, **kwargs) -> bool:
         """Process Snapchat Messages export
 
         Args:
@@ -402,12 +401,16 @@ def generate_chat_filename(
     
     # Get date string - use primary_created for merged messages
     if is_merged:
-        date_str = message.get("primary_created", message["messages"][0].get("created"))
+        date_str = message.get("primary_created") or message["messages"][0].get("created")
     else:
         date_str = message.get("created")
 
     # All messages should have full timestamp format: YYYY-MM-DD HH:MM:SS UTC
     # Fallback to date-only parsing for backwards compatibility with old metadata
+    if date_str is None:
+        # Fallback to current date if no timestamp available
+        date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+    
     if len(date_str) == 10 and date_str.count(":") == 0:
         # Legacy date-only format: YYYY-MM-DD
         date_obj = datetime.strptime(date_str, "%Y-%m-%d")
@@ -416,6 +419,9 @@ def generate_chat_filename(
         date_obj = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S UTC")
 
     date_key = date_obj.strftime("%Y%m%d")
+
+    # Initialize conv_prefix for non-merged messages
+    conv_prefix = "unknown"
 
     # For merged messages, use simplified naming without conversation
     if is_merged:

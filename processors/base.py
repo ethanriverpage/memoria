@@ -8,7 +8,7 @@ unified detection and processing.
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 
 class ProcessorBase(ABC):
@@ -85,7 +85,7 @@ class ProcessorBase(ABC):
 
     @staticmethod
     @abstractmethod
-    def process(input_dir: str, output_dir: str = None, **kwargs) -> bool:
+    def process(input_dir: str, output_dir: Optional[str] = None, **kwargs) -> bool:
         """Process the input directory
 
         Args:
@@ -115,7 +115,7 @@ class ProcessorBase(ABC):
 
     @staticmethod
     def process_consolidated(
-        input_dirs: List[str], output_dir: str = None, **kwargs
+        input_dirs: List[str], output_dir: Optional[str] = None, **kwargs
     ) -> bool:
         """Process multiple exports as a single consolidated unit.
 

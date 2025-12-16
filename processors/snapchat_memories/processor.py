@@ -12,6 +12,7 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from common.dependency_checker import (
     check_exiftool,
@@ -146,7 +147,7 @@ class SnapchatMemoriesProcessor(ProcessorBase):
         return 80  # High priority - specific structure
 
     @staticmethod
-    def process(input_dir: str, output_dir: str = None, **kwargs) -> bool:
+    def process(input_dir: str, output_dir: Optional[str] = None, **kwargs) -> bool:
         """Process Snapchat Memories export
 
         Args:

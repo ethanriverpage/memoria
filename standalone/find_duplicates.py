@@ -7,7 +7,6 @@ Optimized with multiprocessing for large exports.
 
 import os
 import json
-import pickle
 import sys
 from pathlib import Path
 from collections import defaultdict
@@ -23,7 +22,7 @@ from common.utils import is_supported_media
 from common.filter_banned_files import BannedFilesFilter
 
 
-def calculate_file_hash(filepath: Path) -> Tuple[str, Path]:
+def calculate_file_hash(filepath: Path) -> Tuple[Optional[str], Path]:
     """
     Calculate xxHash (128-bit) hash of a file.
     xxHash is much faster than SHA-256 for non-cryptographic purposes.
@@ -32,7 +31,7 @@ def calculate_file_hash(filepath: Path) -> Tuple[str, Path]:
         filepath: Path to the file
 
     Returns:
-        Tuple of (hash, filepath)
+        Tuple of (hash or None on error, filepath)
     """
     try:
         hasher = xxhash.xxh128()
@@ -164,13 +163,13 @@ def load_checkpoint(
 
         if auto_resume:
             print("Auto-resuming from checkpoint...")
-            with open(checkpoint_file, "rb") as f:
-                return pickle.load(f)
+            with open(checkpoint_file, "r", encoding="utf-8") as f:
+                return json.load(f)
         else:
             response = input("Resume from checkpoint? (y/n): ").lower().strip()
             if response == "y":
-                with open(checkpoint_file, "rb") as f:
-                    return pickle.load(f)
+                with open(checkpoint_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
     return None
 
 
@@ -182,8 +181,8 @@ def save_checkpoint(hash_map: Dict[str, List[str]], checkpoint_file: Path):
         hash_map: Current hash map state
         checkpoint_file: Path to save checkpoint
     """
-    with open(checkpoint_file, "wb") as f:
-        pickle.dump(hash_map, f)
+    with open(checkpoint_file, "w", encoding="utf-8") as f:
+        json.dump(hash_map, f)
 
 
 def scan_media_directories(

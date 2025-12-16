@@ -53,7 +53,7 @@ def upload(
     concurrency: int = 4,
     include_hidden: bool = False,
     recursive: bool = True,
-    ignore_patterns: list[str] = None,
+    ignore_patterns: Optional[list[str]] = None,
 ) -> int:
     """Upload files/folders at path to Immich under a specific album.
 

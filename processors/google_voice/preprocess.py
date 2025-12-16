@@ -69,13 +69,13 @@ class VoiceHTMLParser(HTMLParser):
         elif (
             (self.in_message or self.in_participants)
             and tag == "cite"
-            and "sender" in attrs_dict.get("class", "")
+            and "sender" in (attrs_dict.get("class") or "")
         ):
             self.in_sender = True
             self.current_phone = None
-        elif self.in_sender and tag == "a" and "tel" in attrs_dict.get("class", ""):
+        elif self.in_sender and tag == "a" and "tel" in (attrs_dict.get("class") or ""):
             # Capture phone number from href
-            href = attrs_dict.get("href", "")
+            href = attrs_dict.get("href") or ""
             if href.startswith("tel:"):
                 self.current_phone = href[4:]  # Remove "tel:" prefix
         elif (

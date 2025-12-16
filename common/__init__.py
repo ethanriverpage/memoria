@@ -13,7 +13,8 @@ try:
     from processors.registry import ProcessorRegistry  # type: ignore
 except Exception:
     pass
-from .utils import extract_username_from_export_dir, setup_logging
+from .utils import extract_username_from_export_dir
+from .logging_config import setup_logging
 from .dependency_checker import (
     check_exiftool,
     check_ffmpeg,

@@ -39,6 +39,7 @@ wheels/
 .coverage
 htmlcov/
 .tox/
+.ruff_cache/
 
 # Virtual environments
 .venv/
@@ -128,9 +129,6 @@ processed/**/*.csv
 # Large data files
 *.txt
 
-# Test files
-test_*
-
 # Temporary files
 tmp/
 temp/
@@ -142,3 +140,5 @@ temp/
 
 internal/
 github-issues.md
+
+final_*

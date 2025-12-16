@@ -26,7 +26,7 @@ from queue import Empty as QueueEmpty
 sys.path.insert(0, str(Path(__file__).parent))
 
 from processors.registry import ProcessorRegistry
-from common.utils import (
+from common.logging_config import (
     setup_logging,
     add_export_log_handler,
     remove_export_log_handler,

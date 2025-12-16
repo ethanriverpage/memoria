@@ -11,6 +11,7 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.exiftool_batch import (
@@ -92,7 +93,7 @@ class GooglePhotosProcessor(ProcessorBase):
         return 50  # Medium priority
 
     @staticmethod
-    def process(input_dir: str, output_dir: str = None, **kwargs) -> bool:
+    def process(input_dir: str, output_dir: Optional[str] = None, **kwargs) -> bool:
         """Process Google Photos export
 
         Args:

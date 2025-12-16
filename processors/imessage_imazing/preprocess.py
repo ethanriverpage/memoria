@@ -208,12 +208,12 @@ class ImazingPreprocessor:
         if device_info.exists():
             try:
                 content = device_info.read_text(encoding="utf-8")
-                # Look for "Name: Ethan's iPhone" pattern
+                # Look for "Name: <device name>" pattern
                 match = re.search(r"^Name:\s*(.+)$", content, re.MULTILINE)
                 if match:
                     return match.group(1).strip()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to extract device name from {device_info}: {e}")
 
         # Fallback: extract from directory name
         dir_name = self.export_path.name

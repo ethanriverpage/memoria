@@ -8,7 +8,6 @@ and metadata embedding for media files.
 
 import json
 import logging
-import os
 import re
 import shutil
 from datetime import datetime
@@ -137,7 +136,7 @@ class DiscordProcessor(ProcessorBase):
         return 70
 
     @staticmethod
-    def process(input_dir: str, output_dir: str = None, **kwargs) -> bool:
+    def process(input_dir: str, output_dir: Optional[str] = None, **kwargs) -> bool:
         """Process Discord export.
 
         Args:
@@ -357,9 +356,9 @@ def process_logic(
         workers: Number of parallel workers
     """
     # Validate input directory exists
-    input_dir = Path(input_dir)
-    if not input_dir.exists():
-        logger.error(f"Input directory not found: {input_dir}")
+    input_path = Path(input_dir)
+    if not input_path.exists():
+        logger.error(f"Input directory not found: {input_path}")
         return
 
     # Check for required tools
@@ -371,14 +370,14 @@ def process_logic(
     logger.info("=" * 50)
 
     # Determine if input needs preprocessing
-    output_dir = Path(output_dir)
+    output_path = Path(output_dir)
 
     # Check if input is already preprocessed
-    if is_preprocessed_directory(str(input_dir)):
-        logger.info(f"Input directory is already preprocessed: {input_dir}")
-        _process_working_directory(input_dir, output_dir, workers)
+    if is_preprocessed_directory(str(input_path)):
+        logger.info(f"Input directory is already preprocessed: {input_path}")
+        _process_working_directory(input_path, output_path, workers)
     else:
-        logger.info(f"Input directory is raw export: {input_dir}")
+        logger.info(f"Input directory is raw export: {input_path}")
         logger.info("Running preprocessing (downloading attachments)...")
 
         # Use context manager for temp directory with automatic cleanup
@@ -388,15 +387,15 @@ def process_logic(
             # Run preprocessing
             # Note: output_dir already has /messages appended by the caller (process method)
             preprocessor = DiscordPreprocessor(
-                export_path=input_dir,
+                export_path=input_path,
                 output_dir=temp_dir_path,
                 workers=workers,
-                final_output_dir=output_dir,
+                final_output_dir=output_path,
             )
             preprocessor.process()
 
             logger.info(f"Preprocessing complete. Using: {temp_dir_path}")
-            _process_working_directory(temp_dir_path, output_dir, workers)
+            _process_working_directory(temp_dir_path, output_path, workers)
 
 
 def _process_working_directory(
