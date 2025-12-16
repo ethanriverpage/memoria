@@ -9,7 +9,10 @@
 
 ### Platform Guides
 
+- [Discord Export](Discord-Export)
+- [Discord Schema](Discord-Schema)
 - [Google Export](Google-Export)
+- [iMessage Export](iMessage-Export)
 - [Instagram Export](Instagram-Export)
 - [Snapchat Export](Snapchat-Export)
 
@@ -21,6 +24,7 @@
 - [Upload Queuing](Upload-Queuing)
 - [Logging](Logging)
 - [Deduplication](Deduplication)
+- [Global Deduplication](Global-Deduplication)
 
 ### Reference
 

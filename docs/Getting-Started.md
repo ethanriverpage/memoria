@@ -10,7 +10,7 @@ Before diving into installation, here's what Memoria does with your data:
 2. **Copying**: Files are copied (never moved) from the export to the output directory
 3. **Metadata Extraction**: Platform-specific JSON/HTML files are parsed for timestamps, locations, and context
 4. **EXIF Embedding**: Metadata is written directly into each media file using ExifTool
-5. **Deduplication** (Google Photos only): Duplicate files across albums are identified and skipped
+5. **Deduplication** (Google Photos, iMessage): Duplicate files across albums/exports are identified and skipped
 6. **File Organization**: Files are organized by platform and username with descriptive names
 7. **Upload** (optional): Files are uploaded to Immich in platform-specific albums
 
@@ -73,6 +73,8 @@ ffmpeg -version  # Should display version info
 
 Each platform has its own export process:
 
+- **Apple iMessage**: Copy from Mac (`~/Library/Messages/`) or extract from iPhone backup
+- **Discord**: Use User Settings > Privacy & Safety > Request My Data
 - **Google**: Use [Google Takeout](https://takeout.google.com)
 - **Instagram**: Download from Settings > Account Center > Your Information and Permissions > Download Your Information
 - **Snapchat**: Use Settings > My Data > Submit Request
@@ -80,6 +82,8 @@ Each platform has its own export process:
 See the platform-specific guides for detailed export instructions:
 
 - [Google Export Setup](Google-Export)
+- [iMessage Export Setup](iMessage-Export)
+- [Discord Export Setup](Discord-Export)
 - [Instagram Export Setup](Instagram-Export)
 - [Snapchat Export Setup](Snapchat-Export)
 
@@ -101,8 +105,8 @@ platform-username-YYYYMMDD
 
 Where:
 
-- `platform`: One of `google`, `instagram`, or `snapchat`
-- `username`: The account username (can include hyphens for multi-part names)
+- `platform`: One of `google`, `mac`/`iphone*`, `discord`, `instagram`, or `snapchat`
+- `username`: The account username or device identifier (can include hyphens for multi-part names)
 - `YYYYMMDD`: Date of export (optional but recommended)
 
 ### Examples
@@ -114,6 +118,19 @@ google-john.doe-20250526/
 ├── Google Chat/
 │   └── ...
 └── Voice/
+    └── ...
+
+mac-messages-20251202/
+├── chat.db               # iMessage database
+└── Attachments/          # iMessage attachments
+    └── ...
+
+discord-username-20251215/
+├── Messages/             # Actual Discord export structure
+│   ├── index.json
+│   └── c{channel_id}/
+│       └── messages.json
+└── Servers/
     └── ...
 
 instagram-jane_doe-20251007/
@@ -172,6 +189,22 @@ For detailed usage options, see [Usage](Usage).
 ## Platform-Specific Setup
 
 Each platform has unique export structures and requirements. Consult the appropriate guide for your platform:
+
+### Apple iMessage
+
+See [iMessage Export Guide](iMessage-Export) for:
+
+- Mac exports (chat.db with Attachments)
+- iPhone exports (SMS/sms.db with Attachments)
+- Cross-export deduplication
+
+### Discord
+
+See [Discord Export Guide](Discord-Export) for:
+
+- Requesting your Discord data export
+- Downloading attachments from CDN URLs
+- Channel types (DMs, group DMs, server channels)
 
 ### Google Services
 

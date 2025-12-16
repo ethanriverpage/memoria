@@ -67,11 +67,13 @@ python3 memoria.py /path/to/export --skip-upload
 
 ### Album naming
 
-- Instagram Messages: `Instagram/{USERNAME}/messages`
-- Instagram Public/Old Media: one per subfolder → `Instagram/{USERNAME}/{posts|archived_posts|profile|stories|reels|other}`
+- Discord: `Discord/{USERNAME}`
 - Google Chat: `Google Chat/{USERNAME}`
 - Google Photos: `Google Photos/{USERNAME}`
 - Google Voice: `Google Voice/{USERNAME}`
+- iMessage: `iMessage/{DEVICE}` (e.g., `iMessage/mac`, `iMessage/iphone14`)
+- Instagram Messages: `Instagram/{USERNAME}/messages`
+- Instagram Public/Old Media: one per subfolder → `Instagram/{USERNAME}/{posts|archived_posts|profile|stories|reels|other}`
 - Snapchat Messages: `Snapchat/{USERNAME}/messages`
 - Snapchat Memories: `Snapchat/{USERNAME}/memories`
 
@@ -82,4 +84,3 @@ Usernames are parsed from the export directory name formats handled by the proce
 - [Usage](Usage) - Command-line options
 - [Upload Only Mode](Upload-Only-Mode) - Upload previously processed exports
 - [Upload Queuing](Upload-Queuing) - Upload queuing for parallel processing
-

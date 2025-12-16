@@ -20,9 +20,8 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 import multiprocessing
-from tqdm import tqdm
-
 from common.filter_banned_files import BannedFilesFilter
+from common.progress import PHASE_PREPROCESS, futures_progress
 from common.failure_tracker import FailureTracker
 
 # Set up logging
@@ -561,7 +560,7 @@ class InstagramPreprocessor:
             }
             
             # Collect results as they complete
-            for future in tqdm(as_completed(future_to_html), total=len(future_to_html), desc="Processing HTML files", unit="file"):
+            for future in futures_progress(future_to_html, PHASE_PREPROCESS, "Parsing HTML files", unit="file"):
                 html_basename = future_to_html[future]
                 try:
                     media_type, posts = future.result()

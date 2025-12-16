@@ -7,6 +7,7 @@ Important behaviors and surprises you should know before processing your exports
 **Gotcha**: Export folders must follow the `platform-username-YYYYMMDD` naming convention.
 
 **Why it matters**: Platform exports don't include usernames in their internal structure. Without proper naming:
+
 - Files will be labeled with "unknown" as the username
 - Immich albums will be named incorrectly
 - You'll have to manually rename thousands of files
@@ -15,10 +16,12 @@ Important behaviors and surprises you should know before processing your exports
 **Example**: If you have exports from both your personal and work Instagram accounts, proper naming ensures they're processed into separate directories and uploaded to separate albums.
 
 **What to do**: After extracting your export, rename the folder:
+
 ```
-instagram-personal-20251122/
-instagram-work-20251122/
 google-john.doe-20251122/
+mac-messages-20251122/
+iphone14-messages-20251122/
+instagram-personal-20251122/
 snapchat-username-20251122/
 ```
 
@@ -29,6 +32,7 @@ snapchat-username-20251122/
 **Why it matters**: If you expect your output to mirror the album folder structure from Google Photos, you'll be surprised to find all photos in one directory.
 
 **The reason**: Google Photos exports contain 30-60% duplicates when the same photo appears in multiple albums. Flattening the structure allows Memoria to:
+
 - Deduplicate effectively and save disk space
 - Process faster (skip duplicate file operations)
 - Upload cleaner data to Immich
@@ -45,6 +49,7 @@ snapchat-username-20251122/
 **Why it matters**: If you specifically want duplicate copies preserved in separate album folders, Memoria is not the right tool.
 
 **The reason**: Deduplication is a core design principle. Processing duplicates would:
+
 - Waste disk space (often 30-60% of export size)
 - Slow processing by 2-3x
 - Upload duplicate files to Immich
@@ -59,6 +64,7 @@ snapchat-username-20251122/
 **Why it matters**: If you make a mistake (wrong username, incorrect timezone, etc.), you can't easily undo the metadata embedding.
 
 **What to do**:
+
 - Test with a small subset of your export first
 - Verify the output looks correct before processing your entire library
 - Keep your original exports as backups
@@ -71,13 +77,15 @@ snapchat-username-20251122/
 **Why it matters**: You might start processing thinking it will take 20 minutes and discover it's still running 3 hours later.
 
 **The reason**: Memoria performs several operations per file:
+
 - Copying the file (I/O bound)
 - Parsing JSON metadata
 - Embedding EXIF data (exiftool subprocess)
 - Setting file timestamps
-- Computing hashes for deduplication (Google Photos)
+- Computing hashes for deduplication (Google Photos, iMessage)
 
 **What to do**:
+
 - Use `--verbose` to monitor progress
 - Use `--workers` to parallelize (default is CPU count - 1)
 - Run processing overnight for very large exports
@@ -92,10 +100,37 @@ snapchat-username-20251122/
 **The reason**: Automation of the download process is planned but not yet implemented.
 
 **What to do**:
+
 - Be prepared for tedious manual work
 - Consider whether the effort is worth it for your use case
 - Organize downloaded files into the expected `media/` and `overlays/` structure
 - See [Snapchat Export Guide](Snapchat-Export.md) for structure requirements
+
+## iMessage Exports Require Database Access
+
+**Gotcha**: iMessage exports require access to SQLite database files, and iPhone backups must be unencrypted.
+
+**Why it matters**: If your iPhone backup is encrypted (which is the default for security), Memoria cannot read the database.
+
+**The reason**: Apple encrypts iPhone backups by default. The iMessage database (`sms.db`) is part of this encrypted backup and cannot be read without decryption.
+
+**What to do**:
+
+- For Mac exports: Simply copy `~/Library/Messages/` - no encryption involved
+- For iPhone exports: Either create an unencrypted backup, or use tools like iMazing to decrypt an encrypted backup first
+- Extract the `SMS/` directory from the decrypted backup before processing
+
+**Related**: See [iMessage Export Guide](iMessage-Export.md) for detailed setup instructions.
+
+## iMessage Uses Device Identifier, Not Username
+
+**Gotcha**: iMessage exports use a device identifier (e.g., `mac`, `iphone14`) instead of a username in filenames and albums.
+
+**Why it matters**: Unlike other platforms where your username is embedded in filenames, iMessage files use the device name from your export directory.
+
+**The reason**: The iMessage database doesn't contain the device owner's name or Apple ID. The directory naming convention (`mac-messages-YYYYMMDD` or `iphone14-messages-YYYYMMDD`) is the only source of device identification.
+
+**What to do**: Name your export directories descriptively based on the source device.
 
 ## Instagram Message Media May Be Incomplete
 
@@ -107,6 +142,26 @@ snapchat-username-20251122/
 
 **What to do**: Accept that some ephemeral content is lost. Instagram only exports media that still exists in their system.
 
+## Discord Exports Only Include Sent Messages
+
+**Gotcha**: Discord's "Request My Data" export only includes messages you sent, not messages you received.
+
+**Why it matters**: You might expect to see all media from conversations, but only attachments from your own messages are included.
+
+**The reason**: This is a limitation of Discord's export system, not Memoria. Discord only provides data about your own activity.
+
+**What to do**: Understand that you'll only get media from messages you sent. If you need media from messages others sent, you'll need to request exports from those users or use other methods to save those files.
+
+## Discord Attachment URLs May Expire
+
+**Gotcha**: Discord CDN URLs in the export may expire over time, causing downloads to fail.
+
+**Why it matters**: If you wait too long after receiving your export, some attachment URLs may no longer be valid, and those files cannot be downloaded.
+
+**The reason**: Discord CDN URLs include authentication parameters that expire. This is by design for security.
+
+**What to do**: Process your Discord export promptly after receiving it (within days, not weeks or months) to minimize expired URLs. Failed downloads are logged in `preprocessing.log` for review.
+
 ## Immich Upload Is Enabled by Default
 
 **Gotcha**: If you have Immich configured, Memoria will automatically upload processed files unless you explicitly skip it.
@@ -114,6 +169,7 @@ snapchat-username-20251122/
 **Why it matters**: You might accidentally upload test runs or incomplete processing to your Immich server.
 
 **What to do**:
+
 - Use `--skip-upload` for test runs
 - Or don't configure Immich credentials until you're ready to upload
 - Use `--upload-only` mode to re-upload later without reprocessing
@@ -125,6 +181,7 @@ snapchat-username-20251122/
 **Why it matters**: Over-subscription causes context switching overhead, making processing slower than sequential mode.
 
 **What to do**:
+
 - Follow the formula: `parallel_exports × (workers + 1) ≈ CPU cores`
 - Memoria warns you when you exceed cores by 50%
 - See [Parallel Processing](Parallel-Processing.md) for optimal configurations
@@ -146,6 +203,7 @@ snapchat-username-20251122/
 **Why it matters**: If a processor needs to read a file's modification time (because no JSON metadata exists), but the file gets copied or modified first, the timestamp will change to "now" instead of preserving the original date. This results in photos being dated to the processing date rather than the capture date.
 
 **When this happens**:
+
 - Instagram Old Format exports use UTC timestamps in filenames but also rely on file modification times as fallback
 - Some Google Photos items without JSON metadata use EXIF data and file times
 - **Snapchat Messages** - CRITICAL: Uses file modification timestamps to match overlay files to media files (explained below)
@@ -156,6 +214,7 @@ snapchat-username-20251122/
 Snapchat Messages has the most critical dependency on filesystem timestamps. The export provides media files (photos/videos) and overlay files (PNG with text/drawings/stickers) as separate files with no explicit links between them. The **only** way to determine which overlay belongs to which media file is by comparing their modification timestamps.
 
 What would happen if timestamps were corrupted:
+
 1. Original: `video.mp4` (timestamp: Jan 15 10:30:45), `overlay.png` (timestamp: Jan 15 10:30:45) → Matched ✓
 2. After corrupt copying: `video.mp4` (timestamp: Nov 22 15:00:01), `overlay.png` (timestamp: Nov 22 15:00:05) → Different by 4 seconds → No match ✗
 3. Result: Video processed without overlay, overlay never applied, your snap's text/drawings/stickers are lost
@@ -171,4 +230,3 @@ What would happen if timestamps were corrupted:
 - [Design Decisions](Design-Decisions.md) - Rationale for these behaviors
 - [FAQ](FAQ.md) - Common questions and answers
 - [Getting Started](Getting-Started.md) - Setup and preparation guide
-

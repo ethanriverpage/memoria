@@ -43,6 +43,7 @@ See: [Common Gotchas](Common-Gotchas.md#album-folders-are-not-preserved)
 ### Why are some of my photos missing?
 
 They're not missing - they're deduplicated. When the same photo appears in multiple albums, Memoria keeps only one copy. Check the deduplication summary at the end of processing:
+
 - "Media files copied" shows unique files processed
 - "Deduplicated files (not copied)" shows duplicate instances skipped
 
@@ -92,6 +93,76 @@ Google Voice exports typically only include media files from text conversations.
 
 Filenames include the phone number as it appears in the export, typically in E.164 format (e.g., `+1234567890`).
 
+## iMessage
+
+### What's the difference between Mac and iPhone exports?
+
+Both contain the same type of data (SQLite database + attachments), but the directory structure differs:
+
+- **Mac**: `chat.db` at root with `Attachments/` directory
+- **iPhone**: `SMS/sms.db` with `SMS/Attachments/` directory
+
+Memoria automatically detects and handles both formats.
+
+### How do I get contact names instead of phone numbers?
+
+Export your contacts as a vCard file (`contacts.vcf`) and place it alongside your message exports. Memoria will parse the vCard and map phone numbers/emails to display names.
+
+See: [iMessage Export Guide](iMessage-Export.md#contacts-file)
+
+### Can I process multiple iMessage exports together?
+
+Yes. Memoria supports cross-export consolidation for iMessage. When you process multiple exports together (using `--originals`), identical files are deduplicated across all exports while preserving metadata from each occurrence.
+
+### What are Live Photos and how are they handled?
+
+Live Photos combine a still image (HEIC) with a short video (MOV). iMessage stores these as separate files in the same directory. Memoria processes both components and marks the video with `[Live Photo Video]` in the metadata.
+
+### Why are some messages showing "me" as the sender?
+
+For outgoing messages, the iMessage database doesn't store the sender's name. Memoria displays "me" for messages you sent. The device identifier (e.g., `mac`, `iphone14`) is used in filenames and album names instead.
+
+### My iPhone backup is encrypted. Can Memoria process it?
+
+No. Encrypted iPhone backups must be decrypted first using tools like iMazing, iPhone Backup Extractor, or open-source alternatives. After decryption, extract the SMS directory and Memoria can process it normally.
+
+## Discord
+
+### Why are only my sent messages included?
+
+Discord's "Request My Data" export only includes messages sent by you. Received messages from other users are not included. This is a limitation of Discord's export system, not Memoria.
+
+### Why are some attachments missing or failed to download?
+
+Discord CDN URLs may expire over time. If you wait too long after receiving your export, some attachment URLs may no longer be valid. Process your export promptly after downloading it to minimize expired URLs.
+
+Additionally, attachments that were deleted from Discord before you requested your export will not be available.
+
+### How long does preprocessing take?
+
+Discord preprocessing involves downloading attachments from the internet, which can take time depending on:
+- Number of attachments
+- Your internet connection speed
+- Discord CDN response times
+
+Large exports with hundreds of attachments may take 30 minutes to several hours. Use `--workers N` to parallelize downloads and speed up the process.
+
+### What happens to non-media attachments?
+
+Non-media files (PDFs, archives, executables, etc.) are automatically skipped during preprocessing. Only media files (images, videos, audio) are downloaded and processed.
+
+### Can I see which downloads failed?
+
+Yes. Check the `preprocessing.log` file in the preprocessing output directory. It contains detailed information about each failed download, including the reason (expired URL, 404, network error, etc.).
+
+### Why are some channel names "Unknown channel"?
+
+If you left a server or a channel was deleted, Discord may not include full metadata in the export. These channels will appear as "Unknown channel" or "Unknown channel in {server_name}" in the metadata.
+
+### Are server names included in filenames?
+
+Server names are included in the metadata but not in filenames. Filenames use the channel name (e.g., `discord-username-general-20231015.jpg`). The full context including server name is available in the EXIF metadata description field.
+
 ## Instagram
 
 ### Some conversation media is missing. Why?
@@ -101,6 +172,7 @@ Instagram only includes media that hasn't expired. Photos and videos sent with "
 ### How do I know which export format I have?
 
 Instagram has changed export formats over time:
+
 - **New format**: Contains `media/posts/YYYYMM/` directories
 - **Messages**: Contains `your_instagram_activity/messages/inbox/`
 - **Old format**: Photos/videos in root with UTC timestamps in filenames
@@ -171,7 +243,9 @@ This is relatively rare - most messages contain only 1 video or don't have overl
 ### Do I need to create albums in Immich first?
 
 No. Memoria automatically creates albums during upload using the naming scheme:
+
 - `Google Photos/{username}`
+- `iMessage/{device}`
 - `Instagram/{username}/messages`
 - `Snapchat/{username}/memories`
 - etc.
@@ -199,6 +273,7 @@ See: [Upload Queuing](Upload-Queuing.md)
 ### Why are some of my photos dated to today instead of when they were taken?
 
 This should not happen with Memoria's built-in processors. If you see this:
+
 - Check if you're using a custom processor that might not handle timestamps correctly
 - Verify the original export files had proper metadata or filesystem timestamps
 - Report it as a bug if using official processors
@@ -208,6 +283,7 @@ Memoria's processors are specifically designed to read timestamps BEFORE any fil
 ### What timestamp sources does Memoria use?
 
 In order of preference:
+
 1. Platform-specific JSON/metadata files (highest priority)
 2. EXIF data already embedded in the file
 3. Filesystem modification times (fallback for files lacking metadata)
@@ -217,6 +293,7 @@ All timestamps are extracted during preprocessing, before any file operations th
 ### Can I adjust timestamps during processing?
 
 No. Memoria preserves original timestamps exactly as they appear in the export. If you need to adjust timestamps:
+
 - Use photo management software after processing
 - Use exiftool directly to modify timestamps
 - Or edit EXIF data in the output files after processing completes
@@ -234,12 +311,14 @@ See: [Parallel Processing](Parallel-Processing.md)
 Yes. Use `--originals /path/to/exports --parallel-exports N` to process N exports simultaneously. Balance this with `--workers` to avoid over-subscribing your CPU.
 
 Example for 16-core system:
+
 - `--parallel-exports 2 --workers 7` (good)
 - `--parallel-exports 4 --workers 3` (good)
 
 ### Processing is using too much RAM. What can I do?
 
 Reduce parallelism:
+
 - Lower `--workers` count
 - Lower `--parallel-exports` count
 - Process one export at a time
@@ -253,25 +332,29 @@ Probably not. Parallel processing is best for fast NVMe SSDs. On HDDs or network
 ### "exiftool is not installed"
 
 Install exiftool for your platform:
+
 - **macOS**: `brew install exiftool`
 - **Linux**: `sudo apt-get install libimage-exiftool-perl`
-- **Windows**: Download from https://exiftool.org/
+- **Windows**: Download from <https://exiftool.org/>
 
 ### "ffmpeg not found"
 
 Install ffmpeg:
+
 - **macOS**: `brew install ffmpeg`
 - **Linux**: `sudo apt-get install ffmpeg`
-- **Windows**: Download from https://ffmpeg.org/
+- **Windows**: Download from <https://ffmpeg.org/>
 
 ### "No processors matched input directory"
 
 Possible causes:
+
 - Directory structure doesn't match any supported platform format
 - Export is incomplete or corrupted
 - Directory naming doesn't follow conventions
 
 Solutions:
+
 - Run `./memoria.py --list-processors` to see available processors
 - Check platform-specific guides for required directory structure
 - Verify export was fully extracted
@@ -279,6 +362,7 @@ Solutions:
 ### Import errors when running memoria.py
 
 Try installing in development mode:
+
 ```bash
 pip install -e .
 ```
@@ -288,6 +372,7 @@ This makes the `common` module and processors properly available.
 ### Processing completed but output directory is empty
 
 Check:
+
 - Did processing actually succeed? Look for error messages
 - Are you looking in the correct output directory?
 - Did you use `--skip-upload` when you meant to process files?
@@ -301,6 +386,7 @@ Check:
 ### "Too many open files" error
 
 Increase system limits:
+
 ```bash
 ulimit -n 4096
 ```
@@ -312,5 +398,4 @@ This is common when processing very large exports with high parallelism.
 - [Common Gotchas](Common-Gotchas.md) - Important behaviors to know
 - [Getting Started](Getting-Started.md) - Installation and setup
 - [Usage](Usage.md) - Complete command-line reference
-- Platform guides: [Google](Google-Export.md), [Instagram](Instagram-Export.md), [Snapchat](Snapchat-Export.md)
-
+- Platform guides: [Google](Google-Export.md), [iMessage](iMessage-Export.md), [Discord](Discord-Export.md), [Instagram](Instagram-Export.md), [Snapchat](Snapchat-Export.md)

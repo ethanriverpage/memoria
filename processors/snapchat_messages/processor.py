@@ -17,7 +17,7 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Optional
 
-from tqdm import tqdm
+from common.progress import PHASE_PROCESS, progress_bar
 
 # Import overlay embedding functions
 from common.overlay import (
@@ -885,16 +885,17 @@ def process_logic(
                 initargs=(log_filename,),
             ) as pool:
                 results = list(
-                    tqdm(
+                    progress_bar(
                         pool.imap(_create_file_worker, process_args),
+                        PHASE_PROCESS,
+                        "Creating files",
                         total=len(process_args),
-                        desc="Creating files with overlays",
                     )
                 )
         else:
             # Single-threaded for debugging
             results = []
-            for args_tuple in tqdm(process_args, desc="Creating files with overlays"):
+            for args_tuple in progress_bar(process_args, PHASE_PROCESS, "Creating files"):
                 results.append(_create_file_worker(args_tuple))
 
         # Phase 2: Collect non-MKV files for batch EXIF processing

@@ -259,8 +259,12 @@ class FailureTracker:
             if not filename:
                 filename = f"orphaned_metadata_{idx:04d}"
             
-            # Ensure filename is safe
+            # Ensure filename is safe and not too long
+            # Max filename length on most filesystems is 255 bytes
+            # Reserve space for .json extension and potential counter suffix
             filename = "".join(c if c.isalnum() or c in "-_" else "_" for c in filename)
+            if len(filename) > 200:
+                filename = filename[:200]
             dest_path = dest_dir / f"{filename}.json"
             
             # Handle filename collisions
