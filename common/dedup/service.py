@@ -17,15 +17,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.dedup_config import DedupConfig, get_dedup_config
-from common.description_builder import (
+from common.dedup.config import DedupConfig, get_dedup_config
+from common.dedup.description import (
     SourceEntry,
     build_image_description,
     create_source_entry,
 )
-from common.hash_database import HashDatabase
-from common.perceptual_hash import compute_content_hash, hash_similarity
-from common.progress import PHASE_DEDUP, progress_bar
+from common.dedup.database import HashDatabase
+from common.dedup.hashing import compute_content_hash, hash_similarity
+from common.output.progress import PHASE_DEDUP, progress_bar
 
 logger = logging.getLogger(__name__)
 

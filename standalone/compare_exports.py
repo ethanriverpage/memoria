@@ -24,7 +24,7 @@ from collections import defaultdict
 # Add parent directory to path for imports when running standalone
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from common.logging_config import setup_logging
+from common.output.logging import setup_logging
 
 # Try to import tqdm for progress bars
 try:

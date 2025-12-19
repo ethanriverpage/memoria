@@ -1,24 +1,18 @@
 #!/usr/bin/env python3
-"""
-Media file cataloging utilities for cross-processor deduplication.
-
-Provides shared functionality for building file catalogs with content hashes,
-perceptual hashes, and metadata. Used by processor build_catalog() methods
-to reduce code duplication.
-"""
+"""Media file cataloging utilities for cross-processor deduplication."""
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from common.dedup_config import get_dedup_config
-from common.perceptual_hash import (
+from common.dedup.config import get_dedup_config
+from common.dedup.hashing import (
     compute_content_hash,
     compute_perceptual_hash_with_dims,
     get_media_dimensions,
 )
-from common.progress import PHASE_CATALOG, futures_progress
+from common.output.progress import PHASE_CATALOG, futures_progress
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +70,7 @@ def catalog_media_files(
         }
 
     Example:
-        >>> from common.catalog import catalog_media_files
+        >>> from common.dedup.catalog import catalog_media_files
         >>> media_files = list(input_path.rglob("*.jpg"))
         >>> catalog = catalog_media_files(
         ...     processor_name="Google Photos",

@@ -11,8 +11,12 @@ from common.media.exiftool import (
     GPSData,
     DescriptionWriteSpec,
     MetadataWriteRequest,
-    batch_write_metadata,
-    build_metadata_request,
+    batch_write_metadata_requests,
+    batch_read_existing_metadata,
+    batch_validate_exif,
+    batch_rebuild_exif,
+    DEFAULT_PREAMBLE,
+    PREAMBLE_WITH_IGNORE_ERRORS,
 )
 from common.media.encoder import (
     get_video_bitrate,
@@ -31,8 +35,12 @@ __all__ = [
     "GPSData",
     "DescriptionWriteSpec",
     "MetadataWriteRequest",
-    "batch_write_metadata",
-    "build_metadata_request",
+    "batch_write_metadata_requests",
+    "batch_read_existing_metadata",
+    "batch_validate_exif",
+    "batch_rebuild_exif",
+    "DEFAULT_PREAMBLE",
+    "PREAMBLE_WITH_IGNORE_ERRORS",
     # Encoder
     "get_video_bitrate",
     "get_encoder_args",
@@ -41,4 +49,3 @@ __all__ = [
     "get_software_encoder_args",
     "is_hardware_accelerated",
 ]
-

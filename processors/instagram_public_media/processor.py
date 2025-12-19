@@ -15,12 +15,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.catalog import catalog_media_files
-from common.dedup_service import is_file_primary_by_hash
+from common.dedup.catalog import catalog_media_files
+from common.dedup.service import is_file_primary_by_hash
 from common.dependency_checker import check_exiftool, print_exiftool_error
-from common.file_utils import batch_correct_extensions
-from common.perceptual_hash import compute_content_hash
-from common.exiftool_batch import (
+from common.files.utils import batch_correct_extensions
+from common.dedup.hashing import compute_content_hash
+from common.media.exiftool import (
     batch_validate_exif,
     batch_rebuild_exif,
     batch_read_existing_metadata,
@@ -33,7 +33,7 @@ from common.processing import (
     print_processing_summary,
     temp_processing_directory,
 )
-from common.progress import PHASE_PROCESS, progress_bar
+from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import (
     ALL_MEDIA_EXTENSIONS,
     extract_username_from_export_dir,

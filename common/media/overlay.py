@@ -41,7 +41,7 @@ except ImportError:
     sys.exit(1)
 
 # Import video encoder detection
-from common.video_encoder import (
+from common.media.encoder import (
     get_encoder_args,
     get_encoder_input_args,
     get_encoder_name,

@@ -23,7 +23,7 @@ from threading import Lock
 
 from common.processing import print_preprocessing_stats
 from common.utils import ALL_MEDIA_EXTENSIONS, default_worker_count
-from common.filter_banned_files import BannedFilesFilter
+from common.files.filter import BannedFilesFilter
 from common.failure_tracker import FailureTracker
 
 # Set up logging

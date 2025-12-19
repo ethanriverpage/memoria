@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Iterator, Optional, Set
 
-from common.filter_banned_files import BannedFilesFilter
+from common.files.filter import BannedFilesFilter
 from common.utils import ALL_MEDIA_EXTENSIONS
 
 
@@ -43,8 +43,8 @@ def iter_media_files(
         Path objects for each matching media file
 
     Example:
-        >>> from common.file_scanner import iter_media_files
-        >>> from common.filter_banned_files import BannedFilesFilter
+        >>> from common.files.scanner import iter_media_files
+        >>> from common.files.filter import BannedFilesFilter
         >>> banned = BannedFilesFilter()
         >>> for media_file in iter_media_files(Path("/exports/photos"), banned):
         ...     print(media_file)

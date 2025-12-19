@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from common.catalog import catalog_media_files
+from common.dedup.catalog import catalog_media_files
 
 
 class TestCatalogMediaFiles:
@@ -189,7 +189,7 @@ class TestCatalogMediaFiles:
         media_files = list(temp_media_dir.glob("*.jpg"))
 
         # Mock the config to disable perceptual hashing
-        with patch("common.catalog.get_dedup_config") as mock_config:
+        with patch("common.dedup.catalog.get_dedup_config") as mock_config:
             mock_config.return_value.use_perceptual = False
 
             catalog = catalog_media_files(

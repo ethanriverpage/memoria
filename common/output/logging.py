@@ -11,7 +11,7 @@ Log Level Conventions:
     ERROR   - Failures that stop processing or require user attention
 
 Example:
-    >>> from common.logging_config import setup_logging, get_logger
+    >>> from common.output.logging import setup_logging, get_logger
     >>> setup_logging(verbose=True, log_file="processing.log")
     >>> logger = get_logger(__name__)
     >>> logger.info("Processing started")
@@ -24,7 +24,7 @@ from typing import List, Optional
 
 from rich.logging import RichHandler
 
-from common.console import console
+from common.output.console import console
 
 # =============================================================================
 # Format Constants - Single source of truth for log formats

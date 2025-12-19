@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
-from common.dedup_config import get_dedup_config
+from common.dedup.config import get_dedup_config
 
 logger = logging.getLogger(__name__)
 

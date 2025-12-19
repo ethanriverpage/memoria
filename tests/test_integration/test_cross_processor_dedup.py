@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-from common.dedup_config import DedupConfig, reset_config
-from common.dedup_service import (
+from common.dedup.config import DedupConfig, reset_config
+from common.dedup.service import (
     DeduplicationService,
     save_manifest,
     load_manifest,
@@ -18,8 +18,8 @@ from common.dedup_service import (
     is_file_primary_by_hash,
     build_dedup_references,
 )
-from common.hash_database import HashDatabase
-from common.perceptual_hash import (
+from common.dedup.database import HashDatabase
+from common.dedup.hashing import (
     is_live_photo_pair,
     find_live_photo_video,
     LivePhotoEntry,
@@ -239,7 +239,7 @@ class TestConfigurationBehavior:
 
     def test_dedup_disabled_by_default(self):
         """Test that deduplication is disabled by default."""
-        from common.dedup_config import is_dedup_enabled
+        from common.dedup.config import is_dedup_enabled
 
         assert is_dedup_enabled() is False
 
@@ -247,7 +247,7 @@ class TestConfigurationBehavior:
         """Test enabling dedup via environment variable."""
         with patch.dict(os.environ, {"CROSS_PROCESSOR_DEDUP": "true"}):
             reset_config()
-            from common.dedup_config import is_dedup_enabled
+            from common.dedup.config import is_dedup_enabled
 
             assert is_dedup_enabled() is True
 
@@ -255,7 +255,7 @@ class TestConfigurationBehavior:
         """Test perceptual threshold configuration."""
         with patch.dict(os.environ, {"DEDUP_PERCEPTUAL_THRESHOLD": "0.85"}):
             reset_config()
-            from common.dedup_config import get_dedup_config
+            from common.dedup.config import get_dedup_config
 
             config = get_dedup_config()
             assert config.perceptual_threshold == 0.85
@@ -265,7 +265,7 @@ class TestConfigurationBehavior:
         custom_path = str(temp_dir / "custom.db")
         with patch.dict(os.environ, {"DEDUP_DATABASE_PATH": custom_path}):
             reset_config()
-            from common.dedup_config import get_dedup_config
+            from common.dedup.config import get_dedup_config
 
             config = get_dedup_config()
             assert str(config.database_path) == custom_path

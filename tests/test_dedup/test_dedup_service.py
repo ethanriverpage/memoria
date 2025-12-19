@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from common.dedup_config import DedupConfig
-from common.dedup_service import (
+from common.dedup.config import DedupConfig
+from common.dedup.service import (
     DeduplicationService,
     filter_primary_files,
     is_file_primary,
@@ -18,7 +18,7 @@ from common.dedup_service import (
     build_dedup_references,
     get_skipped_secondary_files,
 )
-from common.hash_database import HashDatabase
+from common.dedup.database import HashDatabase
 
 
 @pytest.fixture
@@ -738,7 +738,7 @@ class TestFilterPrimaryFiles:
         secondary_file.write_bytes(b"secondary content")
 
         # Compute actual hashes
-        from common.perceptual_hash import compute_content_hash
+        from common.dedup.hashing import compute_content_hash
 
         primary_hash = compute_content_hash(primary_file)
         secondary_hash = compute_content_hash(secondary_file)
@@ -776,7 +776,7 @@ class TestFilterPrimaryFiles:
         file1 = tmp_path / "a.jpg"
         file1.write_bytes(b"unique content abc")
 
-        from common.perceptual_hash import compute_content_hash
+        from common.dedup.hashing import compute_content_hash
 
         file_hash = compute_content_hash(file1)
 

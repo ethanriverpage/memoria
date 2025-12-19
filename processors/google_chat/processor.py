@@ -14,12 +14,12 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.catalog import catalog_media_files
-from common.dedup_service import filter_primary_files
+from common.dedup.catalog import catalog_media_files
+from common.dedup.service import filter_primary_files
 from common.dependency_checker import check_exiftool, print_exiftool_error
-from common.file_utils import batch_correct_extensions
-from common.perceptual_hash import compute_content_hash
-from common.exiftool_batch import (
+from common.files.utils import batch_correct_extensions
+from common.dedup.hashing import compute_content_hash
+from common.media.exiftool import (
     batch_validate_exif,
     batch_rebuild_exif,
     batch_read_existing_metadata,
@@ -484,7 +484,7 @@ def _process_working_directory(
                 # Skip secondary files based on dedup manifest (using hash-based lookup)
                 if dedup_manifest:
                     content_hash = compute_content_hash(full_path)
-                    from common.dedup_service import is_file_primary_by_hash
+                    from common.dedup.service import is_file_primary_by_hash
 
                     if not is_file_primary_by_hash(
                         dedup_manifest, content_hash, "Google Chat"

@@ -8,17 +8,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.catalog import catalog_media_files
+from common.dedup.catalog import catalog_media_files
 from common.dependency_checker import check_exiftool, print_exiftool_error
-from common.file_utils import batch_correct_extensions
-from common.dedup_service import is_file_primary_by_hash, save_dedup_metadata
-from common.perceptual_hash import (
+from common.files.utils import batch_correct_extensions
+from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
+from common.dedup.hashing import (
     compute_content_hash,
     is_live_photo_pair,
     LIVE_PHOTO_IMAGE_EXTENSIONS,
     LIVE_PHOTO_VIDEO_EXTENSIONS,
 )
-from common.exiftool_batch import (
+from common.media.exiftool import (
     batch_validate_exif,
     batch_rebuild_exif,
     batch_read_existing_metadata,

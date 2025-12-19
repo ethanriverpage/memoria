@@ -19,15 +19,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional
 
-from common.console import console
-from common.progress import PHASE_PROCESS, progress_bar
+from common.output.console import console
+from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import should_cleanup_temp
 
 
 def get_preprocessing_cache_path(input_dir: Path, processor_name: str) -> Path:
     """Get deterministic cache path for preprocessing a specific export."""
     # Import here to avoid circular imports
-    from common.dedup_config import get_dedup_config
+    from common.dedup.config import get_dedup_config
 
     config = get_dedup_config()
     cache_base = config.preprocessing_cache_dir.resolve()
@@ -60,7 +60,7 @@ def is_preprocessing_cache_valid(cache_path: Path) -> bool:
 
 def cleanup_preprocessing_cache() -> None:
     """Clean up preprocessing cache (respects CLEANUP_PREPROCESSING_CACHE env var)."""
-    from common.dedup_config import get_dedup_config
+    from common.dedup.config import get_dedup_config
 
     cleanup_enabled = os.environ.get("CLEANUP_PREPROCESSING_CACHE", "true").lower() in (
         "true",

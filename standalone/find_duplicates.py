@@ -18,8 +18,8 @@ import xxhash
 
 # Import utilities from common module
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from common.file_scanner import collect_media_files as _collect_media_files
-from common.filter_banned_files import BannedFilesFilter
+from common.files.scanner import collect_media_files as _collect_media_files
+from common.files.filter import BannedFilesFilter
 
 
 def calculate_file_hash(filepath: Path) -> Tuple[Optional[str], Path]:

@@ -22,10 +22,10 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 
 from common.processing import print_preprocessing_stats
-from common.progress import PHASE_PREPROCESS, futures_progress
+from common.output.progress import PHASE_PREPROCESS, futures_progress
 
 from common.utils import ALL_MEDIA_EXTENSIONS, default_worker_count
-from common.filter_banned_files import BannedFilesFilter
+from common.files.filter import BannedFilesFilter
 from common.failure_tracker import FailureTracker
 
 # Set up logging

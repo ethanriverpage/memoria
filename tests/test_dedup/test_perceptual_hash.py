@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from common.perceptual_hash import (
+from common.dedup.hashing import (
     hamming_distance,
     hash_similarity,
     are_similar,
@@ -143,7 +143,7 @@ class TestComputePerceptualHashWithDims:
         result = compute_perceptual_hash_with_dims(Path("/path/file.txt"))
         assert result == (None, None)
 
-    @patch("common.perceptual_hash.PERCEPTION_AVAILABLE", False)
+    @patch("common.dedup.hashing.PERCEPTION_AVAILABLE", False)
     def test_returns_none_when_unavailable(self):
         """Test returns (None, None) when perception not available."""
         result = compute_perceptual_hash_with_dims(Path("/path/file.jpg"))
@@ -153,7 +153,7 @@ class TestComputePerceptualHashWithDims:
 class TestComputeImageHash:
     """Tests for compute_image_hash function."""
 
-    @patch("common.perceptual_hash.PERCEPTION_AVAILABLE", False)
+    @patch("common.dedup.hashing.PERCEPTION_AVAILABLE", False)
     def test_returns_none_when_unavailable(self):
         """Test returns None when perception not available."""
         result = compute_image_hash(Path("/path/file.jpg"))

@@ -31,23 +31,23 @@ sys.path.insert(0, str(Path(__file__).parent))
 logger = logging.getLogger(__name__)
 
 from processors.registry import ProcessorRegistry  # noqa: E402
-from common.logging_config import (  # noqa: E402
+from common.output.logging import (  # noqa: E402
     setup_logging,
     add_export_log_handler,
     remove_export_log_handler,
 )
-from common.env_loader import load_dotenv_file  # noqa: E402
+from common.config.env import load_dotenv_file  # noqa: E402
 from common.dependency_checker import (  # noqa: E402
     check_immich_cli,
     print_immich_error,
 )
-from common.upload_targets import build_upload_targets  # noqa: E402
-from common.immich_uploader import verify_auth, upload as immich_upload  # noqa: E402
-from common.processor_config import get_effective_output_dir  # noqa: E402
-from common.dedup_config import is_dedup_enabled, get_dedup_config  # noqa: E402
-from common.dedup_service import DeduplicationService, save_manifest  # noqa: E402
-from common.hash_database import HashDatabase  # noqa: E402
-from common.console import console, section_header, phase_header  # noqa: E402
+from common.upload.targets import build_upload_targets  # noqa: E402
+from common.upload.immich import verify_auth, upload as immich_upload  # noqa: E402
+from common.config.processor import get_effective_output_dir  # noqa: E402
+from common.dedup.config import is_dedup_enabled, get_dedup_config  # noqa: E402
+from common.dedup.service import DeduplicationService, save_manifest  # noqa: E402
+from common.dedup.database import HashDatabase  # noqa: E402
+from common.output.console import console, section_header, phase_header  # noqa: E402
 
 
 def upload_worker_thread(
@@ -202,7 +202,7 @@ def _build_catalog_worker(
         Tuple of (export_dir_name, list_of_catalogs).
     """
     from processors.registry import ProcessorRegistry
-    from common.logging_config import init_worker_logging
+    from common.output.logging import init_worker_logging
 
     # Mark as subprocess to disable progress bars and prevent interleaved output
     os.environ["_MEMORIA_SUBPROCESS"] = "1"
@@ -571,7 +571,7 @@ def _process_export_worker(
     sys.path.insert(0, str(Path(__file__).parent))
     # Reimport needed for pickled worker processes
     from processors.registry import ProcessorRegistry  # noqa: F811
-    from common.logging_config import (  # noqa: F811
+    from common.output.logging import (  # noqa: F811
         add_export_log_handler,
         remove_export_log_handler,
     )

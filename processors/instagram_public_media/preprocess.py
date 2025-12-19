@@ -18,10 +18,10 @@ import argparse
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
-from common.filter_banned_files import BannedFilesFilter
+from common.files.filter import BannedFilesFilter
 from common.utils import default_worker_count
 from common.processing import print_preprocessing_stats
-from common.progress import PHASE_PREPROCESS, futures_progress
+from common.output.progress import PHASE_PREPROCESS, futures_progress
 from common.failure_tracker import FailureTracker
 
 # Set up logging

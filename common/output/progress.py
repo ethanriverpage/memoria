@@ -20,7 +20,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from common.console import console
+from common.output.console import console
 
 # Phase constants for consistent naming
 PHASE_PREPROCESS = "Preprocess"

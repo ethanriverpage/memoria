@@ -8,10 +8,10 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.catalog import catalog_media_files
-from common.dedup_service import is_file_primary_by_hash
-from common.file_utils import batch_correct_extensions
-from common.perceptual_hash import compute_content_hash
+from common.dedup.catalog import catalog_media_files
+from common.dedup.service import is_file_primary_by_hash
+from common.files.utils import batch_correct_extensions
+from common.dedup.hashing import compute_content_hash
 from common.dependency_checker import (
     check_exiftool,
     check_ffmpeg,
@@ -20,7 +20,7 @@ from common.dependency_checker import (
     print_ffmpeg_error,
     print_pillow_error,
 )
-from common.exiftool_batch import (
+from common.media.exiftool import (
     batch_validate_exif,
     batch_rebuild_exif,
     batch_read_existing_metadata,
@@ -29,8 +29,8 @@ from common.exiftool_batch import (
     DescriptionWriteSpec,
     MetadataWriteRequest,
 )
-from common.logging_config import init_worker_logging
-from common.overlay import (
+from common.output.logging import init_worker_logging
+from common.media.overlay import (
     create_image_with_overlay,
     create_video_with_overlay,
 )
@@ -40,7 +40,7 @@ from common.processing import (
     print_processing_summary,
     temp_processing_directory,
 )
-from common.progress import PHASE_PROCESS, progress_bar
+from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import (
     default_worker_count,
     extract_username_from_export_dir,

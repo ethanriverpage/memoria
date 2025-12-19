@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from common.hash_database import HashDatabase
+from common.dedup.database import HashDatabase
 
 
 @pytest.fixture

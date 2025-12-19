@@ -22,10 +22,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 from common.failure_tracker import FailureTracker
-from common.perceptual_hash import compute_content_hash
+from common.dedup.hashing import compute_content_hash
 from common.processing import print_preprocessing_stats
-from common.progress import PHASE_PREPROCESS, progress_bar
-from common.filter_banned_files import BannedFilesFilter
+from common.output.progress import PHASE_PREPROCESS, progress_bar
+from common.files.filter import BannedFilesFilter
 from common.utils import default_worker_count, get_media_type
 from processors.imessage.vcard_parser import VCardParser
 

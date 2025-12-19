@@ -24,12 +24,12 @@ from urllib.parse import urlparse, unquote
 
 import requests
 
-from common.filter_banned_files import BannedFilesFilter
-from common.perceptual_hash import compute_content_hash
+from common.files.filter import BannedFilesFilter
+from common.dedup.hashing import compute_content_hash
 from common.utils import default_worker_count, extract_username_from_export_dir
 from common.failure_tracker import FailureTracker
 from common.processing import print_preprocessing_stats
-from common.progress import PHASE_PREPROCESS, futures_progress
+from common.output.progress import PHASE_PREPROCESS, futures_progress
 
 # Set up logging
 logger = logging.getLogger(__name__)

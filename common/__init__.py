@@ -3,11 +3,19 @@ Common modules shared across all media processors.
 
 This package contains utilities and functionality that is used by multiple processors,
 avoiding code duplication and ensuring consistency.
+
+Subpackages:
+    - common.dedup: Deduplication (hashing, database, service)
+    - common.media: Media processing (exiftool, overlay, encoder)
+    - common.files: File operations (copy, scan, filter)
+    - common.config: Configuration (processor, env)
+    - common.output: Output utilities (console, logging, progress)
+    - common.upload: Upload utilities (immich, targets)
 """
 
-# File scanning and filtering
-from .filter_banned_files import BannedFilesFilter
-from .file_scanner import collect_media_files, iter_media_files
+# File scanning and filtering (from files subpackage)
+from .files.filter import BannedFilesFilter
+from .files.scanner import collect_media_files, iter_media_files
 
 # Re-export ProcessorBase and ProcessorRegistry from processors package for convenience
 try:
@@ -16,7 +24,7 @@ try:
 except Exception:
     pass
 
-# Utility functions
+# Utility functions (kept in common root)
 from .utils import (
     extract_username_from_export_dir,
     sanitize_filename,
@@ -36,10 +44,10 @@ from .utils import (
     LIVE_PHOTO_VIDEO_EXTENSIONS,
 )
 
-# Logging configuration
-from .logging_config import setup_logging, get_logger
+# Logging configuration (from output subpackage)
+from .output.logging import setup_logging, get_logger
 
-# Dependency checking
+# Dependency checking (kept in common root)
 from .dependency_checker import (
     check_exiftool,
     check_ffmpeg,
@@ -47,7 +55,7 @@ from .dependency_checker import (
     print_ffmpeg_error,
 )
 
-# Processing utilities
+# Processing utilities (kept in common root)
 from .processing import (
     temp_processing_directory,
     print_processing_summary,
@@ -55,8 +63,8 @@ from .processing import (
     process_batches_parallel,
 )
 
-# Progress bars
-from .progress import (
+# Progress bars (from output subpackage)
+from .output.progress import (
     progress_bar,
     futures_progress,
     chunked_progress,

@@ -6,7 +6,7 @@ for coordinated terminal output. Using a shared console ensures that Rich's
 logging handler and progress bars do not conflict with each other.
 
 Example:
-    >>> from common.console import console, section_header
+    >>> from common.output.console import console, section_header
     >>> console.print("[bold green]Success![/]")
     >>> section_header("Processing Export")
 """

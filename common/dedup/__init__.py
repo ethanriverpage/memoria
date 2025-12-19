@@ -8,16 +8,31 @@ This package provides:
 - Metadata merging and description building
 """
 
-from common.dedup.config import DedupConfig, get_dedup_config
+from common.dedup.config import DedupConfig, get_dedup_config, is_dedup_enabled, reset_config
 from common.dedup.database import HashDatabase
 from common.dedup.hashing import (
     compute_content_hash,
-    compute_perceptual_hash,
+    compute_image_hash,
+    compute_image_hash_with_dims,
+    compute_video_hash_with_dims,
     compute_perceptual_hash_with_dims,
     get_media_dimensions,
+    get_image_dimensions,
+    get_video_dimensions,
     hash_similarity,
+    hamming_distance,
+    are_similar,
+    is_perceptual_hash_available,
+    # Live Photo utilities
+    LivePhotoEntry,
+    is_live_photo_pair,
+    find_live_photo_video,
+    find_live_photo_pairs,
+    get_live_photo_content_hash,
+    # Constants
     PERCEPTION_AVAILABLE,
     HEIC_AVAILABLE,
+    DEFAULT_HASH_SIZE,
 )
 from common.dedup.catalog import catalog_media_files
 from common.dedup.description import (
@@ -25,6 +40,11 @@ from common.dedup.description import (
     build_image_description,
     create_source_entry,
     truncate_text,
+    format_timestamp,
+    format_primary_source,
+    format_secondary_source,
+    merge_descriptions,
+    parse_source_from_description,
 )
 from common.dedup.service import (
     DeduplicationService,
@@ -46,16 +66,31 @@ __all__ = [
     # Config
     "DedupConfig",
     "get_dedup_config",
+    "is_dedup_enabled",
+    "reset_config",
     # Database
     "HashDatabase",
     # Hashing
     "compute_content_hash",
-    "compute_perceptual_hash",
+    "compute_image_hash",
+    "compute_image_hash_with_dims",
+    "compute_video_hash_with_dims",
     "compute_perceptual_hash_with_dims",
     "get_media_dimensions",
+    "get_image_dimensions",
+    "get_video_dimensions",
     "hash_similarity",
+    "hamming_distance",
+    "are_similar",
+    "is_perceptual_hash_available",
+    "LivePhotoEntry",
+    "is_live_photo_pair",
+    "find_live_photo_video",
+    "find_live_photo_pairs",
+    "get_live_photo_content_hash",
     "PERCEPTION_AVAILABLE",
     "HEIC_AVAILABLE",
+    "DEFAULT_HASH_SIZE",
     # Catalog
     "catalog_media_files",
     # Description
@@ -63,6 +98,11 @@ __all__ = [
     "build_image_description",
     "create_source_entry",
     "truncate_text",
+    "format_timestamp",
+    "format_primary_source",
+    "format_secondary_source",
+    "merge_descriptions",
+    "parse_source_from_description",
     # Service
     "DeduplicationService",
     "save_manifest",
@@ -78,4 +118,3 @@ __all__ = [
     "get_skipped_secondary_files",
     "save_dedup_metadata",
 ]
-

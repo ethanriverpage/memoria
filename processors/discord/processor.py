@@ -14,15 +14,15 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.catalog import catalog_media_files
-from common.dedup_service import is_file_primary_by_hash, save_dedup_metadata
-from common.file_utils import batch_correct_extensions
-from common.perceptual_hash import compute_content_hash
+from common.dedup.catalog import catalog_media_files
+from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
+from common.files.utils import batch_correct_extensions
+from common.dedup.hashing import compute_content_hash
 from common.dependency_checker import (
     check_exiftool,
     print_exiftool_error,
 )
-from common.exiftool_batch import (
+from common.media.exiftool import (
     batch_read_existing_metadata,
     batch_rebuild_exif,
     batch_validate_exif,
@@ -37,7 +37,7 @@ from common.processing import (
     print_processing_summary,
     temp_processing_directory,
 )
-from common.progress import PHASE_PROCESS, progress_bar
+from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import (
     default_worker_count,
     FilenameGenerator,

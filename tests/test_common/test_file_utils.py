@@ -8,7 +8,7 @@ file extensions based on actual file content using python-magic.
 import pytest
 from pathlib import Path
 
-from common.file_utils import batch_correct_extensions
+from common.files.utils import batch_correct_extensions
 from tests.fixtures.media_samples import MINIMAL_JPEG, MINIMAL_PNG, MINIMAL_MP4
 
 

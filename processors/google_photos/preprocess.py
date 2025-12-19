@@ -20,12 +20,12 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 
-from common.progress import PHASE_PREPROCESS, futures_progress
+from common.output.progress import PHASE_PREPROCESS, futures_progress
 from common.processing import print_preprocessing_stats
-from common.perceptual_hash import compute_content_hash
+from common.dedup.hashing import compute_content_hash
 
 from common.utils import ALL_MEDIA_EXTENSIONS, default_worker_count
-from common.filter_banned_files import BannedFilesFilter
+from common.files.filter import BannedFilesFilter
 from common.failure_tracker import FailureTracker
 
 # Set up logging

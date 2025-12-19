@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from common.progress import PHASE_EXIF, chunked_progress
+from common.output.progress import PHASE_EXIF, chunked_progress
 from common.utils import get_media_type, get_gps_format
 
 logger = logging.getLogger(__name__)
@@ -198,7 +198,7 @@ def _get_description_for_file(
         return default_description
 
     # Import here to avoid circular imports
-    from common.dedup_service import get_merged_description_for_file
+    from common.dedup.service import get_merged_description_for_file
 
     merged = get_merged_description_for_file(dedup_manifest, file_path)
     if merged:

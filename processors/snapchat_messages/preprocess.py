@@ -19,8 +19,8 @@ import sys
 import argparse
 from threading import Lock
 
-from common.filter_banned_files import BannedFilesFilter
-from common.perceptual_hash import compute_content_hash
+from common.files.filter import BannedFilesFilter
+from common.dedup.hashing import compute_content_hash
 from common.utils import default_worker_count
 from common.failure_tracker import FailureTracker
 from common.processing import print_preprocessing_stats

@@ -3,7 +3,7 @@
 
 from datetime import datetime
 
-from common.description_builder import (
+from common.dedup.description import (
     SourceEntry,
     truncate_text,
     format_timestamp,
