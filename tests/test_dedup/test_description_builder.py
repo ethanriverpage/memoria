@@ -350,6 +350,16 @@ class TestBuildMessageContext:
         result = build_message_context(entry)
         assert result == '  - in "#photos in Gaming Server"'
 
+    def test_content_only(self):
+        """Test message context with content only (no sender or conversation)."""
+        entry = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            content="A caption for this photo",
+        )
+        result = build_message_context(entry)
+        # Should NOT have a colon before content when there's no sender/conversation
+        assert result == '  - "A caption for this photo"'
+
     def test_empty_context(self):
         """Test empty context returns empty string."""
         entry = SourceEntry(processor=PLATFORM_GOOGLE)

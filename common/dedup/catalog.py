@@ -293,11 +293,16 @@ def catalog_media_files(
                 yield entry
 
     # Batch write cache entries after parallel processing (avoids lock contention)
+    # Write in chunks of 1000 to bound memory usage during executemany
     if cache_entries_to_write and db_path is not None:
         from common.dedup.database import HashDatabase
 
         db = HashDatabase(db_path)
-        written = db.cache_hashes_batch(cache_entries_to_write)
+        written = 0
+        chunk_size = 1000
+        for i in range(0, len(cache_entries_to_write), chunk_size):
+            chunk = cache_entries_to_write[i : i + chunk_size]
+            written += db.cache_hashes_batch(chunk)
         logger.debug(f"Cached {written} hashes: {export_name}")
 
     # Log cache statistics

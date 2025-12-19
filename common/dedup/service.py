@@ -31,33 +31,32 @@ logger = logging.getLogger(__name__)
 
 
 def _compare_hash_chunk(
-    args: Tuple[List[Tuple[int, int, str, str]], float],
+    args: Tuple[List[Tuple[int, int, int, int]], float, int],
 ) -> List[Tuple[int, int, float]]:
     """Compare a chunk of hash pairs for similarity (multiprocessing worker).
 
     This function is designed to be called by ProcessPoolExecutor for parallel
-    perceptual hash comparison. It processes a batch of hash pairs and returns
-    only those that meet the similarity threshold.
+    perceptual hash comparison. It processes a batch of pre-converted integer
+    hash pairs and returns only those that meet the similarity threshold.
 
     Args:
-        args: Tuple of (chunk, threshold) where:
-            - chunk: List of (index_i, index_j, hash_i, hash_j) tuples
+        args: Tuple of (chunk, threshold, total_bits) where:
+            - chunk: List of (index_i, index_j, int_hash_i, int_hash_j) tuples
             - threshold: Minimum similarity to be considered a match
+            - total_bits: Number of bits in the hash (256 for 64-char hex)
 
     Returns:
         List of (index_i, index_j, similarity) tuples for matches above threshold.
     """
-    chunk, threshold = args
+    chunk, threshold, total_bits = args
     matches = []
 
-    for i, j, hash1, hash2 in chunk:
-        try:
-            similarity = hash_similarity(hash1, hash2)
-            if similarity >= threshold:
-                matches.append((i, j, similarity))
-        except (ValueError, TypeError):
-            # Skip pairs with incompatible hashes
-            continue
+    for i, j, int1, int2 in chunk:
+        # Inline bit counting for performance (avoids function call overhead)
+        distance = (int1 ^ int2).bit_count()
+        similarity = 1.0 - (distance / total_bits)
+        if similarity >= threshold:
+            matches.append((i, j, similarity))
 
     return matches
 
@@ -481,6 +480,20 @@ class DeduplicationService:
         group_id = 0
         assigned = set()
 
+        # Precompute GPS tuples and aspect ratios once per file
+        # (avoids repeated dict lookups and divisions in _validate_duplicate_pair)
+        for f in hashable:
+            metadata = f.get("metadata", {})
+            gps = metadata.get("gps", {})
+            lat, lon = gps.get("latitude", 0), gps.get("longitude", 0)
+            f["_gps"] = (lat, lon) if (lat != 0 or lon != 0) else None
+
+            dims = f.get("dimensions")
+            if dims and len(dims) == 2 and dims[1] > 0:
+                f["_aspect_ratio"] = dims[0] / dims[1]
+            else:
+                f["_aspect_ratio"] = None
+
         for i, file1 in progress_bar(
             list(enumerate(hashable)),
             PHASE_DEDUP,
@@ -557,6 +570,30 @@ class DeduplicationService:
         # Extract hashes once for efficient access
         hashes = [f.get("perceptual_hash") for f in hashable]
 
+        # Precompute hash integers once (avoids repeated int(h, 16) in workers)
+        hash_ints = [int(h, 16) if h else None for h in hashes]
+
+        # Compute total bits from first valid hash (256 for 64-char hex = 16x16 dhash)
+        total_bits = 256
+        for h in hashes:
+            if h:
+                total_bits = len(h) * 4
+                break
+
+        # Precompute GPS tuples and aspect ratios once per file
+        # (avoids repeated dict lookups and divisions in _validate_duplicate_pair)
+        for f in hashable:
+            metadata = f.get("metadata", {})
+            gps = metadata.get("gps", {})
+            lat, lon = gps.get("latitude", 0), gps.get("longitude", 0)
+            f["_gps"] = (lat, lon) if (lat != 0 or lon != 0) else None
+
+            dims = f.get("dimensions")
+            if dims and len(dims) == 2 and dims[1] > 0:
+                f["_aspect_ratio"] = dims[0] / dims[1]
+            else:
+                f["_aspect_ratio"] = None
+
         # Determine chunking parameters
         num_workers = min(multiprocessing.cpu_count(), 12)
         # Use smaller chunks to keep memory bounded (each chunk ~50K pairs max)
@@ -594,17 +631,18 @@ class DeduplicationService:
 
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
             # Generator that yields chunks of pairs (memory-efficient)
+            # Uses precomputed integer hashes to avoid repeated int() conversions
             def generate_pair_chunks():
                 chunk = []
                 for i in range(num_files):
-                    hash1 = hashes[i]
-                    if not hash1:
+                    int1 = hash_ints[i]
+                    if int1 is None:
                         continue
                     for j in range(i + 1, num_files):
-                        hash2 = hashes[j]
-                        if not hash2:
+                        int2 = hash_ints[j]
+                        if int2 is None:
                             continue
-                        chunk.append((i, j, hash1, hash2))
+                        chunk.append((i, j, int1, int2))
                         if len(chunk) >= chunk_size:
                             yield chunk
                             chunk = []
@@ -620,7 +658,9 @@ class DeduplicationService:
             def submit_next_chunk():
                 try:
                     chunk = next(chunk_generator)
-                    future = executor.submit(_compare_hash_chunk, (chunk, threshold))
+                    future = executor.submit(
+                        _compare_hash_chunk, (chunk, threshold, total_bits)
+                    )
                     pending_futures.append(future)
                     return True
                 except StopIteration:
@@ -714,7 +754,8 @@ class DeduplicationService:
         """Validate that two files are likely true duplicates.
 
         Uses metadata consistency checks: GPS distance, timestamp delta,
-        and aspect ratio similarity.
+        and aspect ratio similarity. Uses precomputed _gps and _aspect_ratio
+        fields when available for performance.
 
         Args:
             file1: First file entry.
@@ -723,9 +764,13 @@ class DeduplicationService:
         Returns:
             True if files pass validation checks.
         """
-        # Check GPS distance
-        gps1 = self._extract_gps(file1)
-        gps2 = self._extract_gps(file2)
+        # Use precomputed GPS if available, otherwise extract
+        gps1 = file1.get("_gps")
+        if gps1 is None:
+            gps1 = self._extract_gps(file1)
+        gps2 = file2.get("_gps")
+        if gps2 is None:
+            gps2 = self._extract_gps(file2)
 
         if gps1 and gps2:
             distance = self._haversine_distance(gps1, gps2)
@@ -742,20 +787,25 @@ class DeduplicationService:
         # but is still the same image. The perceptual hash threshold (0.92) and other
         # validations (GPS, aspect ratio) are sufficient to prevent false positives.
 
-        # Check aspect ratio
-        dims1 = file1.get("dimensions")
-        dims2 = file2.get("dimensions")
+        # Use precomputed aspect ratio if available, otherwise compute
+        ratio1 = file1.get("_aspect_ratio")
+        if ratio1 is None:
+            dims1 = file1.get("dimensions")
+            if dims1 and len(dims1) == 2 and dims1[1] > 0:
+                ratio1 = dims1[0] / dims1[1]
 
-        if dims1 and dims2 and len(dims1) == 2 and len(dims2) == 2:
-            ratio1 = dims1[0] / dims1[1] if dims1[1] > 0 else 0
-            ratio2 = dims2[0] / dims2[1] if dims2[1] > 0 else 0
+        ratio2 = file2.get("_aspect_ratio")
+        if ratio2 is None:
+            dims2 = file2.get("dimensions")
+            if dims2 and len(dims2) == 2 and dims2[1] > 0:
+                ratio2 = dims2[0] / dims2[1]
 
-            if ratio1 > 0 and ratio2 > 0:
-                ratio_diff = abs(ratio1 - ratio2) / max(ratio1, ratio2)
-                if ratio_diff > self.config.validate_aspect_ratio:
-                    # Aspect ratio mismatch is expected behavior during dedup validation
-                    # Not logged to avoid noise (thousands of comparisons per run)
-                    return False
+        if ratio1 and ratio2:
+            ratio_diff = abs(ratio1 - ratio2) / max(ratio1, ratio2)
+            if ratio_diff > self.config.validate_aspect_ratio:
+                # Aspect ratio mismatch is expected behavior during dedup validation
+                # Not logged to avoid noise (thousands of comparisons per run)
+                return False
 
         return True
 

@@ -209,7 +209,10 @@ def build_message_context(entry: SourceEntry, max_content: int = 100) -> str:
     if entry.content:
         content = entry.content.replace("\n", " ")
         content = truncate_text(content, max_content)
-        result += f': "{content}"'
+        if entry.sender or entry.conversation:
+            result += f': "{content}"'
+        else:
+            result += f'"{content}"'
 
     return result
 

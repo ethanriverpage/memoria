@@ -475,18 +475,35 @@ def compute_perceptual_hash_with_dims(
         return (None, None)
 
 
-def hash_similarity(hash1: str, hash2: str) -> float:
-    """Calculate similarity ratio (0.0 to 1.0) between two perceptual hashes."""
+def hash_similarity(
+    hash1: str,
+    hash2: str,
+    int1: Optional[int] = None,
+    int2: Optional[int] = None,
+) -> float:
+    """Calculate similarity ratio (0.0 to 1.0) between two perceptual hashes.
+
+    Args:
+        hash1: First perceptual hash as hex string.
+        hash2: Second perceptual hash as hex string.
+        int1: Optional pre-converted integer for hash1 (avoids hex conversion).
+        int2: Optional pre-converted integer for hash2 (avoids hex conversion).
+
+    Returns:
+        Similarity ratio from 0.0 (completely different) to 1.0 (identical).
+    """
     if not hash1 or not hash2:
         return 0.0
 
     if len(hash1) != len(hash2):
         raise ValueError(f"Hash lengths differ: {len(hash1)} vs {len(hash2)}")
 
+    # Use pre-converted integers if provided, otherwise convert from hex
+    val1 = int1 if int1 is not None else int(hash1, 16)
+    val2 = int2 if int2 is not None else int(hash2, 16)
+
     # Calculate hamming distance: XOR and count differing bits
-    val1 = int(hash1, 16)
-    val2 = int(hash2, 16)
-    distance = bin(val1 ^ val2).count("1")
+    distance = (val1 ^ val2).bit_count()
 
     total_bits = len(hash1) * 4  # Each hex char = 4 bits
     return 1.0 - (distance / total_bits)

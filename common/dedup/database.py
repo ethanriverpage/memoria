@@ -78,6 +78,7 @@ class HashDatabase:
             )  # Safe with WAL, faster than FULL
             cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache (negative = KB)
             cursor.execute("PRAGMA temp_store=MEMORY")  # Store temp tables in memory
+            cursor.execute("PRAGMA mmap_size=268435456")  # 256MB memory-mapped I/O
 
             # Create files table
             cursor.execute(
@@ -587,45 +588,48 @@ class HashDatabase:
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            written = 0
+
+            # Build all rows upfront for executemany
+            rows = []
+            for entry in entries:
+                dimensions = entry.get("dimensions")
+                dimensions_str = json.dumps(dimensions) if dimensions else None
+                metadata = entry.get("metadata")
+                metadata_str = json.dumps(metadata) if metadata else None
+
+                rows.append(
+                    (
+                        run_id,
+                        export_name,
+                        entry.get("_processor", "Unknown"),
+                        entry.get("source_path", ""),
+                        entry.get("relative_path", ""),
+                        entry.get("content_hash", ""),
+                        entry.get("perceptual_hash"),
+                        entry.get("file_size"),
+                        dimensions_str,
+                        entry.get("timestamp"),
+                        metadata_str,
+                    )
+                )
 
             try:
-                for entry in entries:
-                    dimensions = entry.get("dimensions")
-                    dimensions_str = json.dumps(dimensions) if dimensions else None
-                    metadata = entry.get("metadata")
-                    metadata_str = json.dumps(metadata) if metadata else None
-
-                    cursor.execute(
-                        """
-                        INSERT OR REPLACE INTO catalog_entries (
-                            run_id, export_name, processor, source_path, relative_path,
-                            content_hash, perceptual_hash, file_size, dimensions,
-                            timestamp, metadata
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            run_id,
-                            export_name,
-                            entry.get("_processor", "Unknown"),
-                            entry.get("source_path", ""),
-                            entry.get("relative_path", ""),
-                            entry.get("content_hash", ""),
-                            entry.get("perceptual_hash"),
-                            entry.get("file_size"),
-                            dimensions_str,
-                            entry.get("timestamp"),
-                            metadata_str,
-                        ),
-                    )
-                    written += 1
-
+                cursor.executemany(
+                    """
+                    INSERT OR REPLACE INTO catalog_entries (
+                        run_id, export_name, processor, source_path, relative_path,
+                        content_hash, perceptual_hash, file_size, dimensions,
+                        timestamp, metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
                 conn.commit()
-                return written
+                return len(rows)
             except sqlite3.Error as e:
                 logger.error(f"Failed to write catalog entries batch: {e}")
                 conn.rollback()
-                return written
+                return 0
 
     def get_duplicate_content_hashes(self, run_id: str) -> List[str]:
         """Get content hashes that appear more than once in a run.
@@ -1042,37 +1046,40 @@ class HashDatabase:
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cached = 0
+
+            # Build all rows upfront for executemany
+            rows = []
+            for entry in entries:
+                dimensions = entry.get("dimensions")
+                dimensions_str = json.dumps(dimensions) if dimensions else None
+
+                rows.append(
+                    (
+                        entry["source_path"],
+                        entry["file_size"],
+                        entry["mtime"],
+                        entry["content_hash"],
+                        entry.get("perceptual_hash"),
+                        dimensions_str,
+                    )
+                )
 
             try:
-                for entry in entries:
-                    dimensions = entry.get("dimensions")
-                    dimensions_str = json.dumps(dimensions) if dimensions else None
-
-                    cursor.execute(
-                        """
-                        INSERT OR REPLACE INTO hash_cache (
-                            source_path, file_size, mtime, content_hash,
-                            perceptual_hash, dimensions, cached_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                        """,
-                        (
-                            entry["source_path"],
-                            entry["file_size"],
-                            entry["mtime"],
-                            entry["content_hash"],
-                            entry.get("perceptual_hash"),
-                            dimensions_str,
-                        ),
-                    )
-                    cached += 1
-
+                cursor.executemany(
+                    """
+                    INSERT OR REPLACE INTO hash_cache (
+                        source_path, file_size, mtime, content_hash,
+                        perceptual_hash, dimensions, cached_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    rows,
+                )
                 conn.commit()
-                return cached
+                return len(rows)
             except sqlite3.Error as e:
                 logger.error(f"Failed to cache hashes batch: {e}")
                 conn.rollback()
-                return cached
+                return 0
 
     def get_hash_cache_statistics(self) -> Dict[str, Any]:
         """Get statistics about the hash cache.
