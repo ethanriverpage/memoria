@@ -192,7 +192,7 @@ Available processors:
   - DiscordProcessor (priority: 70)
   - InstagramMessagesProcessor (priority: 80)
   - InstagramPublicMediaProcessor (priority: 75)
-  - InstagramOldPublicMediaProcessor (priority: 70)
+  - InstaloaderProcessor (priority: 70)
   - SnapchatMemoriesProcessor (priority: 65)
   - SnapchatMessagesProcessor (priority: 60)
 ```

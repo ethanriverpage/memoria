@@ -1,28 +1,30 @@
 """
-Processing tests for Instagram Old Format processor.
+Processing tests for Instaloader processor.
 
 Tests cover edge cases including:
 - UTC timestamp filename pattern
 - Paired .txt caption files
 - Paired .json metadata files
 - Carousel numbering (_1, _2)
+
+Note: This is NOT an official Instagram export - it handles scrape data from Instaloader.
 """
 
 import json
 
 
-from tests.fixtures.generators import create_instagram_old_export
+from tests.fixtures.generators import create_instaloader_export
 from tests.fixtures.media_samples import write_media_file
 
 
-class TestInstagramOldFilenamePattern:
+class TestInstaloaderFilenamePattern:
     """Tests for UTC timestamp filename pattern."""
 
     def test_utc_timestamp_pattern(
-        self, instagram_old_processor, temp_export_dir, temp_output_dir
+        self, instaloader_processor, temp_export_dir, temp_output_dir
     ):
         """Should process files with YYYY-MM-DD_HH-MM-SS_UTC pattern."""
-        create_instagram_old_export(
+        create_instaloader_export(
             temp_export_dir,
             media_files=[
                 {
@@ -36,10 +38,10 @@ class TestInstagramOldFilenamePattern:
         assert (temp_export_dir / "2021-01-01_12-00-00_UTC.jpg").exists()
 
     def test_multiple_timestamps(
-        self, instagram_old_processor, temp_export_dir, temp_output_dir
+        self, instaloader_processor, temp_export_dir, temp_output_dir
     ):
         """Should handle files with different timestamps."""
-        create_instagram_old_export(
+        create_instaloader_export(
             temp_export_dir,
             media_files=[
                 {
@@ -65,14 +67,14 @@ class TestInstagramOldFilenamePattern:
         assert (temp_export_dir / "2021-01-03_09-15-30_UTC.jpg").exists()
 
 
-class TestInstagramOldCaptions:
+class TestInstaloaderCaptions:
     """Tests for paired .txt caption files."""
 
     def test_paired_txt_caption(
-        self, instagram_old_processor, temp_export_dir, temp_output_dir
+        self, instaloader_processor, temp_export_dir, temp_output_dir
     ):
         """Should handle paired .txt caption files."""
-        create_instagram_old_export(
+        create_instaloader_export(
             temp_export_dir,
             media_files=[
                 {
@@ -90,10 +92,10 @@ class TestInstagramOldCaptions:
         assert caption == "This is the caption text"
 
     def test_media_without_caption(
-        self, instagram_old_processor, temp_export_dir, temp_output_dir
+        self, instaloader_processor, temp_export_dir, temp_output_dir
     ):
         """Should handle media without caption file."""
-        create_instagram_old_export(
+        create_instaloader_export(
             temp_export_dir,
             media_files=[
                 {
@@ -108,7 +110,7 @@ class TestInstagramOldCaptions:
         assert not (temp_export_dir / "2021-01-01_12-00-00_UTC.txt").exists()
 
 
-class TestInstagramOldMetadata:
+class TestInstaloaderMetadata:
     """Tests for metadata handling.
 
     Note: The detection pattern only matches .json.xz (compressed JSON), not .json.
@@ -116,10 +118,10 @@ class TestInstagramOldMetadata:
     """
 
     def test_media_file_without_metadata(
-        self, instagram_old_processor, temp_export_dir, temp_output_dir
+        self, instaloader_processor, temp_export_dir, temp_output_dir
     ):
         """Should handle media files without accompanying metadata."""
-        create_instagram_old_export(
+        create_instaloader_export(
             temp_export_dir,
             media_files=[
                 {
@@ -136,7 +138,7 @@ class TestInstagramOldMetadata:
         assert not (temp_export_dir / "2021-01-01_12-00-00_UTC.json").exists()
 
     def test_json_metadata_handling(
-        self, instagram_old_processor, temp_export_dir, temp_output_dir
+        self, instaloader_processor, temp_export_dir, temp_output_dir
     ):
         """Should preserve location data in JSON metadata when present."""
         temp_export_dir.mkdir(parents=True, exist_ok=True)
@@ -162,14 +164,14 @@ class TestInstagramOldMetadata:
         assert loaded["location"]["name"] == "Test Location"
 
 
-class TestInstagramOldCarousel:
+class TestInstaloaderCarousel:
     """Tests for carousel numbering (_1, _2, etc.)."""
 
     def test_carousel_numbering(
-        self, instagram_old_processor, temp_export_dir, temp_output_dir
+        self, instaloader_processor, temp_export_dir, temp_output_dir
     ):
         """Should handle carousel files with _1, _2 suffixes."""
-        create_instagram_old_export(
+        create_instaloader_export(
             temp_export_dir,
             media_files=[
                 {
@@ -198,10 +200,10 @@ class TestInstagramOldCarousel:
         assert (temp_export_dir / "2021-01-01_12-00-00_UTC_3.jpg").exists()
 
     def test_carousel_caption_on_first_only(
-        self, instagram_old_processor, temp_export_dir, temp_output_dir
+        self, instaloader_processor, temp_export_dir, temp_output_dir
     ):
         """Should have caption only on first carousel item."""
-        create_instagram_old_export(
+        create_instaloader_export(
             temp_export_dir,
             media_files=[
                 {
@@ -224,10 +226,10 @@ class TestInstagramOldCarousel:
         assert not (temp_export_dir / "2021-01-01_12-00-00_UTC_2.txt").exists()
 
     def test_carousel_mixed_media(
-        self, instagram_old_processor, temp_export_dir, temp_output_dir
+        self, instaloader_processor, temp_export_dir, temp_output_dir
     ):
         """Should handle carousel with mixed photos and videos."""
-        create_instagram_old_export(
+        create_instaloader_export(
             temp_export_dir,
             media_files=[
                 {
@@ -256,12 +258,12 @@ class TestInstagramOldCarousel:
         assert (temp_export_dir / "2021-01-01_12-00-00_UTC_3.jpg").exists()
 
 
-class TestInstagramOldFileTypes:
-    """Tests for various file types in Instagram Old Format."""
+class TestInstaloaderFileTypes:
+    """Tests for various file types in Instaloader format."""
 
-    def test_jpg_files(self, instagram_old_processor, temp_export_dir, temp_output_dir):
+    def test_jpg_files(self, instaloader_processor, temp_export_dir, temp_output_dir):
         """Should handle JPG files."""
-        create_instagram_old_export(
+        create_instaloader_export(
             temp_export_dir,
             media_files=[
                 {
@@ -273,9 +275,9 @@ class TestInstagramOldFileTypes:
         )
         assert (temp_export_dir / "2021-01-01_12-00-00_UTC.jpg").exists()
 
-    def test_mp4_files(self, instagram_old_processor, temp_export_dir, temp_output_dir):
+    def test_mp4_files(self, instaloader_processor, temp_export_dir, temp_output_dir):
         """Should handle MP4 video files."""
-        create_instagram_old_export(
+        create_instaloader_export(
             temp_export_dir,
             media_files=[
                 {
@@ -287,7 +289,7 @@ class TestInstagramOldFileTypes:
         )
         assert (temp_export_dir / "2021-01-01_12-00-00_UTC.mp4").exists()
 
-    def test_png_files(self, instagram_old_processor, temp_export_dir, temp_output_dir):
+    def test_png_files(self, instaloader_processor, temp_export_dir, temp_output_dir):
         """Should handle PNG files."""
         temp_export_dir.mkdir(parents=True, exist_ok=True)
         write_media_file(temp_export_dir / "2021-01-01_12-00-00_UTC.png", "png")

@@ -15,7 +15,7 @@ from typing import Optional
 PROCESSOR_SUBDIRS = {
     "Instagram Messages": "messages",
     "Instagram Public Media": "public-media",
-    "Instagram Old Public Media": "public-media",
+    "Instaloader": "public-media",
     "Google Photos": "Google Photos",
     "Google Chat": "Google Chat",
     "Google Voice": "Google Voice",
@@ -28,7 +28,7 @@ PROCESSOR_SUBDIRS = {
 PROCESSOR_DEFAULTS = {
     "Instagram Messages": "final_instamsgs",
     "Instagram Public Media": "final_instagram",
-    "Instagram Old Public Media": "final_media",
+    "Instaloader": "final_instaloader",
     "Google Photos": "final_googlephotos",
     "Google Chat": "final_googlechat",
     "Google Voice": "final_googlevoice",

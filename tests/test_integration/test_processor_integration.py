@@ -23,7 +23,7 @@ from tests.fixtures.generators import (
     create_snapchat_messages_export,
     create_instagram_messages_export,
     create_instagram_public_export,
-    create_instagram_old_export,
+    create_instaloader_export,
     create_discord_export,
     create_imessage_mac_export,
 )
@@ -362,22 +362,22 @@ class TestInstagramPublicProcessing:
 
 
 @pytest.mark.integration
-class TestInstagramOldProcessing:
-    """Integration tests for Instagram Old Format processor."""
+class TestInstaloaderProcessing:
+    """Integration tests for Instaloader processor."""
 
     @skip_no_exiftool
     def test_process_basic_export(self, tmp_path):
-        """Should process old format Instagram export."""
-        from processors.instagram_old_public_media.processor import (
-            OldInstagramPublicMediaProcessor,
+        """Should process Instaloader scrape data."""
+        from processors.instaloader.processor import (
+            InstaloaderProcessor,
         )
 
         export_dir = tmp_path / "export"
         output_dir = tmp_path / "output"
 
-        create_instagram_old_export(export_dir)
+        create_instaloader_export(export_dir)
 
-        result = OldInstagramPublicMediaProcessor.process(
+        result = InstaloaderProcessor.process(
             str(export_dir), str(output_dir), verbose=False
         )
 

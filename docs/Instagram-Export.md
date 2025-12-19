@@ -8,7 +8,7 @@ This guide covers processing Instagram exports including messages, posts, and le
 2. [Downloading Your Instagram Data](#downloading-your-instagram-data)
 3. [Instagram Messages](#instagram-messages)
 4. [Instagram Public Media (New Format)](#instagram-public-media-new-format)
-5. [Instagram Old Format](#instagram-old-format)
+5. [Instaloader (Scrape Data)](#instaloader-scrape-data)
 6. [Processing Your Export](#processing-your-export)
 
 ## Overview
@@ -17,9 +17,11 @@ Instagram provides data export through their settings. Memoria can process:
 
 - **Instagram Messages**: Direct messages and group chat media
 - **Instagram Public Media**: Posts and archived posts (new JSON-based format)
-- **Instagram Old Format**: Legacy exports with UTC-timestamped filenames
+- **Instaloader**: Scrape data from the Instaloader tool (not official Instagram export)
 
 Instagram has changed their export format over time, so you may encounter different structures depending on when you requested your export.
+
+**Note:** Memoria also supports data scraped using [Instaloader](https://instaloader.github.io/), a third-party tool. This is distinct from Instagram's official data export.
 
 ### Supported Export Formats
 
@@ -234,12 +236,16 @@ For videos, equivalent metadata is embedded in the `Comment` and `Description` f
 
 **No stories**: Stories are only included if you specifically selected them in the export options, and only stories saved to your archive.
 
-## Instagram Old Format
+## Instaloader (Scrape Data)
+
+**Important**: This section describes data scraped using [Instaloader](https://instaloader.github.io/), a third-party tool. This is NOT an official Instagram export format.
+
+Instaloader is a command-line tool that downloads public (or accessible) Instagram profiles, posts, and stories. If you've used Instaloader to archive content, Memoria can process this data.
 
 ### Export Structure
 
 ```
-instagram-username-YYYYMMDD/
+instaloader-username/
 ├── 2023-01-15_10-30-45_UTC.jpg
 ├── 2023-01-15_10-30-45_UTC.txt
 ├── 2023-01-15_10-31-22_UTC_1.jpg
@@ -249,10 +255,10 @@ instagram-username-YYYYMMDD/
 └── ...
 ```
 
-Or, in some exports, JSON metadata may be compressed:
+Or, in some scrapes, JSON metadata may be compressed:
 
 ```
-instagram-username-YYYYMMDD/
+instaloader-username/
 ├── 2023-01-15_10-30-45_UTC.jpg
 ├── 2023-01-15_10-30-45_UTC.json.xz    # Compressed JSON metadata
 ├── 2023-01-15_10-30-45_UTC.txt
@@ -261,12 +267,12 @@ instagram-username-YYYYMMDD/
 
 ### Important: Extracting Compressed JSON Files
 
-If your old Instagram export contains `.json.xz` files, you must extract them before processing:
+If your Instaloader data contains `.json.xz` files, you must extract them before processing:
 
 **Linux/macOS:**
 
 ```bash
-cd instagram-username-YYYYMMDD
+cd instaloader-username
 xz -d *.json.xz
 ```
 
@@ -274,7 +280,7 @@ xz -d *.json.xz
 Download and install 7-Zip, then:
 
 ```powershell
-cd instagram-username-YYYYMMDD
+cd instaloader-username
 7z e *.json.xz
 ```
 
@@ -294,7 +300,7 @@ This limitation will be addressed in a future update to automatically extract co
 
 ### Filename Pattern
 
-Format: `YYYY-MM-DD_HH-MM-SS_UTC[_N].{jpg|mp4|...}`
+Instaloader uses the format: `YYYY-MM-DD_HH-MM-SS_UTC[_N].{jpg|mp4|...}`
 
 Components:
 
@@ -326,7 +332,7 @@ Each media file may have one or both metadata files:
 2023-01-15_10-30-45_UTC.json
 ```
 
-Note: Some exports have `.json.xz` (compressed) which must be extracted first (see above).
+Note: Some Instaloader versions create `.json.xz` (compressed) which must be extracted first (see above).
 
 ### Required Elements
 
@@ -352,7 +358,7 @@ For videos, equivalent metadata is embedded in the `Comment` and `Description` f
 
 **Compressed JSON files**: If you see `.json.xz` files, you must extract them first using `xz -d *.json.xz` (Linux/macOS) or 7-Zip (Windows). The processor currently expects uncompressed `.json` files.
 
-**No JSON files**: Old format may use only `.txt` files for captions - this is expected for some exports.
+**No JSON files**: Some Instaloader configurations may use only `.txt` files for captions - this is expected.
 
 **Carousel numbering**: Multi-photo posts have `_1`, `_2`, etc. suffixes. All are processed individually.
 
@@ -423,7 +429,7 @@ When uploading to Immich, Instagram content is organized as:
 - **Reels**: `Instagram/{username}/reels`
 - **Profile Photos**: `Instagram/{username}/profile`
 
-Note: Old format posts are combined with new format posts in the `Instagram/{username}/posts` album.
+Note: Instaloader posts are combined with new format posts in the `Instagram/{username}/posts` album.
 
 See [Immich Upload](Immich-Upload) for configuration options.
 

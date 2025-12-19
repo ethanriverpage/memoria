@@ -39,7 +39,7 @@ def build_upload_targets(
     out_base = Path(output_base)
 
     # Handle Instagram Public Media (multiple targets)
-    if processor_name in ("Instagram Public Media", "Instagram Old Public Media"):
+    if processor_name in ("Instagram Public Media", "Instaloader"):
         username = extract_username_from_export_dir(input_dir, "instagram")
         return _ig_public_media_targets(out_base, username)
 

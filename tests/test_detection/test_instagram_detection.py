@@ -1,5 +1,5 @@
 """
-Detection tests for Instagram processors (Messages, Public Media, Old Format).
+Detection tests for Instagram processors (Messages, Public Media, Instaloader).
 
 Tests verify that each processor correctly identifies valid export
 structures and rejects invalid ones.
@@ -8,7 +8,7 @@ structures and rejects invalid ones.
 from tests.fixtures.generators import (
     create_instagram_messages_export,
     create_instagram_public_export,
-    create_instagram_old_export,
+    create_instaloader_export,
 )
 
 
@@ -149,18 +149,18 @@ class TestInstagramPublicDetection:
         assert instagram_public_processor.detect(temp_export_dir) is False
 
 
-class TestInstagramOldDetection:
-    """Tests for Instagram Old Format processor detection."""
+class TestInstaloaderDetection:
+    """Tests for Instaloader processor detection."""
 
-    def test_detect_valid_export(self, instagram_old_processor, temp_export_dir):
-        """Should detect a valid Instagram Old Format export."""
-        create_instagram_old_export(temp_export_dir)
-        assert instagram_old_processor.detect(temp_export_dir) is True
+    def test_detect_valid_export(self, instaloader_processor, temp_export_dir):
+        """Should detect valid Instaloader scrape data."""
+        create_instaloader_export(temp_export_dir)
+        assert instaloader_processor.detect(temp_export_dir) is True
 
-    def test_detect_single_file(self, instagram_old_processor, temp_export_dir):
+    def test_detect_single_file(self, instaloader_processor, temp_export_dir):
         """Should reject export with less than 3 UTC-timestamped files."""
         # Detection requires at least 3 files matching the pattern
-        create_instagram_old_export(
+        create_instaloader_export(
             temp_export_dir,
             media_files=[
                 {
@@ -171,13 +171,13 @@ class TestInstagramOldDetection:
             ],
         )
         # Requires 3+ files for detection
-        assert instagram_old_processor.detect(temp_export_dir) is False
+        assert instaloader_processor.detect(temp_export_dir) is False
 
-    def test_detect_multiple_files(self, instagram_old_processor, temp_export_dir):
+    def test_detect_multiple_files(self, instaloader_processor, temp_export_dir):
         """Should detect export with 3+ UTC-timestamped files."""
         # Detection requires at least 3 files matching YYYY-MM-DD_HH-MM-SS_UTC.ext
         # Note: Carousel suffixes (_1, _2) don't match the strict detection pattern
-        create_instagram_old_export(
+        create_instaloader_export(
             temp_export_dir,
             media_files=[
                 {
@@ -197,17 +197,17 @@ class TestInstagramOldDetection:
                 },
             ],
         )
-        assert instagram_old_processor.detect(temp_export_dir) is True
+        assert instaloader_processor.detect(temp_export_dir) is True
 
-    def test_reject_empty_directory(self, instagram_old_processor, temp_export_dir):
+    def test_reject_empty_directory(self, instaloader_processor, temp_export_dir):
         """Should reject empty directory."""
-        assert instagram_old_processor.detect(temp_export_dir) is False
+        assert instaloader_processor.detect(temp_export_dir) is False
 
-    def test_reject_non_utc_files(self, instagram_old_processor, temp_export_dir):
+    def test_reject_non_utc_files(self, instaloader_processor, temp_export_dir):
         """Should reject directory with non-UTC-timestamped files."""
         (temp_export_dir / "regular_photo.jpg").write_bytes(b"test")
         (temp_export_dir / "another_file.png").write_bytes(b"test")
-        assert instagram_old_processor.detect(temp_export_dir) is False
+        assert instaloader_processor.detect(temp_export_dir) is False
 
 
 class TestInstagramMultiProcessorDetection:
@@ -223,12 +223,12 @@ class TestInstagramMultiProcessorDetection:
         assert instagram_messages_processor.detect(temp_export_dir) is True
         assert instagram_public_processor.detect(temp_export_dir) is True
 
-    def test_old_format_exclusive(
-        self, instagram_old_processor, instagram_public_processor, temp_export_dir
+    def test_instaloader_exclusive(
+        self, instaloader_processor, instagram_public_processor, temp_export_dir
     ):
-        """Old format should be distinct from public media format."""
-        create_instagram_old_export(temp_export_dir)
+        """Instaloader format should be distinct from public media format."""
+        create_instaloader_export(temp_export_dir)
 
-        assert instagram_old_processor.detect(temp_export_dir) is True
-        # Public processor should not match old format (no media/posts structure)
+        assert instaloader_processor.detect(temp_export_dir) is True
+        # Public processor should not match Instaloader format (no media/posts structure)
         assert instagram_public_processor.detect(temp_export_dir) is False

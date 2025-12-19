@@ -77,7 +77,7 @@ def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
 - `processors/imessage_imazing/processor.py`
 - `processors/instagram_messages/processor.py`
 - `processors/instagram_public_media/processor.py`
-- `processors/instagram_old_public_media/processor.py`
+- `processors/instaloader/processor.py`
 - `processors/snapchat_memories/processor.py`
 - `processors/snapchat_messages/processor.py`
 
@@ -159,7 +159,7 @@ def _process_working_directory(working_dir, output_dir, workers, dedup_manifest=
 - `processors/instagram_messages/processor.py`
 - `processors/instagram_public_media/processor.py`
 
-Note: Other processors (snapchat_memories, snapchat_messages, instagram_old_public_media, imessage_imazing, google_voice) handle processing differently or inline within `process_logic()`.
+Note: Other processors (snapchat_memories, snapchat_messages, instaloader, imessage_imazing, google_voice) handle processing differently or inline within `process_logic()`.
 
 ### Recommended Refactoring
 
@@ -247,7 +247,7 @@ def process_media_batch(batch_args):
 - `processors/google_photos/processor.py`
 - `processors/instagram_messages/processor.py`
 - `processors/instagram_public_media/processor.py`
-- `processors/instagram_old_public_media/processor.py`
+- `processors/instaloader/processor.py`
 - `processors/snapchat_memories/processor.py`
 
 ### Recommended Refactoring
@@ -322,7 +322,7 @@ def generate_unique_filename(
 - `processors/google_chat/processor.py`
 - `processors/google_voice/processor.py`
 - `processors/instagram_messages/processor.py`
-- `processors/instagram_old_public_media/processor.py`
+- `processors/instaloader/processor.py`
 - `processors/instagram_public_media/processor.py`
 - `processors/snapchat_memories/processor.py`
 

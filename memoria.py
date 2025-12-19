@@ -569,7 +569,7 @@ def show_supported_formats() -> None:
     logger.info("  Instagram (can match multiple):")
     logger.info("    - Instagram Messages: your_instagram_activity/messages/inbox/")
     logger.info("    - Instagram Public Media: media/posts/ and media/archived_posts/")
-    logger.info("    - Instagram Old Format: YYYY-MM-DD_HH-MM-SS_UTC.* files in root")
+    logger.info("    - Instaloader: YYYY-MM-DD_HH-MM-SS_UTC.* files in root (scrape data)")
     logger.info("Examples:")
     logger.info("  google-username-20250526/     -> Google Photos + Chat + Voice")
     logger.info("  instagram-username-20251007/  -> Instagram Messages + Public Media")

@@ -227,6 +227,8 @@ class TestCatalogMediaFiles:
         # Mock the config to disable perceptual hashing
         with patch("common.dedup.catalog.get_dedup_config") as mock_config:
             mock_config.return_value.use_perceptual = False
+            # Ensure database_path is also mocked to avoid creating files in project root
+            mock_config.return_value.database_path = temp_media_dir / "test_dedup.db"
 
             catalog = collect_catalog(
                 processor_name="Test Processor",

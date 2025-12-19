@@ -204,7 +204,7 @@ snapchat-username-20251122/
 
 **When this happens**:
 
-- Instagram Old Format exports use UTC timestamps in filenames but also rely on file modification times as fallback
+- Instaloader exports use UTC timestamps in filenames but also rely on file modification times as fallback
 - Some Google Photos items without JSON metadata use EXIF data and file times
 - **Snapchat Messages** - CRITICAL: Uses file modification timestamps to match overlay files to media files (explained below)
 - Any platform where metadata is missing or incomplete

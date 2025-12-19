@@ -567,12 +567,15 @@ def create_instagram_public_export(
     return base_path
 
 
-def create_instagram_old_export(
+def create_instaloader_export(
     base_path: Path,
     username: str = "testuser",
     media_files: Optional[List[Dict]] = None,
 ) -> Path:
-    """Create a minimal Instagram Old Format export structure.
+    """Create a minimal Instaloader scrape data structure.
+
+    Instaloader (https://instaloader.github.io/) is a tool to download Instagram
+    content. This is NOT an official Instagram export format.
 
     Structure:
         {base_path}/
@@ -632,6 +635,10 @@ def create_instagram_old_export(
             (base_path / caption_file).write_text(caption)
 
     return base_path
+
+
+# Backward compatibility alias
+create_instagram_old_export = create_instaloader_export
 
 
 def create_discord_export(

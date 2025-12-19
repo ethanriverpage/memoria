@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-Old Instagram Export Preprocessor
+Instaloader Preprocessor
 
-Organizes older Instagram export files (2021 and earlier) and creates cleaned metadata:
+Organizes media files scraped using Instaloader (https://instaloader.github.io/)
+and creates cleaned metadata:
 - Scans media files and groups carousel posts
 - Extracts captions from .txt files
 - Extracts metadata from .json files
 - Creates metadata.json with essential information (captions, timestamps)
+
+Note: This is NOT an official Instagram export format - it handles scrape data from Instaloader.
 """
 
 import json
@@ -30,8 +33,8 @@ from common.failure_tracker import FailureTracker
 logger = logging.getLogger(__name__)
 
 
-class OldInstagramPreprocessor:
-    """Preprocesses old Instagram export by organizing files and cleaning metadata"""
+class InstaloaderPreprocessor:
+    """Preprocesses Instaloader scrape data by organizing files and cleaning metadata"""
 
     # Use common media extensions (images and videos only)
     MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
@@ -73,7 +76,7 @@ class OldInstagramPreprocessor:
 
         # Initialize failure tracker
         self.failure_tracker = FailureTracker(
-            processor_name="Instagram Old Public Media",
+            processor_name="Instaloader",
             export_directory=str(export_path),
         )
 
@@ -148,7 +151,7 @@ class OldInstagramPreprocessor:
 
         try:
             with open(self.log_file, "w", encoding="utf-8") as f:
-                f.write("Old Instagram Export Preprocessing Log\n")
+                f.write("Instaloader Preprocessing Log\n")
                 f.write("=" * 80 + "\n")
                 f.write(f"Export: {self.export_path}\n")
                 f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -553,7 +556,7 @@ class OldInstagramPreprocessor:
 
     def process(self) -> None:
         """Main processing pipeline"""
-        logger.info("Starting Old Instagram Export Preprocessing")
+        logger.info("Starting Instaloader Preprocessing")
         logger.info("Export path: %s", self.export_path)
         logger.info("Output path: %s", self.output_dir)
 
@@ -588,25 +591,25 @@ class OldInstagramPreprocessor:
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
-        description="Preprocess old Instagram export: organize media and create cleaned metadata",
+        description="Preprocess Instaloader scrape data: organize media and create cleaned metadata",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Process in-place (creates media/ and metadata.json in export directory)
-  python preprocess_files.py instagram-username-2021-07-25
+  python preprocess_files.py instaloader-username-2021-07-25
 
   # Process to a separate output directory
-  python preprocess_files.py instagram-username-2021-07-25 -o processed/
+  python preprocess_files.py instaloader-username-2021-07-25 -o processed/
   
   # Process with custom number of workers
-  python preprocess_files.py instagram-username-2021-07-25 --workers 8
+  python preprocess_files.py instaloader-username-2021-07-25 --workers 8
         """,
     )
 
     parser.add_argument(
         "export_directory",
         type=str,
-        help="Path to old Instagram export directory",
+        help="Path to Instaloader scrape directory",
     )
 
     parser.add_argument(
@@ -630,7 +633,7 @@ Examples:
     export_path = Path(args.export_directory)
     output_path = Path(args.output) if args.output else None
 
-    preprocessor = OldInstagramPreprocessor(
+    preprocessor = InstaloaderPreprocessor(
         export_path, output_path, workers=args.workers
     )
     preprocessor.process()

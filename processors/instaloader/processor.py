@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 def detect(input_path: Path) -> bool:
     """Check if this processor can handle the input directory
 
-    Detection criteria for Old Instagram Public Media:
+    Detection criteria for Instaloader scrape data:
     - Files directly in root directory
     - Multiple files matching pattern: YYYY-MM-DD_HH-MM-SS_UTC.*
     - Typically has .jpg/.mp4 and .txt pairs
@@ -73,11 +73,11 @@ def detect(input_path: Path) -> bool:
         input_path: Path to the input directory
 
     Returns:
-        True if this is an old Instagram export, False otherwise
+        True if this is Instaloader scrape data, False otherwise
     """
     try:
-        # Pattern for old Instagram files: YYYY-MM-DD_HH-MM-SS_UTC.*
-        instagram_pattern = re.compile(
+        # Pattern for Instaloader files: YYYY-MM-DD_HH-MM-SS_UTC.*
+        instaloader_pattern = re.compile(
             r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_UTC\.(jpg|jpeg|mp4|txt|json\.xz)$"
         )
 
@@ -85,21 +85,21 @@ def detect(input_path: Path) -> bool:
         matching_files = 0
 
         for file_path in input_path.iterdir():
-            if file_path.is_file() and instagram_pattern.match(file_path.name):
+            if file_path.is_file() and instaloader_pattern.match(file_path.name):
                 matching_files += 1
-                # If we find at least 3 matching files, it's probably old Instagram format
+                # If we find at least 3 matching files, it's probably Instaloader data
                 if matching_files >= 3:
                     return True
 
         return False
 
     except Exception as e:
-        logger.debug(f"Detection failed for Old Instagram Public Media: {e}")
+        logger.debug(f"Detection failed for Instaloader: {e}")
         return False
 
 
-class OldInstagramPublicMediaProcessor(ProcessorBase):
-    """Processor for old Instagram public media exports"""
+class InstaloaderProcessor(ProcessorBase):
+    """Processor for Instaloader scrape data (not official Instagram export)"""
 
     @staticmethod
     def detect(input_path: Path) -> bool:
@@ -109,7 +109,7 @@ class OldInstagramPublicMediaProcessor(ProcessorBase):
     @staticmethod
     def get_name() -> str:
         """Return processor name"""
-        return "Instagram Old Public Media"
+        return "Instaloader"
 
     @staticmethod
     def get_priority() -> int:
@@ -118,7 +118,7 @@ class OldInstagramPublicMediaProcessor(ProcessorBase):
 
     @staticmethod
     def supports_dedup() -> bool:
-        """Return True - Instagram Old Public Media supports cross-processor deduplication."""
+        """Return True - Instaloader supports cross-processor deduplication."""
         return True
 
     @staticmethod
@@ -127,18 +127,18 @@ class OldInstagramPublicMediaProcessor(ProcessorBase):
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
 
-        # Old Instagram format has files in root with timestamp pattern
-        instagram_pattern = re.compile(
+        # Instaloader format has files in root with timestamp pattern
+        instaloader_pattern = re.compile(
             r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_UTC\.(jpg|jpeg|mp4)$"
         )
         media_files = [
             f
             for f in input_path.iterdir()
-            if f.is_file() and instagram_pattern.match(f.name)
+            if f.is_file() and instaloader_pattern.match(f.name)
         ]
 
         yield from catalog_media_files(
-            processor_name="Instagram Old Public Media",
+            processor_name="Instaloader",
             input_path=input_path,
             media_files=media_files,
             workers=workers,
@@ -151,7 +151,7 @@ class OldInstagramPublicMediaProcessor(ProcessorBase):
         dedup_manifest: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> bool:
-        """Process old Instagram export
+        """Process Instaloader scrape data
 
         Args:
             input_dir: Path to input directory
@@ -186,7 +186,7 @@ class OldInstagramPublicMediaProcessor(ProcessorBase):
             return True
 
         except Exception as e:
-            logger.error(f"Error in OldInstagramPublicMediaProcessor: {e}")
+            logger.error(f"Error in InstaloaderProcessor: {e}")
             return False
 
 
@@ -197,9 +197,9 @@ def get_processor():
     automatic processor discovery.
 
     Returns:
-        OldInstagramPublicMediaProcessor class (not instance, as it uses static methods)
+        InstaloaderProcessor class (not instance, as it uses static methods)
     """
-    return OldInstagramPublicMediaProcessor
+    return InstaloaderProcessor
 
 
 # ============================================================================
@@ -210,7 +210,7 @@ def get_processor():
 def _build_metadata_requests(
     file_info: List[Tuple[str, dict, str, str]],
 ) -> List[MetadataWriteRequest]:
-    """Build MetadataWriteRequest objects for Old Instagram Public Media files.
+    """Build MetadataWriteRequest objects for Instaloader files.
 
     Args:
         file_info: List of (file_path, post_data, export_username, media_type) tuples
@@ -260,7 +260,7 @@ def _build_metadata_requests(
                 description=DescriptionWriteSpec(
                     default_description=default_description,
                 ),
-                processor_name="instagram_old_public",
+                processor_name="instaloader",
             )
         )
 
@@ -354,7 +354,7 @@ def process_logic(
     workers=None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ):
-    """Core processing logic for Old Instagram Public Media exports
+    """Core processing logic for Instaloader scrape data
 
     Args:
         input_dir: Input directory (raw export or preprocessed)
@@ -372,7 +372,7 @@ def process_logic(
         print_exiftool_error()
         return
 
-    logger.info("Old Instagram Media Processor")
+        logger.info("Instaloader Media Processor")
     logger.info("=" * 50)
 
     # Determine if input needs preprocessing
@@ -401,7 +401,7 @@ def process_logic(
             # Run preprocessing with final output directory for failure tracking
             # output_dir is already the processor-specific path
             final_output_path = Path(output_dir) if output_dir else Path("final_media")
-            preprocessor = OldInstagramPreprocessor(
+            preprocessor = InstaloaderPreprocessor(
                 export_path=Path(input_dir),
                 output_dir=temp_dir_created,
                 workers=workers,
@@ -474,7 +474,7 @@ def process_logic(
                 if dedup_manifest:
                     content_hash = compute_content_hash(full_path)
                     if not is_file_primary_by_hash(
-                        dedup_manifest, content_hash, "Instagram Old Public Media"
+                        dedup_manifest, content_hash, "Instaloader"
                     ):
                         skipped_dedup += 1
                         continue

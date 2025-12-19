@@ -27,7 +27,7 @@ tests/
 │   ├── test_snapchat_messages.py  # Snapchat Messages edge cases
 │   ├── test_instagram_messages.py # Instagram Messages edge cases
 │   ├── test_instagram_public.py   # Instagram Public Media edge cases
-│   ├── test_instagram_old.py      # Instagram Old Format edge cases
+│   ├── test_instaloader.py        # Instaloader edge cases
 │   ├── test_discord.py            # Discord edge cases
 │   └── test_imessage.py           # iMessage edge cases
 ├── test_integration/
@@ -114,7 +114,7 @@ Test `process()` function edge cases per processor:
 | Snapchat Messages | Orphaned media, ambiguous overlay matching |
 | Instagram Messages | Current vs legacy format, expired media |
 | Instagram Public | Carousel posts, YYYYMM organization |
-| Instagram Old | UTC timestamp pattern, carousel numbering |
+| Instaloader | UTC timestamp pattern, carousel numbering |
 | Discord | Expired CDN URLs, channel type detection |
 | iMessage | Mac vs iPhone structure, Live Photo linking, deduplication |
 
@@ -149,7 +149,7 @@ Each processor has a corresponding fixture that creates a minimal valid export:
 - `snapchat_messages_export`
 - `instagram_messages_export`
 - `instagram_public_export`
-- `instagram_old_export`
+- `instaloader_export`
 - `discord_export`
 - `imessage_mac_export`
 - `imessage_iphone_export`
@@ -164,7 +164,7 @@ Direct access to processor classes:
 - `snapchat_messages_processor`
 - `instagram_messages_processor`
 - `instagram_public_processor`
-- `instagram_old_processor`
+- `instaloader_processor`
 - `discord_processor`
 - `imessage_processor`
 
@@ -222,7 +222,7 @@ Based on documentation, these edge cases are covered:
 | Snapchat Messages | Ambiguous overlay match | test_snapchat_messages.py |
 | Instagram | Current vs legacy format | test_instagram_messages.py |
 | Instagram | Expired media placeholder | test_instagram_messages.py |
-| Instagram Old | Carousel numbering | test_instagram_old.py |
+| Instaloader | Carousel numbering | test_instaloader.py |
 | Discord | Expired CDN URLs | test_discord.py |
 | Discord | Channel type detection | test_discord.py |
 | iMessage | Mac vs iPhone structure | test_imessage.py |

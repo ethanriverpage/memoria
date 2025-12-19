@@ -220,7 +220,7 @@ See [Instagram Export Guide](Instagram-Export) for:
 
 - Instagram Messages (DMs, group chats)
 - Instagram Public Media (new format with date folders)
-- Instagram Old Format (legacy timestamped files)
+- Instaloader (scrape data from Instaloader tool)
 
 ### Snapchat
 

@@ -246,13 +246,13 @@ def process(input_dir, output_dir):
 
 **Platforms where this matters:**
 
-- Instagram Old Format (uses file mtimes as fallback)
+- Instaloader (uses file mtimes as fallback)
 - Any export lacking JSON/metadata files
 - Exports with incomplete metadata
 
 **See also:**
 
-- Look at `processors/instagram_old_public_media/preprocess.py` for a real example
+- Look at `processors/instaloader/preprocess.py` for a real example
 - See [Design Decisions](Design-Decisions.md#filesystem-timestamp-handling) for detailed rationale
 
 ## Contributing

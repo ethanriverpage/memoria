@@ -156,11 +156,11 @@ def instagram_public_export(temp_export_dir) -> Path:
 
 
 @pytest.fixture
-def instagram_old_export(temp_export_dir) -> Path:
-    """Create a minimal Instagram Old Format export."""
-    from tests.fixtures.generators import create_instagram_old_export
+def instaloader_export(temp_export_dir) -> Path:
+    """Create a minimal Instaloader scrape data export."""
+    from tests.fixtures.generators import create_instaloader_export
 
-    return create_instagram_old_export(temp_export_dir)
+    return create_instaloader_export(temp_export_dir)
 
 
 @pytest.fixture
@@ -251,13 +251,13 @@ def instagram_public_processor() -> Type[ProcessorBase]:
 
 
 @pytest.fixture
-def instagram_old_processor() -> Type[ProcessorBase]:
-    """Return the Instagram Old Format processor class."""
-    from processors.instagram_old_public_media.processor import (
-        OldInstagramPublicMediaProcessor,
+def instaloader_processor() -> Type[ProcessorBase]:
+    """Return the Instaloader processor class."""
+    from processors.instaloader.processor import (
+        InstaloaderProcessor,
     )
 
-    return OldInstagramPublicMediaProcessor
+    return InstaloaderProcessor
 
 
 @pytest.fixture
