@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for HashDatabase."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -10,12 +9,14 @@ from common.dedup.database import HashDatabase
 
 
 @pytest.fixture
-def temp_db():
-    """Create a temporary database for testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test_dedup.db"
-        db = HashDatabase(db_path)
-        yield db
+def temp_db(tmp_path):
+    """Create a temporary database for testing.
+
+    Uses pytest's tmp_path fixture for automatic cleanup.
+    """
+    db_path = tmp_path / "test_dedup.db"
+    db = HashDatabase(db_path)
+    return db
 
 
 class TestHashDatabase:

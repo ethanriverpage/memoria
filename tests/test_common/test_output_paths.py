@@ -5,7 +5,6 @@ Tests the Platform/User/Service output path building mechanism.
 """
 
 import pytest
-from pathlib import Path
 
 from common.output.paths import OutputInfo, build_processor_output_path
 
@@ -217,4 +216,3 @@ class TestProcessorGetOutputInfo:
         assert info.platform == "Discord"
         assert info.service is None
         assert info.username_prefix == "discord"
-

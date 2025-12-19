@@ -113,9 +113,7 @@ class GooglePhotosProcessor(ProcessorBase):
         workers = kwargs.get("workers", 4)
 
         if not photos_dir.exists():
-            log.logger.warning(
-                "Google Photos directory not found: %s", photos_dir
-            )
+            log.logger.warning("Google Photos directory not found: %s", photos_dir)
             return
 
         # Collect all media files

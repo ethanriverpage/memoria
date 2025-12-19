@@ -1137,9 +1137,10 @@ class HashDatabase:
                         to_delete.append(row["id"])
 
                 if to_delete:
+                    # placeholders are safe - generated "?" marks for parameterized query
                     placeholders = ",".join("?" * len(to_delete))
                     cursor.execute(
-                        f"DELETE FROM hash_cache WHERE id IN ({placeholders})",
+                        f"DELETE FROM hash_cache WHERE id IN ({placeholders})",  # nosec B608
                         to_delete,
                     )
                     conn.commit()
@@ -1154,9 +1155,10 @@ class HashDatabase:
                         to_delete.append(row["id"])
 
                 if to_delete:
+                    # placeholders are safe - generated "?" marks for parameterized query
                     placeholders = ",".join("?" * len(to_delete))
                     cursor.execute(
-                        f"DELETE FROM hash_cache WHERE id IN ({placeholders})",
+                        f"DELETE FROM hash_cache WHERE id IN ({placeholders})",  # nosec B608
                         to_delete,
                     )
                     conn.commit()

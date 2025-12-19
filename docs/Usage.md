@@ -186,17 +186,17 @@ Output example:
 
 ```
 Available processors:
-  - SnapchatMessagesProcessor (priority: 85)
-  - IMessageImazingProcessor (priority: 85)
-  - IMessageProcessor (priority: 82)
-  - SnapchatMemoriesProcessor (priority: 80)
-  - DiscordProcessor (priority: 70)
-  - InstagramMessagesProcessor (priority: 70)
-  - InstagramPublicMediaProcessor (priority: 60)
-  - GooglePhotosProcessor (priority: 50)
-  - GoogleChatProcessor (priority: 50)
-  - GoogleVoiceProcessor (priority: 50)
-  - InstaloaderProcessor (priority: 30)
+  - Snapchat Messages (priority: 85)
+  - iMessage-iMazing (priority: 85)
+  - iMessage (priority: 80)
+  - Snapchat Memories (priority: 80)
+  - Discord (priority: 70)
+  - Instagram Messages (priority: 70)
+  - Instagram Public Media (priority: 60)
+  - Google Photos (priority: 50)
+  - Google Chat (priority: 50)
+  - Google Voice (priority: 50)
+  - Instaloader (priority: 30)
 ```
 
 ### Upload-Only Mode
@@ -440,7 +440,6 @@ Enable deduplication across different platform exports. See [Deduplication](Dedu
 | `DEDUP_DESC_MAX_TOTAL` | `1500` | Max total chars for ImageDescription |
 | `DEDUP_MSG_TRUNCATE` | `200` | Message content truncation length |
 | `DEDUP_GPS_DISTANCE` | `500` | Max GPS distance (meters) for validation |
-| `DEDUP_TIMESTAMP_DELTA` | `3600` | Max timestamp difference (seconds) |
 | `DEDUP_ASPECT_RATIO` | `0.10` | Max aspect ratio difference |
 
 ## Advanced Usage

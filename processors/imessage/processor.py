@@ -16,7 +16,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from common.dedup.catalog import catalog_media_files
 from common.dedup.description import (
     SourceEntry,
-    build_description,
     build_source_line,
     build_message_context,
     PLATFORM_IMESSAGE,

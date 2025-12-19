@@ -173,7 +173,9 @@ class DiscordProcessor(ProcessorBase):
                         "Raw Discord export detected, preprocessing to cache: %s",
                         cache_path,
                     )
-                    log.logger.info("This will download attachments from Discord CDN...")
+                    log.logger.info(
+                        "This will download attachments from Discord CDN..."
+                    )
                     cache_path.mkdir(parents=True, exist_ok=True)
 
                     preprocessor = DiscordPreprocessor(

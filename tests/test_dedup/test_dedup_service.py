@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for DeduplicationService."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -22,12 +21,14 @@ from common.dedup.database import HashDatabase
 
 
 @pytest.fixture
-def temp_db():
-    """Create a temporary database for testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test_dedup.db"
-        db = HashDatabase(db_path)
-        yield db
+def temp_db(tmp_path):
+    """Create a temporary database for testing.
+
+    Uses pytest's tmp_path fixture for automatic cleanup.
+    """
+    db_path = tmp_path / "test_dedup.db"
+    db = HashDatabase(db_path)
+    return db
 
 
 @pytest.fixture
@@ -907,4 +908,134 @@ class TestFilterPrimaryFiles:
         filtered, skipped = filter_primary_files([], manifest, "Test Processor")
 
         assert filtered == []
+        assert skipped == 0
+
+
+class TestLivePhotoVideoLinking:
+    """Tests for Live Photo video component linking in deduplication."""
+
+    def test_live_photo_video_follows_image_primary(self, tmp_path):
+        """Test that Live Photo video follows its image's primary decision."""
+        from common.dedup.hashing import compute_content_hash
+
+        # Create image and video files
+        image_file = tmp_path / "photo.heic"
+        video_file = tmp_path / "photo.mov"
+        image_file.write_bytes(b"image content")
+        video_file.write_bytes(b"video content")
+
+        image_hash = compute_content_hash(image_file)
+
+        # Manifest where this processor owns the primary image
+        manifest = {
+            "duplicates": {
+                image_hash: {
+                    "primary": {
+                        "processor": "Test Processor",
+                        "source_path": str(image_file),
+                        "content_hash": image_hash,
+                    },
+                    "secondary": [],
+                }
+            },
+            "live_photo_videos": {
+                str(video_file): image_hash,
+            },
+        }
+
+        # Video should be included since its image is primary for this processor
+        files = [video_file]
+        filtered, skipped = filter_primary_files(files, manifest, "Test Processor")
+
+        assert len(filtered) == 1
+        assert video_file in filtered
+        assert skipped == 0
+
+    def test_live_photo_video_skipped_when_image_secondary(self, tmp_path):
+        """Test that Live Photo video is skipped when its image is secondary."""
+        from common.dedup.hashing import compute_content_hash
+
+        # Create image and video files
+        image_file = tmp_path / "photo.heic"
+        video_file = tmp_path / "photo.mov"
+        image_file.write_bytes(b"image content 2")
+        video_file.write_bytes(b"video content 2")
+
+        image_hash = compute_content_hash(image_file)
+
+        # Manifest where another processor owns the primary image
+        manifest = {
+            "duplicates": {
+                image_hash: {
+                    "primary": {
+                        "processor": "Other Processor",
+                        "source_path": "/other/photo.heic",
+                        "content_hash": image_hash,
+                    },
+                    "secondary": [
+                        {
+                            "processor": "Test Processor",
+                            "source_path": str(image_file),
+                            "content_hash": image_hash,
+                        }
+                    ],
+                }
+            },
+            "live_photo_videos": {
+                str(video_file): image_hash,
+            },
+        }
+
+        # Video should be skipped since its image is not primary for this processor
+        files = [video_file]
+        filtered, skipped = filter_primary_files(files, manifest, "Test Processor")
+
+        assert len(filtered) == 0
+        assert skipped == 1
+
+    def test_manifest_includes_live_photo_video_map(self, temp_db, config):
+        """Test that analyze() includes live_photo_videos in manifest."""
+        service = DeduplicationService(db=temp_db, config=config)
+
+        catalog = {
+            "processor": "Google Photos",
+            "input_dir": "/path/to/export",
+            "files": [
+                {
+                    "source_path": "/path/photo.heic",
+                    "content_hash": "image_hash_123",
+                    "file_size": 1000,
+                    "live_photo_video": "/path/photo.mov",
+                },
+            ],
+        }
+
+        manifest = service.analyze([catalog])
+
+        assert "live_photo_videos" in manifest
+        assert manifest["live_photo_videos"] == {
+            "/path/photo.mov": "image_hash_123",
+        }
+
+    def test_regular_files_not_affected_by_live_photo_map(self, tmp_path):
+        """Test that regular files are not affected by live_photo_videos map."""
+
+        # Create a regular file (not a Live Photo video)
+        regular_file = tmp_path / "regular.mp4"
+        regular_file.write_bytes(b"regular video content")
+
+        # Manifest with some live_photo_videos but not this file
+        manifest = {
+            "duplicates": {},
+            "live_photo_videos": {
+                "/some/other/video.mov": "some_image_hash",
+            },
+        }
+
+        # Regular file should be treated as primary (not in manifest)
+        files = [regular_file]
+        filtered, skipped = filter_primary_files(files, manifest, "Test Processor")
+
+        assert len(filtered) == 1
+        assert regular_file in filtered
         assert skipped == 0

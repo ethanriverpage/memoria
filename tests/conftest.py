@@ -449,8 +449,8 @@ def assert_directories_equal(
             path1 = files1[rel_path]
             path2 = files2[rel_path]
 
-            hash1 = hashlib.md5(path1.read_bytes()).hexdigest()
-            hash2 = hashlib.md5(path2.read_bytes()).hexdigest()
+            hash1 = hashlib.md5(path1.read_bytes(), usedforsecurity=False).hexdigest()
+            hash2 = hashlib.md5(path2.read_bytes(), usedforsecurity=False).hexdigest()
 
             assert hash1 == hash2, f"Content differs for {rel_path}"
 

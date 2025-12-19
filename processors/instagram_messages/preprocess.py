@@ -187,7 +187,6 @@ class InstagramMessagesPreprocessor:
         Returns:
             DetectionResult with username and source
         """
-        import re
 
         def detect_from_personal_info(path: Path) -> Optional[str]:
             """Extract username from personal_information.html."""
@@ -199,7 +198,9 @@ class InstagramMessagesPreprocessor:
                 / "personal_information.html"
             )
             # Legacy format (2022): personal_information/
-            legacy_format_path = path / "personal_information" / "personal_information.html"
+            legacy_format_path = (
+                path / "personal_information" / "personal_information.html"
+            )
 
             html_path = None
             if new_format_path.exists():

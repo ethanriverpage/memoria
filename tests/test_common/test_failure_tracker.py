@@ -2,8 +2,6 @@
 """Unit tests for common/failure_tracker.py FailureTracker class."""
 
 import json
-import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -105,7 +103,10 @@ class TestAddOrphanedMetadata:
 
         tracker.add_orphaned_metadata(metadata, "Missing file", context=context)
 
-        assert tracker.orphaned_metadata[0]["context"]["expected_path"] == "/path/to/video.mp4"
+        assert (
+            tracker.orphaned_metadata[0]["context"]["expected_path"]
+            == "/path/to/video.mp4"
+        )
 
 
 class TestAddProcessingFailure:
@@ -442,4 +443,3 @@ class TestHandleFailures:
         assert (issues_dir / "failure-report.json").exists()
         assert (issues_dir / "failed-matching" / "media").exists()
         assert (issues_dir / "failed-matching" / "metadata").exists()
-

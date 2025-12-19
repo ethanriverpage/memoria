@@ -66,26 +66,6 @@ class BannedFilesFilter:
 
         return False
 
-    def add_pattern(self, pattern: str) -> None:
-        """
-        Add an additional pattern to the banned list
-
-        Args:
-            pattern: Pattern string to add
-        """
-        if pattern not in self.patterns:
-            self.patterns.append(pattern)
-
-    def remove_pattern(self, pattern: str) -> None:
-        """
-        Remove a pattern from the banned list
-
-        Args:
-            pattern: Pattern string to remove
-        """
-        if pattern in self.patterns:
-            self.patterns.remove(pattern)
-
     def get_patterns(self) -> List[str]:
         """
         Get current list of banned patterns

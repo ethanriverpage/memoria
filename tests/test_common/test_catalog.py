@@ -2,39 +2,67 @@
 """Unit tests for catalog_media_files() in common/catalog.py."""
 
 import gc
-import tempfile
 import tracemalloc
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Callable, Dict, List, Optional
 from unittest.mock import patch, MagicMock
 import types
 
 import pytest
 
-from common.dedup.catalog import catalog_media_files, collect_catalog
+from common.dedup.catalog import catalog_media_files
+
+
+def build_catalog_dict(
+    processor_name: str,
+    input_path: Path,
+    media_files: List[Path],
+    workers: int = 4,
+    metadata_extractor: Optional[Callable[[Path], Dict[str, Any]]] = None,
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Build a catalog dictionary by collecting all entries from the generator.
+
+    Test helper that wraps catalog_media_files() into a dictionary format.
+    """
+    catalog: Dict[str, Any] = {
+        "processor": processor_name,
+        "input_dir": str(input_path),
+        "files": [],
+    }
+    for entry in catalog_media_files(
+        processor_name=processor_name,
+        input_path=input_path,
+        media_files=media_files,
+        workers=workers,
+        metadata_extractor=metadata_extractor,
+        db_path=db_path,
+    ):
+        catalog["files"].append(entry)
+    return catalog
 
 
 class TestCatalogMediaFiles:
-    """Tests for catalog_media_files() generator and collect_catalog() function."""
+    """Tests for catalog_media_files() generator function."""
 
     @pytest.fixture
-    def temp_media_dir(self):
-        """Create a temporary directory with test media files."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmppath = Path(tmpdir)
+    def temp_media_dir(self, tmp_path):
+        """Create a temporary directory with test media files.
 
-            # Create some test files
-            (tmppath / "photo1.jpg").write_bytes(b"fake jpeg content 1")
-            (tmppath / "photo2.jpg").write_bytes(b"fake jpeg content 2")
-            (tmppath / "video.mp4").write_bytes(b"fake video content")
+        Uses pytest's tmp_path fixture for automatic cleanup.
+        """
+        # Create some test files
+        (tmp_path / "photo1.jpg").write_bytes(b"fake jpeg content 1")
+        (tmp_path / "photo2.jpg").write_bytes(b"fake jpeg content 2")
+        (tmp_path / "video.mp4").write_bytes(b"fake video content")
 
-            yield tmppath
+        return tmp_path
 
     def test_catalog_structure(self, temp_media_dir):
         """Test that collect_catalog has correct structure."""
         media_files = list(temp_media_dir.glob("*"))
 
-        catalog = collect_catalog(
+        catalog = build_catalog_dict(
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
@@ -72,7 +100,7 @@ class TestCatalogMediaFiles:
         """Test that each file entry has all required fields."""
         media_files = list(temp_media_dir.glob("*.jpg"))
 
-        catalog = collect_catalog(
+        catalog = build_catalog_dict(
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
@@ -98,7 +126,7 @@ class TestCatalogMediaFiles:
         """Test that content hashes are computed."""
         media_files = list(temp_media_dir.glob("*.jpg"))
 
-        catalog = collect_catalog(
+        catalog = build_catalog_dict(
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
@@ -113,7 +141,7 @@ class TestCatalogMediaFiles:
         """Test that different files have different content hashes."""
         media_files = list(temp_media_dir.glob("*.jpg"))
 
-        catalog = collect_catalog(
+        catalog = build_catalog_dict(
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
@@ -127,7 +155,7 @@ class TestCatalogMediaFiles:
         """Test that relative paths are correctly computed."""
         media_files = list(temp_media_dir.glob("*.jpg"))
 
-        catalog = collect_catalog(
+        catalog = build_catalog_dict(
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
@@ -142,7 +170,7 @@ class TestCatalogMediaFiles:
         """Test that file sizes are correctly recorded."""
         media_files = list(temp_media_dir.glob("*.jpg"))
 
-        catalog = collect_catalog(
+        catalog = build_catalog_dict(
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
@@ -158,7 +186,7 @@ class TestCatalogMediaFiles:
 
     def test_empty_file_list(self, temp_media_dir):
         """Test handling of empty file list."""
-        catalog = collect_catalog(
+        catalog = build_catalog_dict(
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=[],
@@ -187,7 +215,7 @@ class TestCatalogMediaFiles:
         def extract_metadata(file_path: Path):
             return {"custom_field": file_path.name}
 
-        catalog = collect_catalog(
+        catalog = build_catalog_dict(
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
@@ -209,7 +237,7 @@ class TestCatalogMediaFiles:
             raise ValueError("Intentional failure")
 
         # Should not raise
-        catalog = collect_catalog(
+        catalog = build_catalog_dict(
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
@@ -230,7 +258,7 @@ class TestCatalogMediaFiles:
             # Ensure database_path is also mocked to avoid creating files in project root
             mock_config.return_value.database_path = temp_media_dir / "test_dedup.db"
 
-            catalog = collect_catalog(
+            catalog = build_catalog_dict(
                 processor_name="Test Processor",
                 input_path=temp_media_dir,
                 media_files=media_files,
@@ -246,7 +274,7 @@ class TestCatalogMediaFiles:
         existing_file = temp_media_dir / "photo1.jpg"
         missing_file = temp_media_dir / "nonexistent.jpg"
 
-        catalog = collect_catalog(
+        catalog = build_catalog_dict(
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=[existing_file, missing_file],
@@ -267,7 +295,7 @@ class TestCatalogMediaFiles:
 
         media_files = [nested_file]
 
-        catalog = collect_catalog(
+        catalog = build_catalog_dict(
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
@@ -286,25 +314,27 @@ class TestProcessorBuildCatalogStreaming:
     """
 
     @pytest.fixture
-    def temp_export_dir(self):
-        """Create a temporary directory simulating a preprocessed export."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmppath = Path(tmpdir)
+    def temp_export_dir(self, tmp_path):
+        """Create a temporary directory simulating a preprocessed export.
 
-            # Create media directory (standard preprocessed structure)
-            media_dir = tmppath / "media"
-            media_dir.mkdir()
+        Uses pytest's tmp_path fixture for automatic cleanup.
+        """
+        # Create media directory (standard preprocessed structure)
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
 
-            # Create test media files
-            (media_dir / "photo1.jpg").write_bytes(b"fake jpeg content 1")
-            (media_dir / "photo2.jpg").write_bytes(b"fake jpeg content 2")
-            (media_dir / "video.mp4").write_bytes(b"fake video content")
+        # Create test media files
+        (media_dir / "photo1.jpg").write_bytes(b"fake jpeg content 1")
+        (media_dir / "photo2.jpg").write_bytes(b"fake jpeg content 2")
+        (media_dir / "video.mp4").write_bytes(b"fake video content")
 
-            # Create metadata.json (minimal valid structure)
-            metadata_file = tmppath / "metadata.json"
-            metadata_file.write_text('{"export_info": {"export_username": "test_user"}}')
+        # Create metadata.json (minimal valid structure)
+        metadata_file = tmp_path / "metadata.json"
+        metadata_file.write_text(
+            '{"export_info": {"export_username": "test_user"}}'
+        )
 
-            yield tmppath
+        return tmp_path
 
     def test_build_catalog_returns_generator(self, temp_export_dir):
         """Test that build_catalog returns a generator, not a dict."""
@@ -319,9 +349,9 @@ class TestProcessorBuildCatalogStreaming:
         result = GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=2)
 
         # Result should be a generator, not a dict
-        assert isinstance(result, types.GeneratorType), (
-            f"build_catalog should return a generator, got {type(result)}"
-        )
+        assert isinstance(
+            result, types.GeneratorType
+        ), f"build_catalog should return a generator, got {type(result)}"
 
     def test_build_catalog_yields_entries_lazily(self, temp_export_dir):
         """Test that entries are yielded one at a time (lazy evaluation)."""
@@ -462,34 +492,34 @@ class TestMultipleProcessorStreaming:
     """Test streaming behavior across different processor types."""
 
     @pytest.fixture
-    def temp_discord_export(self):
-        """Create a temporary Discord preprocessed export."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmppath = Path(tmpdir)
+    def temp_discord_export(self, tmp_path):
+        """Create a temporary Discord preprocessed export.
 
-            # Discord preprocessed structure
-            media_dir = tmppath / "media"
-            media_dir.mkdir()
-            (media_dir / "attachment1.png").write_bytes(b"discord image 1")
-            (media_dir / "attachment2.jpg").write_bytes(b"discord image 2")
+        Uses pytest's tmp_path fixture for automatic cleanup.
+        """
+        # Discord preprocessed structure
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
+        (media_dir / "attachment1.png").write_bytes(b"discord image 1")
+        (media_dir / "attachment2.jpg").write_bytes(b"discord image 2")
 
-            metadata_file = tmppath / "metadata.json"
-            metadata_file.write_text('{"export_info": {}}')
+        metadata_file = tmp_path / "metadata.json"
+        metadata_file.write_text('{"export_info": {}}')
 
-            yield tmppath
+        return tmp_path
 
     @pytest.fixture
-    def temp_imessage_export(self):
-        """Create a temporary iMessage export."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmppath = Path(tmpdir)
+    def temp_imessage_export(self, tmp_path):
+        """Create a temporary iMessage export.
 
-            # iMessage structure
-            attachments_dir = tmppath / "Attachments"
-            attachments_dir.mkdir()
-            (attachments_dir / "photo.jpg").write_bytes(b"imessage photo")
+        Uses pytest's tmp_path fixture for automatic cleanup.
+        """
+        # iMessage structure
+        attachments_dir = tmp_path / "Attachments"
+        attachments_dir.mkdir()
+        (attachments_dir / "photo.jpg").write_bytes(b"imessage photo")
 
-            yield tmppath
+        return tmp_path
 
     def test_discord_build_catalog_is_generator(self, temp_discord_export):
         """Test Discord processor returns generator."""
@@ -514,13 +544,15 @@ class TestMultipleProcessorStreaming:
         assert len(entries) == 1
         assert entries[0]["_processor"] == "iMessage"
 
-    def test_all_processors_return_generators(self):
-        """Verify all dedup-supporting processors return generators."""
+    def test_all_processors_return_generators(self, tmp_path):
+        """Verify all dedup-supporting processors return generators.
+
+        Uses pytest's tmp_path fixture for automatic cleanup.
+        """
         from processors.registry import ProcessorRegistry
-        import types
 
         # Get all processors that support dedup
-        registry = ProcessorRegistry()
+        ProcessorRegistry()
 
         # Import all processor modules to populate registry
         from processors.google_voice.processor import get_processor as gv
@@ -531,19 +563,21 @@ class TestMultipleProcessorStreaming:
 
         processors = [gv(), gc(), dc(), im(), igm()]
 
-        for processor in processors:
+        for idx, processor in enumerate(processors):
             if processor.supports_dedup():
-                # Create a minimal temp dir
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    result = processor.build_catalog(tmpdir, workers=1)
+                # Create a unique subdir for each processor
+                proc_dir = tmp_path / f"proc_{idx}"
+                proc_dir.mkdir()
 
-                    # Should be a generator type
-                    assert isinstance(result, types.GeneratorType), (
-                        f"{processor.get_name()}.build_catalog() should return a generator"
-                    )
+                result = processor.build_catalog(str(proc_dir), workers=1)
 
-                    # Consume to ensure it doesn't error
-                    list(result)
+                # Should be a generator type
+                assert isinstance(
+                    result, types.GeneratorType
+                ), f"{processor.get_name()}.build_catalog() should return a generator"
+
+                # Consume to ensure it doesn't error
+                list(result)
 
 
 class TestStreamingMemoryBehavior:
@@ -571,19 +605,19 @@ class TestStreamingMemoryBehavior:
     """
 
     @pytest.fixture
-    def large_temp_dir(self):
-        """Create a temporary directory with many test files."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmppath = Path(tmpdir)
+    def large_temp_dir(self, tmp_path):
+        """Create a temporary directory with many test files.
 
-            # Create 100 test files (enough to show memory difference)
-            for i in range(100):
-                # Each file has unique content to prevent dedup
-                (tmppath / f"file_{i:03d}.jpg").write_bytes(
-                    f"unique content for file {i} with some padding".encode() * 10
-                )
+        Uses pytest's tmp_path fixture for automatic cleanup.
+        """
+        # Create 100 test files (enough to show memory difference)
+        for i in range(100):
+            # Each file has unique content to prevent dedup
+            (tmp_path / f"file_{i:03d}.jpg").write_bytes(
+                f"unique content for file {i} with some padding".encode() * 10
+            )
 
-            yield tmppath
+        return tmp_path
 
     def test_streaming_uses_bounded_memory(self, large_temp_dir):
         """Test that streaming iteration uses bounded memory.
@@ -648,7 +682,9 @@ class TestStreamingMemoryBehavior:
             workers=1,
         ):
             # Verify we get a fresh entry each time
-            assert entry is not current_entry, "Should get new entry object each iteration"
+            assert (
+                entry is not current_entry
+            ), "Should get new entry object each iteration"
 
             # Track unique hashes to verify all files processed
             processed_hashes.add(entry["content_hash"])
@@ -667,7 +703,7 @@ class TestStreamingMemoryBehavior:
         """
         media_files = list(large_temp_dir.glob("*.jpg"))
 
-        catalog = collect_catalog(
+        catalog = build_catalog_dict(
             processor_name="Test",
             input_path=large_temp_dir,
             media_files=media_files,
@@ -675,65 +711,68 @@ class TestStreamingMemoryBehavior:
         )
 
         # collect_catalog should have all entries in memory at once
-        assert len(catalog["files"]) == 100, "collect_catalog should hold all 100 entries"
+        assert (
+            len(catalog["files"]) == 100
+        ), "collect_catalog should hold all 100 entries"
 
         # All entries should be accessible (they're all in memory)
         hashes = {entry["content_hash"] for entry in catalog["files"]}
         assert len(hashes) == 100, "All entries should have unique hashes"
 
-    def test_worker_writes_entries_incrementally(self):
+    def test_worker_writes_entries_incrementally(self, tmp_path):
         """Test that the catalog worker writes to DB incrementally, not all at once.
 
         This mocks the database to verify entries are written in batches
         during iteration, not accumulated and written at the end.
+
+        Uses pytest's tmp_path fixture for automatic cleanup.
         """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmppath = Path(tmpdir)
+        # Create test structure for a processor
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
 
-            # Create test structure for a processor
-            media_dir = tmppath / "media"
-            media_dir.mkdir()
+        # Create enough files to trigger multiple batch writes (batch size is 100)
+        for i in range(250):
+            (media_dir / f"file_{i:03d}.jpg").write_bytes(f"content {i}".encode())
 
-            # Create enough files to trigger multiple batch writes (batch size is 100)
-            for i in range(250):
-                (media_dir / f"file_{i:03d}.jpg").write_bytes(f"content {i}".encode())
+        # Mock the database
+        mock_db = MagicMock()
+        write_call_counts = []
 
-            # Mock the database
-            mock_db = MagicMock()
-            write_call_counts = []
+        def track_batch_write(run_id, export_name, batch):
+            write_call_counts.append(len(batch))
+            return len(batch)
 
-            def track_batch_write(run_id, export_name, batch):
-                write_call_counts.append(len(batch))
-                return len(batch)
+        mock_db.write_catalog_entries_batch.side_effect = track_batch_write
 
-            mock_db.write_catalog_entries_batch.side_effect = track_batch_write
+        # Import and run the worker function
+        from processors.discord.processor import DiscordProcessor
 
-            # Import and run the worker function
-            from processors.discord.processor import DiscordProcessor
+        # Process using the actual generator
+        batch = []
+        for entry in DiscordProcessor.build_catalog(str(tmp_path), workers=1):
+            batch.append(entry)
+            if len(batch) >= 100:
+                mock_db.write_catalog_entries_batch(
+                    "test_run", "test_export", batch
+                )
+                batch = []
 
-            # Process using the actual generator
-            batch = []
-            for entry in DiscordProcessor.build_catalog(str(tmppath), workers=1):
-                batch.append(entry)
-                if len(batch) >= 100:
-                    mock_db.write_catalog_entries_batch("test_run", "test_export", batch)
-                    batch = []
+        if batch:
+            mock_db.write_catalog_entries_batch("test_run", "test_export", batch)
 
-            if batch:
-                mock_db.write_catalog_entries_batch("test_run", "test_export", batch)
+        # Verify multiple batch writes occurred
+        assert (
+            len(write_call_counts) >= 2
+        ), f"Expected multiple batch writes, got {len(write_call_counts)}"
 
-            # Verify multiple batch writes occurred
-            assert len(write_call_counts) >= 2, (
-                f"Expected multiple batch writes, got {len(write_call_counts)}"
-            )
+        # Each batch should be <= 100 entries (except possibly the last)
+        for i, count in enumerate(write_call_counts[:-1]):
+            assert count == 100, f"Batch {i} should have 100 entries, got {count}"
 
-            # Each batch should be <= 100 entries (except possibly the last)
-            for i, count in enumerate(write_call_counts[:-1]):
-                assert count == 100, f"Batch {i} should have 100 entries, got {count}"
-
-            # Total entries written should match files created
-            total_written = sum(write_call_counts)
-            assert total_written == 250, f"Expected 250 entries, got {total_written}"
+        # Total entries written should match files created
+        total_written = sum(write_call_counts)
+        assert total_written == 250, f"Expected 250 entries, got {total_written}"
 
     def test_catalog_workers_env_limits_parallelism(self, large_temp_dir):
         """Test that CATALOG_WORKERS environment variable limits worker count.

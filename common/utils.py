@@ -10,6 +10,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Set
 
+from common.detection import detect_from_dirname
+
 # Re-export logging functions from centralized logging module for backwards compatibility
 
 
@@ -80,35 +82,8 @@ def get_gps_format(file_path) -> str:
 
 def extract_username_from_export_dir(input_dir: str, prefix: str) -> str:
     """Extract username from export directory name like "prefix-username-YYYYMMDD"."""
-    dir_name = Path(input_dir).name
-    escaped_prefix = re.escape(prefix)
-
-    # Try patterns in order of specificity
-    patterns = [
-        # Instagram old format with trailing underscore
-        (
-            (r"instagram-(.+?)_-(\d{4}-?\d{2}-?\d{2})", lambda m: m.group(1) + "_")
-            if prefix == "instagram"
-            else None
-        ),
-        # Standard pattern with date
-        (rf"{escaped_prefix}-(.+?)-(\d{{4}}-?\d{{2}}-?\d{{2}})", lambda m: m.group(1)),
-        # Fallback: anything after prefix with date stripped
-        (
-            rf"{escaped_prefix}-(.+)",
-            lambda m: re.sub(r"_?-?\d{4}-?\d{2}-?\d{2}$", "", m.group(1)) or "unknown",
-        ),
-    ]
-
-    for pattern_tuple in patterns:
-        if pattern_tuple is None:
-            continue
-        pattern, extract_fn = pattern_tuple
-        match = re.match(pattern, dir_name)
-        if match:
-            return extract_fn(match)
-
-    return "unknown"
+    result = detect_from_dirname(Path(input_dir), prefix)
+    return result if result else "unknown"
 
 
 def sanitize_filename(name: str, max_length: int = 50) -> str:
@@ -207,8 +182,10 @@ def default_worker_count() -> int:
     return max(1, cpu_count() - 1)
 
 
-def parse_bool_env(value: str) -> bool:
-    """Return True if value is truthy ("true", "1", "yes", "on")."""
+def parse_bool_env(value: Optional[str], default: bool = False) -> bool:
+    """Parse a boolean from string value, with default for None."""
+    if value is None:
+        return default
     return value.lower() in ("true", "1", "yes", "on")
 
 

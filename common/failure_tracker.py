@@ -192,7 +192,9 @@ class FailureTracker:
             return
 
         if self.orphaned_metadata:
-            logger.debug(f"Tracked {len(self.orphaned_metadata)} orphaned metadata entries")
+            logger.debug(
+                f"Tracked {len(self.orphaned_metadata)} orphaned metadata entries"
+            )
 
         if self.orphaned_media:
             # Group by reason and show counts
@@ -208,7 +210,9 @@ class FailureTracker:
                 if len(paths) <= 3:
                     # Show all paths if 3 or fewer
                     paths_str = ", ".join(paths)
-                    logger.debug(f"Tracked {len(paths)} orphaned media ({reason}): {paths_str}")
+                    logger.debug(
+                        f"Tracked {len(paths)} orphaned media ({reason}): {paths_str}"
+                    )
                 else:
                     # Show count and first few examples
                     samples = ", ".join(paths[:2])
@@ -229,7 +233,9 @@ class FailureTracker:
             for reason, paths in reasons.items():
                 if len(paths) <= 3:
                     paths_str = ", ".join(paths)
-                    logger.debug(f"Tracked {len(paths)} processing failures ({reason}): {paths_str}")
+                    logger.debug(
+                        f"Tracked {len(paths)} processing failures ({reason}): {paths_str}"
+                    )
                 else:
                     samples = ", ".join(paths[:2])
                     logger.debug(
@@ -278,7 +284,9 @@ class FailureTracker:
             source_path = Path(entry["file_path"])
 
             if not source_path.exists():
-                logger.warning(f"Orphaned media file no longer exists: {short_path(source_path)}")
+                logger.warning(
+                    f"Orphaned media file no longer exists: {short_path(source_path)}"
+                )
                 entry["context"]["copy_error"] = "Source file not found"
                 continue
 

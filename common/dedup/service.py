@@ -148,6 +148,9 @@ class DeduplicationService:
         # Merge groups and build manifest
         manifest = self._build_manifest(all_files, exact_groups, perceptual_groups)
 
+        # Add Live Photo video mapping for atomic pair deduplication
+        manifest["live_photo_videos"] = self._build_live_photo_video_map(all_files)
+
         return manifest
 
     def analyze_from_db(self, run_id: str) -> Dict[str, Any]:
@@ -229,6 +232,15 @@ class DeduplicationService:
             exact_groups=exact_groups,
             perceptual_groups=perceptual_groups,
         )
+
+        # Add Live Photo video mapping for atomic pair deduplication
+        # Stream through entries to build the map without loading all into memory
+        video_map = {}
+        for entry in self.db.iter_all_entries(run_id, batch_size=1000):
+            video_path = entry.get("live_photo_video")
+            if video_path and entry.get("content_hash"):
+                video_map[video_path] = entry["content_hash"]
+        manifest["live_photo_videos"] = video_map
 
         return manifest
 
@@ -340,9 +352,13 @@ class DeduplicationService:
                 "merged_metadata": merged,
             }
 
-            total_duplicates += len(files) - 1
-            file_size = best.get("file_size", 0)
-            space_saved += file_size * (len(files) - 1)
+            # For perceptual duplicates, sum actual secondary file sizes
+            # (unlike exact duplicates, perceptual matches may have different sizes)
+            secondary_files = [
+                f for f in files if f.get("source_path") != primary.get("source_path")
+            ]
+            total_duplicates += len(secondary_files)
+            space_saved += sum(f.get("file_size", 0) for f in secondary_files)
 
         # Build statistics
         unique_files = total_files - total_duplicates
@@ -833,6 +849,29 @@ class DeduplicationService:
 
         return R * c
 
+    def _build_live_photo_video_map(
+        self,
+        all_files: List[Dict[str, Any]],
+    ) -> Dict[str, str]:
+        """Build mapping of Live Photo video paths to their image content hash.
+
+        Creates a lookup table that maps video source paths to the content hash
+        of their associated image. This enables Live Photo video components to
+        follow the same deduplication decision as their image.
+
+        Args:
+            all_files: All file entries from catalogs.
+
+        Returns:
+            Dict mapping video source_path -> image content_hash.
+        """
+        video_map = {}
+        for file_entry in all_files:
+            video_path = file_entry.get("live_photo_video")
+            if video_path and file_entry.get("content_hash"):
+                video_map[video_path] = file_entry["content_hash"]
+        return video_map
+
     def _build_manifest(
         self,
         all_files: List[Dict[str, Any]],
@@ -938,9 +977,13 @@ class DeduplicationService:
                 "merged_metadata": merged,
             }
 
-            total_duplicates += len(files) - 1
-            file_size = best.get("file_size", 0)
-            space_saved += file_size * (len(files) - 1)
+            # For perceptual duplicates, sum actual secondary file sizes
+            # (unlike exact duplicates, perceptual matches may have different sizes)
+            secondary_files = [
+                f for f in files if f.get("source_path") != primary.get("source_path")
+            ]
+            total_duplicates += len(secondary_files)
+            space_saved += sum(f.get("file_size", 0) for f in secondary_files)
 
         # Build statistics
         unique_files = len(all_files) - total_duplicates
@@ -1232,6 +1275,35 @@ def is_file_primary_by_hash(
     return True
 
 
+def _is_live_photo_video_primary(
+    manifest: Dict[str, Any],
+    file_path: Path,
+    processor_name: str,
+) -> Optional[bool]:
+    """Check if a Live Photo video should be processed based on its image's status.
+
+    Args:
+        manifest: Deduplication manifest from analyze().
+        file_path: Path to the video file.
+        processor_name: Name of the processor checking the file.
+
+    Returns:
+        True if the video should be copied (image is primary for this processor).
+        False if the video should be skipped (image is secondary).
+        None if this is not a Live Photo video in the manifest.
+    """
+    live_photo_videos = manifest.get("live_photo_videos", {})
+    file_path_str = str(file_path)
+
+    # Check if this file path is a known Live Photo video
+    if file_path_str in live_photo_videos:
+        image_hash = live_photo_videos[file_path_str]
+        # Follow the image's dedup decision
+        return is_file_primary_by_hash(manifest, image_hash, processor_name)
+
+    return None
+
+
 def filter_primary_files(
     files: List[Path],
     dedup_manifest: Optional[Dict[str, Any]],
@@ -1262,6 +1334,17 @@ def filter_primary_files(
 
     filtered = []
     for f in progress_bar(files, PHASE_DEDUP, "Filtering duplicates", unit="file"):
+        # First check if this is a Live Photo video component
+        live_photo_result = _is_live_photo_video_primary(
+            dedup_manifest, f, processor_name
+        )
+        if live_photo_result is not None:
+            # This is a Live Photo video - follow image's decision
+            if live_photo_result:
+                filtered.append(f)
+            continue
+
+        # Standard dedup check for non-Live Photo files
         content_hash = compute_content_hash(f)
         if is_file_primary_by_hash(dedup_manifest, content_hash, processor_name):
             filtered.append(f)

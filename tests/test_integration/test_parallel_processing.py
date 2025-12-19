@@ -64,7 +64,9 @@ def get_file_hashes(directory: Path) -> Dict[str, str]:
         if file_path.is_file():
             relative = file_path.relative_to(directory)
             with open(file_path, "rb") as f:
-                hashes[str(relative)] = hashlib.md5(f.read()).hexdigest()
+                hashes[str(relative)] = hashlib.md5(
+                    f.read(), usedforsecurity=False
+                ).hexdigest()
     return hashes
 
 

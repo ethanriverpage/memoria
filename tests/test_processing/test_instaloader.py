@@ -121,20 +121,13 @@ class TestInstaloaderMetadata:
         self, instaloader_processor, temp_export_dir, temp_output_dir
     ):
         """Should handle media files without accompanying metadata."""
-        create_instaloader_export(
-            temp_export_dir,
-            media_files=[
-                {
-                    "timestamp": "2021-01-01_12-00-00",
-                    "extension": "jpg",
-                    "caption": None,
-                }
-            ],
-        )
+        # Create media file manually without using generator (which always creates JSON)
+        temp_export_dir.mkdir(parents=True, exist_ok=True)
+        write_media_file(temp_export_dir / "2021-01-01_12-00-00_UTC.jpg", "jpeg")
 
         # Media file exists
         assert (temp_export_dir / "2021-01-01_12-00-00_UTC.jpg").exists()
-        # JSON files are not created by default generator (detection pattern expects .json.xz)
+        # No JSON metadata file for this test case
         assert not (temp_export_dir / "2021-01-01_12-00-00_UTC.json").exists()
 
     def test_json_metadata_handling(

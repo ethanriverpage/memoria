@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 """Unit tests for perceptual hashing."""
 
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from common.dedup.hashing import (
-    hamming_distance,
     hash_similarity,
-    are_similar,
     is_perceptual_hash_available,
     compute_image_hash,
     compute_perceptual_hash_with_dims,
@@ -18,38 +13,9 @@ from common.dedup.hashing import (
     VIDEO_EXTENSIONS,
     is_live_photo_pair,
     find_live_photo_video,
-    LivePhotoEntry,
     LIVE_PHOTO_IMAGE_EXTENSIONS,
     LIVE_PHOTO_VIDEO_EXTENSIONS,
 )
-
-
-class TestHammingDistance:
-    """Tests for Hamming distance calculation."""
-
-    def test_identical_hashes(self):
-        """Test distance between identical hashes is 0."""
-        hash1 = "ffffffff"
-        hash2 = "ffffffff"
-        assert hamming_distance(hash1, hash2) == 0
-
-    def test_completely_different(self):
-        """Test distance between opposite hashes."""
-        hash1 = "00000000"
-        hash2 = "ffffffff"
-        # 8 hex chars = 32 bits, all different
-        assert hamming_distance(hash1, hash2) == 32
-
-    def test_one_bit_different(self):
-        """Test distance with one bit difference."""
-        hash1 = "00000000"
-        hash2 = "00000001"
-        assert hamming_distance(hash1, hash2) == 1
-
-    def test_different_lengths_raises(self):
-        """Test that different length hashes raise ValueError."""
-        with pytest.raises(ValueError):
-            hamming_distance("aabb", "aabbccdd")
 
 
 class TestHashSimilarity:
@@ -82,30 +48,24 @@ class TestHashSimilarity:
         assert hash_similarity("", "") == 0.0
 
 
-class TestAreSimilar:
-    """Tests for similarity threshold comparison."""
+class TestSimilarityThreshold:
+    """Tests for similarity threshold comparison using hash_similarity."""
 
     def test_identical_similar(self):
-        """Test identical hashes are similar."""
-        assert are_similar("ffffffff", "ffffffff", threshold=0.9) is True
+        """Test identical hashes are similar (above threshold)."""
+        assert hash_similarity("ffffffff", "ffffffff") >= 0.9
 
     def test_below_threshold_not_similar(self):
-        """Test hashes below threshold are not similar."""
-        # Very different hashes
-        assert are_similar("00000000", "ffffffff", threshold=0.9) is False
+        """Test very different hashes are below threshold."""
+        assert hash_similarity("00000000", "ffffffff") < 0.9
 
     def test_at_threshold(self):
-        """Test hashes exactly at threshold."""
-        # Create hashes with exactly threshold similarity
+        """Test hashes at various thresholds."""
         hash1 = "ff00ff00"
         hash2 = "ff00ff01"  # 1 bit different out of 32 = 96.875%
-        assert are_similar(hash1, hash2, threshold=0.96) is True
-        assert are_similar(hash1, hash2, threshold=0.98) is False
-
-    def test_empty_hash_not_similar(self):
-        """Test empty hashes are not similar."""
-        assert are_similar("", "abc", threshold=0.9) is False
-        assert are_similar("abc", "", threshold=0.9) is False
+        similarity = hash_similarity(hash1, hash2)
+        assert similarity >= 0.96
+        assert similarity < 0.98
 
 
 class TestImageExtensions:
@@ -169,35 +129,6 @@ class TestComputeImageHash:
         """Test handles non-existent files gracefully."""
         result = compute_image_hash(Path("/path/to/nonexistent/file.jpg"))
         assert result is None
-
-
-class TestLivePhotoEntry:
-    """Tests for LivePhotoEntry dataclass."""
-
-    def test_create_basic_entry(self):
-        """Test creating a basic LivePhotoEntry."""
-        entry = LivePhotoEntry(image_path=Path("/photo.heic"))
-        assert entry.image_path == Path("/photo.heic")
-        assert entry.video_path is None
-        assert entry.content_hash == ""
-        assert entry.perceptual_hash is None
-        assert entry.metadata == {}
-
-    def test_create_full_entry(self):
-        """Test creating a LivePhotoEntry with all fields."""
-        entry = LivePhotoEntry(
-            image_path=Path("/photo.heic"),
-            video_path=Path("/photo.mov"),
-            content_hash="abc123",
-            perceptual_hash="def456",
-            image_timestamp="2024-01-01T12:00:00Z",
-            metadata={"album": "Vacation"},
-        )
-        assert entry.video_path == Path("/photo.mov")
-        assert entry.content_hash == "abc123"
-        assert entry.perceptual_hash == "def456"
-        assert entry.image_timestamp == "2024-01-01T12:00:00Z"
-        assert entry.metadata == {"album": "Vacation"}
 
 
 class TestLivePhotoExtensions:
@@ -264,36 +195,33 @@ class TestFindLivePhotoVideo:
         video = find_live_photo_video(image)
         assert video is None
 
-    def test_returns_none_when_video_not_exists(self):
+    def test_returns_none_when_video_not_exists(self, tmp_path):
         """Test returns None when video file doesn't exist."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            image = Path(tmpdir) / "photo.heic"
-            image.touch()  # Create image but no video
+        image = tmp_path / "photo.heic"
+        image.touch()  # Create image but no video
 
-            video = find_live_photo_video(image)
-            assert video is None
+        video = find_live_photo_video(image)
+        assert video is None
 
-    def test_finds_video_in_same_directory(self):
+    def test_finds_video_in_same_directory(self, tmp_path):
         """Test finding video in same directory as image."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            image = Path(tmpdir) / "photo.heic"
-            video = Path(tmpdir) / "photo.mov"
-            image.touch()
-            video.touch()
+        image = tmp_path / "photo.heic"
+        video = tmp_path / "photo.mov"
+        image.touch()
+        video.touch()
 
-            found = find_live_photo_video(image)
-            assert found == video
+        found = find_live_photo_video(image)
+        assert found == video
 
-    def test_finds_video_in_specified_directory(self):
+    def test_finds_video_in_specified_directory(self, tmp_path):
         """Test finding video in specified search directory."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            media_dir = Path(tmpdir) / "media"
-            media_dir.mkdir()
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
 
-            image = Path(tmpdir) / "photo.heic"  # Image in different location
-            video = media_dir / "photo.mov"
-            image.touch()
-            video.touch()
+        image = tmp_path / "photo.heic"  # Image in different location
+        video = media_dir / "photo.mov"
+        image.touch()
+        video.touch()
 
-            found = find_live_photo_video(image, search_dir=media_dir)
-            assert found == video
+        found = find_live_photo_video(image, search_dir=media_dir)
+        assert found == video

@@ -377,7 +377,9 @@ def batch_read_existing_metadata(file_paths: List[str]) -> Dict[str, Dict[str, b
                     individual_result = _read_metadata_batch([file_path])
                     metadata_map.update(individual_result)
                 except Exception as individual_error:
-                    logger.debug(f"Read failed: {short_path(file_path)}: {individual_error}")
+                    logger.debug(
+                        f"Read failed: {short_path(file_path)}: {individual_error}"
+                    )
                     continue
 
     return metadata_map

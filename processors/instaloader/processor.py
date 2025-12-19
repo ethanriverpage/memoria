@@ -381,7 +381,7 @@ def process_logic(
         print_exiftool_error()
         return
 
-        logger.info("Instaloader Media Processor")
+    logger.info("Instaloader Media Processor")
     logger.info("=" * 50)
 
     # Determine if input needs preprocessing

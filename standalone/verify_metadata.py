@@ -18,7 +18,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 # ANSI colors for output
 RED = "\033[91m"
@@ -57,12 +57,11 @@ def find_source_metadata(
     Returns: (source_path, source_metadata, source_type)
     """
     # Try to find in dedup_manifest by looking at what files were processed
-    filename = processed_path.name
 
     # For each duplicate group, check if our processed file matches the primary
     for content_hash, group_data in dedup_manifest.get("duplicates", {}).items():
         primary = group_data.get("primary", {})
-        source_path = primary.get("source_path", "")
+        primary.get("source_path", "")
 
         # Check merged metadata for this group
         merged = group_data.get("merged_metadata", {})
@@ -153,9 +152,7 @@ def extract_date_from_filename(filename: str) -> Optional[str]:
     return None
 
 
-def verify_file_metadata(
-    processed_path: Path, verbose: bool = False
-) -> Dict[str, Any]:
+def verify_file_metadata(processed_path: Path, verbose: bool = False) -> Dict[str, Any]:
     """
     Verify metadata for a single processed file.
 
@@ -190,22 +187,8 @@ def verify_file_metadata(
     ]
 
     # GPS fields
-    gps_fields = [
-        "[EXIF:GPS] GPSLatitude",
-        "[EXIF:GPS] GPSLongitude",
-        "[XMP:XMP-exif] GPSLatitude",
-        "[XMP:XMP-exif] GPSLongitude",
-        "[Composite:Composite] GPSLatitude",
-        "[Composite:Composite] GPSLongitude",
-    ]
 
     # Description fields
-    desc_fields = [
-        "[EXIF:IFD0] ImageDescription",
-        "[XMP:XMP-dc] Description",
-        "[QuickTime:Keys] Comment",
-        "[Matroska:Matroska] Comment",
-    ]
 
     # Check 1: Does the file have datetime metadata?
     found_datetime = None
@@ -305,8 +288,7 @@ def verify_file_metadata(
     for key in metadata.keys():
         key_lower = key.lower()
         if any(
-            term in key_lower
-            for term in ["description", "comment", "imagedescription"]
+            term in key_lower for term in ["description", "comment", "imagedescription"]
         ):
             val = metadata[key]
             if val and str(val).strip():
@@ -341,8 +323,8 @@ def find_google_photos_source(
     username = match.group(1)
     date_str = match.group(2)
     year = date_str[:4]
-    month = date_str[4:6]
-    day = date_str[6:8]
+    date_str[4:6]
+    date_str[6:8]
 
     # Search in originals for matching date folders
     for export_dir in originals_root.iterdir():
@@ -492,7 +474,15 @@ def main():
             for root, dirs, files in os.walk(export_dir):
                 for f in files:
                     ext = Path(f).suffix.lower()
-                    if ext in [".jpg", ".jpeg", ".png", ".mp4", ".mov", ".mkv", ".heic"]:
+                    if ext in [
+                        ".jpg",
+                        ".jpeg",
+                        ".png",
+                        ".mp4",
+                        ".mov",
+                        ".mkv",
+                        ".heic",
+                    ]:
                         processed_files.append(Path(root) / f)
 
     print(f"Total processed files: {len(processed_files)}")
@@ -516,8 +506,8 @@ def main():
         results.append(result)
 
         # Print summary for this file
-        checks_passed = sum(1 for c in result["checks"] if c.get("passed", False))
-        total_checks = len(result["checks"])
+        sum(1 for c in result["checks"] if c.get("passed", False))
+        len(result["checks"])
 
         if result["errors"]:
             print(f"  {RED}ERRORS: {', '.join(result['errors'])}{RESET}")
@@ -567,9 +557,7 @@ def main():
     print(f"  Total files checked: {sample_size}")
     print(f"  {GREEN}Passed (no issues): {passed_count}{RESET}")
     print(f"  {YELLOW}Warnings: {warning_count}{RESET}")
-    print(
-        f"  {RED}Errors: {sample_size - passed_count - warning_count}{RESET}"
-    )
+    print(f"  {RED}Errors: {sample_size - passed_count - warning_count}{RESET}")
 
     # Detailed statistics
     datetime_present = sum(
@@ -608,4 +596,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

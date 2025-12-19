@@ -128,7 +128,13 @@ ImageDescription field stores source information without album:
 
 ### Live Photos
 
-Live Photo pairs (JPG+MOV) are deduplicated together, maintaining their association with the same sequence number.
+Live Photo pairs (image + video) are deduplicated atomically. When the deduplication service analyzes catalogs, it builds a mapping of Live Photo video paths to their associated image content hashes. During deduplication filtering:
+
+1. **Video component lookup**: When processing a video file, the service checks if it's a known Live Photo video
+2. **Follow image decision**: If found, the video follows the same primary/secondary decision as its image
+3. **Atomic pairing**: If the image is primary for a processor, the video is also kept; if secondary, the video is skipped
+
+This ensures Live Photo pairs remain intact across cross-processor deduplication. The `live_photo_video` metadata field in catalog entries enables this linking.
 
 ---
 
@@ -364,7 +370,6 @@ The system uses a hybrid matching strategy:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DEDUP_GPS_DISTANCE` | `500` | Max GPS distance (meters) for duplicate validation |
-| `DEDUP_TIMESTAMP_DELTA` | `3600` | Max timestamp difference (seconds) |
 | `DEDUP_ASPECT_RATIO` | `0.10` | Max aspect ratio difference (10%) |
 
 ### Supported Processors

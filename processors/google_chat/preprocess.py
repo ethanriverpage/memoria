@@ -241,7 +241,9 @@ class GoogleChatPreprocessor:
         result = self.detect_username()
         if result.username:
             self.export_username = result.username
-            logger.info("Detected export user: %s (via %s)", result.username, result.source)
+            logger.info(
+                "Detected export user: %s (via %s)", result.username, result.source
+            )
             return True
 
         self.log_message(

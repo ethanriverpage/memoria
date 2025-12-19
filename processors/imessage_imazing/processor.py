@@ -733,9 +733,7 @@ def process_logic(
             from common.utils import should_cleanup_temp
 
             if should_cleanup_temp():
-                log.logger.info(
-                    "Cleaning up temporary directory: %s", temp_dir_created
-                )
+                log.logger.info("Cleaning up temporary directory: %s", temp_dir_created)
                 shutil.rmtree(temp_dir_created)
             else:
                 log.logger.info(

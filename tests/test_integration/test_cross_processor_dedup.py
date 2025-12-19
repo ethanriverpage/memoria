@@ -2,7 +2,6 @@
 """Integration tests for cross-processor deduplication workflow."""
 
 import os
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,7 +21,6 @@ from common.dedup.database import HashDatabase
 from common.dedup.hashing import (
     is_live_photo_pair,
     find_live_photo_video,
-    LivePhotoEntry,
 )
 
 
@@ -35,10 +33,12 @@ def reset_dedup_config():
 
 
 @pytest.fixture
-def temp_dir():
-    """Create temporary directory for test files."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
+def temp_dir(tmp_path):
+    """Create temporary directory for test files.
+
+    Uses pytest's tmp_path fixture for automatic cleanup.
+    """
+    return tmp_path
 
 
 @pytest.fixture
@@ -451,23 +451,6 @@ class TestLivePhotoIntegration:
         # Find video from image
         found = find_live_photo_video(image_path)
         assert found == video_path
-
-    def test_live_photo_entry_creation(self, temp_dir):
-        """Test creating LivePhotoEntry from actual files."""
-        image_path = temp_dir / "photo.heic"
-        video_path = temp_dir / "photo.mov"
-        image_path.write_bytes(b"fake heic content")
-        video_path.write_bytes(b"fake mov content")
-
-        entry = LivePhotoEntry(
-            image_path=image_path,
-            video_path=video_path,
-            content_hash="abc123",
-        )
-
-        assert entry.image_path.exists()
-        assert entry.video_path.exists()
-        assert entry.content_hash == "abc123"
 
     def test_live_photo_not_matched_for_different_stems(self, temp_dir):
         """Test that different filename stems are not matched."""

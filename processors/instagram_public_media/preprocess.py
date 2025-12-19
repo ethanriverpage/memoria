@@ -200,7 +200,9 @@ class InstagramPreprocessor:
                 / "personal_information.html"
             )
             # Legacy format (2022): personal_information/
-            legacy_format_path = path / "personal_information" / "personal_information.html"
+            legacy_format_path = (
+                path / "personal_information" / "personal_information.html"
+            )
 
             html_path = None
             if new_format_path.exists():

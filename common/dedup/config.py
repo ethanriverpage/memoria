@@ -11,20 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-
-def _parse_bool(value: Optional[str], default: bool = False) -> bool:
-    """Parse a boolean from environment variable string.
-
-    Args:
-        value: String value from environment variable.
-        default: Default value if not set or invalid.
-
-    Returns:
-        Parsed boolean value.
-    """
-    if value is None:
-        return default
-    return value.lower() in ("true", "1", "yes", "on")
+from common.utils import parse_bool_env
 
 
 def _parse_float(value: Optional[str], default: float) -> float:
@@ -76,7 +63,6 @@ class DedupConfig:
         desc_max_total: Max total characters for ImageDescription field.
         msg_truncate: Max characters for message content truncation.
         validate_gps_distance: Max GPS distance (meters) for duplicate validation.
-        validate_timestamp_delta: DEPRECATED - no longer used for validation.
         validate_aspect_ratio: Max aspect ratio difference for validation.
         preprocessing_cache_dir: Directory for preprocessing cache during catalog phase.
     """
@@ -100,7 +86,6 @@ class DedupConfig:
 
     # Duplicate validation thresholds
     validate_gps_distance: float = 500.0  # meters
-    validate_timestamp_delta: float = 3600.0  # DEPRECATED: no longer used (see service.py)
     validate_aspect_ratio: float = 0.10  # 10% tolerance
 
     # Preprocessing cache for catalog phase
@@ -121,7 +106,6 @@ class DedupConfig:
             DEDUP_DESC_MAX_TOTAL: Max total chars in description
             DEDUP_MSG_TRUNCATE: Message content truncation length
             DEDUP_GPS_DISTANCE: Max GPS distance for validation (meters)
-            DEDUP_TIMESTAMP_DELTA: Max timestamp difference (seconds)
             DEDUP_ASPECT_RATIO: Max aspect ratio difference (0.0-1.0)
             DEDUP_PREPROCESSING_CACHE_DIR: Directory for preprocessing cache
 
@@ -147,8 +131,8 @@ class DedupConfig:
             preprocessing_cache_dir = Path("../pre/preprocessing_cache")
 
         return cls(
-            enabled=_parse_bool(os.environ.get("CROSS_PROCESSOR_DEDUP"), False),
-            use_perceptual=_parse_bool(os.environ.get("DEDUP_USE_PERCEPTUAL"), True),
+            enabled=parse_bool_env(os.environ.get("CROSS_PROCESSOR_DEDUP"), False),
+            use_perceptual=parse_bool_env(os.environ.get("DEDUP_USE_PERCEPTUAL"), True),
             perceptual_threshold=_parse_float(
                 os.environ.get("DEDUP_PERCEPTUAL_THRESHOLD"), 0.92
             ),
@@ -160,9 +144,6 @@ class DedupConfig:
             msg_truncate=_parse_int(os.environ.get("DEDUP_MSG_TRUNCATE"), 200),
             validate_gps_distance=_parse_float(
                 os.environ.get("DEDUP_GPS_DISTANCE"), 500.0
-            ),
-            validate_timestamp_delta=_parse_float(
-                os.environ.get("DEDUP_TIMESTAMP_DELTA"), 3600.0
             ),
             validate_aspect_ratio=_parse_float(
                 os.environ.get("DEDUP_ASPECT_RATIO"), 0.10
@@ -185,7 +166,6 @@ class DedupConfig:
             "desc_max_total": self.desc_max_total,
             "msg_truncate": self.msg_truncate,
             "validate_gps_distance": self.validate_gps_distance,
-            "validate_timestamp_delta": self.validate_timestamp_delta,
             "validate_aspect_ratio": self.validate_aspect_ratio,
             "preprocessing_cache_dir": str(self.preprocessing_cache_dir),
         }

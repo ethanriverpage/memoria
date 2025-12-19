@@ -259,9 +259,7 @@ def _build_catalog_worker(
 
                     # Write in batches of 100 for efficiency
                     if len(batch) >= 100:
-                        db.write_catalog_entries_batch(
-                            run_id, export_dir.name, batch
-                        )
+                        db.write_catalog_entries_batch(run_id, export_dir.name, batch)
                         batch = []
 
                 # Write remaining entries
@@ -371,7 +369,13 @@ def run_phased_dedup_processing(
             max_catalog_workers,
         )
 
-        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
+        from rich.progress import (
+            Progress,
+            SpinnerColumn,
+            TextColumn,
+            BarColumn,
+            MofNCompleteColumn,
+        )
 
         with ProcessPoolExecutor(max_workers=max_catalog_workers) as executor:
             futures = {
@@ -448,9 +452,7 @@ def run_phased_dedup_processing(
                             batch = []
 
                     if batch:
-                        db.write_catalog_entries_batch(
-                            run_id, export_dir.name, batch
-                        )
+                        db.write_catalog_entries_batch(run_id, export_dir.name, batch)
 
                     logger.debug("    Found %d files", processor_file_count)
                 except Exception as e:
@@ -571,7 +573,9 @@ def show_supported_formats() -> None:
     logger.info("  Instagram (can match multiple):")
     logger.info("    - Instagram Messages: your_instagram_activity/messages/inbox/")
     logger.info("    - Instagram Public Media: media/posts/ and media/archived_posts/")
-    logger.info("    - Instaloader: YYYY-MM-DD_HH-MM-SS_UTC.* files in root (scrape data)")
+    logger.info(
+        "    - Instaloader: YYYY-MM-DD_HH-MM-SS_UTC.* files in root (scrape data)"
+    )
     logger.info("Examples:")
     logger.info("  google-username-20250526/     -> Google Photos + Chat + Voice")
     logger.info("  instagram-username-20251007/  -> Instagram Messages + Public Media")
@@ -869,7 +873,9 @@ def process_single_export(
                                 len(targets),
                             )
                             for up_path, album_name in targets:
-                                upload_tasks.append((up_path, album_name, pname))
+                                upload_tasks.append(
+                                    (up_path, album_name, processor.get_name())
+                                )
                         else:
                             # Upload immediately (sequential mode)
                             logger.info("Starting Immich uploads:")
@@ -888,14 +894,14 @@ def process_single_export(
                                     if rc == 0:
                                         logger.info(
                                             "  %s -> %s from %s",
-                                            pname,
+                                            processor.get_name(),
                                             album_name,
                                             up_path,
                                         )
                                     else:
                                         logger.warning(
                                             "  %s -> %s from %s (rc=%d)",
-                                            pname,
+                                            processor.get_name(),
                                             album_name,
                                             up_path,
                                             rc,

@@ -469,21 +469,11 @@ class VideoEncoder:
         return encoder_configs.get(self.encoder_name, self.encoder_args.copy())
 
     def get_encoder_name(self) -> str:
-        """
-        Get the name of the detected encoder.
-
-        Returns:
-            Encoder name (e.g., 'hevc_nvenc', 'hevc_videotoolbox', 'libx265')
-        """
+        """Get the name of the detected encoder."""
         return self.encoder_name
 
     def is_hardware_accelerated(self) -> bool:
-        """
-        Check if the encoder uses hardware acceleration.
-
-        Returns:
-            True if hardware accelerated, False if software
-        """
+        """Check if the encoder uses hardware acceleration."""
         return self.is_hardware
 
 
@@ -492,14 +482,7 @@ _global_encoder: Optional[VideoEncoder] = None
 
 
 def get_video_encoder() -> VideoEncoder:
-    """
-    Get the global video encoder instance (singleton pattern).
-
-    The encoder is detected once and reused for all encoding operations.
-
-    Returns:
-        VideoEncoder instance
-    """
+    """Get the global video encoder instance (singleton pattern)."""
     global _global_encoder
     if _global_encoder is None:
         _global_encoder = VideoEncoder()
@@ -507,46 +490,22 @@ def get_video_encoder() -> VideoEncoder:
 
 
 def get_encoder_args(target_bitrate: Optional[int] = None) -> list:
-    """
-    Convenience function to get encoder arguments.
-
-    Args:
-        target_bitrate: Optional target bitrate in bits per second
-
-    Returns:
-        List of ffmpeg encoder arguments
-    """
+    """Get encoder arguments for ffmpeg."""
     return get_video_encoder().get_encoder_args(target_bitrate)
 
 
 def get_encoder_input_args() -> list:
-    """
-    Convenience function to get encoder input arguments.
-    These must be placed BEFORE the -i input_file in the ffmpeg command.
-
-    Returns:
-        List of ffmpeg input arguments (e.g., hwaccel, hardware device init)
-    """
+    """Get encoder input arguments (placed BEFORE -i in ffmpeg command)."""
     return get_video_encoder().get_input_args()
 
 
 def get_encoder_name() -> str:
-    """
-    Convenience function to get encoder name.
-
-    Returns:
-        Encoder name string
-    """
+    """Get the name of the detected encoder."""
     return get_video_encoder().get_encoder_name()
 
 
 def is_hardware_accelerated() -> bool:
-    """
-    Convenience function to check if hardware acceleration is available.
-
-    Returns:
-        True if hardware accelerated, False if software
-    """
+    """Check if hardware acceleration is available."""
     return get_video_encoder().is_hardware_accelerated()
 
 

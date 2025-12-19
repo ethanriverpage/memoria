@@ -260,7 +260,11 @@ def _build_metadata_requests(
             processor=PLATFORM_GOOGLE,
             username=export_username,
             service=SERVICE_VOICE,
-            conversation=f"DM with {other_party}" if "Group:" not in conversation_name else other_party,
+            conversation=(
+                f"DM with {other_party}"
+                if "Group:" not in conversation_name
+                else other_party
+            ),
         )
         default_description = build_description(entry)
 

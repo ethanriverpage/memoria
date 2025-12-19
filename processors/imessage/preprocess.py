@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 from common.failure_tracker import FailureTracker
 from common.dedup.hashing import compute_content_hash
-from common.detection import resolve_username, detect_from_dirname, DetectionResult
+from common.detection import resolve_username, DetectionResult
 from common.processing import print_preprocessing_stats
 from common.output.progress import PHASE_PREPROCESS, progress_bar
 from common.files.filter import BannedFilesFilter
