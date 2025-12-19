@@ -132,7 +132,7 @@ Skip processing and only upload previously processed files.
 ./memoria.py /path/to/original/export --upload-only /path/to/processed/output
 ```
 
-See [Upload Only Mode](Upload-Only-Mode) for details.
+See [Immich Upload](Immich-Upload#upload-only-mode) for details.
 
 **`--immich-url URL`**
 Immich server URL (alternative to environment variable).
@@ -186,15 +186,17 @@ Output example:
 
 ```
 Available processors:
-  - GooglePhotosProcessor (priority: 100)
-  - GoogleChatProcessor (priority: 90)
-  - GoogleVoiceProcessor (priority: 85)
+  - SnapchatMessagesProcessor (priority: 85)
+  - IMessageImazingProcessor (priority: 85)
+  - IMessageProcessor (priority: 82)
+  - SnapchatMemoriesProcessor (priority: 80)
   - DiscordProcessor (priority: 70)
-  - InstagramMessagesProcessor (priority: 80)
-  - InstagramPublicMediaProcessor (priority: 75)
-  - InstaloaderProcessor (priority: 70)
-  - SnapchatMemoriesProcessor (priority: 65)
-  - SnapchatMessagesProcessor (priority: 60)
+  - InstagramMessagesProcessor (priority: 70)
+  - InstagramPublicMediaProcessor (priority: 60)
+  - GooglePhotosProcessor (priority: 50)
+  - GoogleChatProcessor (priority: 50)
+  - GoogleVoiceProcessor (priority: 50)
+  - InstaloaderProcessor (priority: 30)
 ```
 
 ### Upload-Only Mode
@@ -223,51 +225,68 @@ This is useful for:
 
 ### Single Export Output
 
-When processing a single export:
+When processing a single export, Memoria organizes output using a `Platform/User/Service` structure:
 
 ```
 /path/to/output/
-├── photos/                 # If Google Photos found
-│   └── processed files...
-├── chat/                   # If Google Chat found
-│   └── processed files...
-├── messages/               # If Instagram Messages found
-│   └── conversations...
-└── ...
+├── Google/
+│   └── user1/
+│       ├── photos/           # Google Photos
+│       ├── chat/             # Google Chat
+│       └── voice/            # Google Voice
+├── Instagram/
+│   └── username/
+│       ├── messages/         # Instagram Messages
+│       └── posts/            # Instagram Public Media
+├── Snapchat/
+│   └── username/
+│       ├── memories/         # Snapchat Memories
+│       └── messages/         # Snapchat Messages
+├── Discord/
+│   └── username/             # Discord (no service subdirectory)
+└── iMessage/
+    └── device_id/            # iMessage (no service subdirectory)
 ```
 
-Each processor creates its own subdirectory to prevent conflicts.
+Each processor creates its output under `Platform/User/` to organize by platform and account.
 
 ### Multiple Exports Output
 
-When using `--originals`:
+When using `--originals`, the same structure is used. Multiple exports from the same platform and user will merge into the same output path:
 
 ```
 /path/to/output/
-├── google-user1-20250526/
-│   ├── photos/
-│   └── chat/
-├── instagram-user2-20251007/
-│   └── messages/
-└── snapchat-user3-20251007/
-    ├── memories/
-    └── messages/
+├── Google/
+│   ├── user1/
+│   │   ├── photos/
+│   │   └── chat/
+│   └── user2/
+│       └── photos/
+├── Instagram/
+│   └── username/
+│       └── messages/
+└── Snapchat/
+    └── username/
+        └── memories/
 ```
 
-Each export gets its own directory, maintaining the per-processor organization within.
+Exports from different platforms or users are kept separate.
 
 ### Processed Filenames
 
 Files are renamed to include metadata:
 
-**Format**: `{platform}_{username}_{original_filename}_{timestamp}.{ext}`
+Filenames are processor-specific but generally follow consistent patterns that include platform prefix, username, and timestamp information.
 
 Examples:
 
 ```
-google-photos_john.doe_IMG_1234_20230115_103045.jpg
-instagram_jane_doe_photo_20230220_142211.jpg
-snapchat_user123_memory_20230310_151530.mp4
+gphotos-john.doe-20230115_103045.jpg           # Google Photos
+gchat-john.doe-Family_Group-20230115.jpg       # Google Chat
+discord-username-general-20231015.jpg          # Discord
+ig-username-20230220_142211.jpg                # Instagram Messages
+snap-username-20230310_151530.mp4              # Snapchat
+imessage-mac-John_Smith-20220426_183520.jpg    # iMessage
 ```
 
 ## Parallel Processing
@@ -338,17 +357,18 @@ Or via command-line arguments:
 
 ### Album Organization
 
-Uploads are automatically organized into albums:
+Uploads are automatically organized into albums using `Platform/username[/service]` format:
 
 | Platform | Album Path |
 |----------|-----------|
 | Discord | `Discord/{username}` |
-| Google Photos | `Google Photos/{username}` |
-| Google Chat | `Google Chat/{username}` |
-| Google Voice | `Google Voice/{username}` |
+| Google Photos | `Google/{username}/photos` |
+| Google Chat | `Google/{username}/chat` |
+| Google Voice | `Google/{username}/voice` |
 | iMessage | `iMessage/{device}` |
 | Instagram Messages | `Instagram/{username}/messages` |
-| Instagram Posts | `Instagram/{username}/posts` |
+| Instagram Posts | `Instagram/{username}/posts/{subfolder}` |
+| Instaloader | `Instagram/{username}/posts` |
 | Snapchat Memories | `Snapchat/{username}/memories` |
 | Snapchat Messages | `Snapchat/{username}/messages` |
 
@@ -408,7 +428,7 @@ DEDUP_PERCEPTUAL_THRESHOLD=0.92
 
 **Cross-Processor Deduplication**
 
-Enable deduplication across different platform exports. See [Global Deduplication](Global-Deduplication) for details.
+Enable deduplication across different platform exports. See [Deduplication](Deduplication#cross-processor-deduplication) for details.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -541,11 +561,8 @@ cat logs/memoria_*.log
 - [Getting Started](Getting-Started) - Initial setup guide
 - [Logging](Logging) - Logging configuration and verbose mode
 - [Parallel Processing](Parallel-Processing) - Parallel processing guide
-- [Upload Only Mode](Upload-Only-Mode) - Upload-only mode details
-- [Upload Queuing](Upload-Queuing) - Upload queuing for parallel processing
-- [Immich Upload](Immich-Upload) - Immich upload configuration
-- [Deduplication](Deduplication) - Within-processor deduplication
-- [Global Deduplication](Global-Deduplication) - Cross-processor deduplication
+- [Immich Upload](Immich-Upload) - Immich upload configuration, upload-only mode, and upload queuing
+- [Deduplication](Deduplication) - Within-processor and cross-processor deduplication
 - [Google Export](Google-Export) - Google-specific guide
 - [iMessage Export](iMessage-Export) - iMessage-specific guide
 - [Discord Export](Discord-Export) - Discord-specific guide

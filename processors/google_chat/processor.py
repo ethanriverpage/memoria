@@ -45,6 +45,7 @@ from common.utils import (
     sanitize_filename,
     update_file_timestamps,
 )
+from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
 from processors.google_chat.preprocess import GoogleChatPreprocessor
 
@@ -121,6 +122,14 @@ class GoogleChatProcessor(ProcessorBase):
     def get_priority() -> int:
         """Return priority (higher = run first)"""
         return 50  # Medium priority
+
+    @staticmethod
+    def get_output_info() -> OutputInfo:
+        return OutputInfo(
+            platform="Google",
+            service="chat",
+            username_prefix="google",
+        )
 
     @staticmethod
     def supports_dedup() -> bool:

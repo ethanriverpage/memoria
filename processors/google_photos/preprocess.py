@@ -23,6 +23,7 @@ from threading import Lock
 from common.output.progress import PHASE_PREPROCESS, futures_progress
 from common.processing import print_preprocessing_stats
 from common.dedup.hashing import compute_content_hash
+from common.detection import resolve_username, detect_from_dirname, DetectionResult
 
 from common.utils import ALL_MEDIA_EXTENSIONS, default_worker_count
 from common.files.filter import BannedFilesFilter
@@ -175,6 +176,73 @@ class GooglePhotosPreprocessor:
             return False
 
         return True
+
+    def detect_username(self) -> DetectionResult:
+        """Detect export username using available sources.
+
+        Priority:
+        1. Profile/Profile.json - Google account profile
+        2. Google Chat user_info.json - if Chat is in same export
+        3. Directory name pattern (google-username-YYYYMMDD)
+
+        Returns:
+            DetectionResult with username and source
+        """
+
+        def detect_from_profile_json(path: Path) -> Optional[str]:
+            """Extract username from Profile/Profile.json."""
+            profile_path = path / "Profile" / "Profile.json"
+            if not profile_path.exists():
+                return None
+            try:
+                with open(profile_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # Get first email and strip @gmail.com
+                emails = data.get("emails", [])
+                if emails:
+                    email = emails[0].get("value", "")
+                    if "@gmail.com" in email:
+                        return email.replace("@gmail.com", "")
+                    # For non-gmail, use the part before @
+                    if "@" in email:
+                        return email.split("@")[0]
+                return None
+            except Exception:
+                return None
+
+        def detect_from_google_chat_user_info(path: Path) -> Optional[str]:
+            """Extract username from Google Chat user_info.json if present."""
+            users_dir = path / "Google Chat" / "Users"
+            if not users_dir.exists():
+                return None
+            try:
+                user_dirs = [d for d in users_dir.iterdir() if d.is_dir()]
+                if not user_dirs:
+                    return None
+                user_info_path = user_dirs[0] / "user_info.json"
+                if not user_info_path.exists():
+                    return None
+                with open(user_info_path, "r", encoding="utf-8") as f:
+                    user_data = json.load(f)
+                email = user_data.get("user", {}).get("email")
+                if email:
+                    return email.replace("@gmail.com", "")
+                return None
+            except Exception:
+                return None
+
+        def detect_from_dirname_google(path: Path) -> Optional[str]:
+            """Extract username from directory name."""
+            return detect_from_dirname(path, "google")
+
+        return resolve_username(
+            self.export_path,
+            [
+                ("Profile.json", detect_from_profile_json),
+                ("Google Chat user_info.json", detect_from_google_chat_user_info),
+                ("dirname", detect_from_dirname_google),
+            ],
+        )
 
     def parse_timestamp(self, timestamp_str: str) -> Optional[str]:
         """
@@ -1097,10 +1165,16 @@ class GooglePhotosPreprocessor:
             # Sort by filename for consistency
             media_files.sort(key=lambda x: x.get("filename", ""))
 
+            # Detect username from export
+            detection_result = self.detect_username()
+            export_username = detection_result.username or "unknown"
+
             output = {
                 "export_info": {
                     "export_path": str(self.export_path),
                     "export_name": self.export_path.name,
+                    "export_username": export_username,
+                    "username_source": detection_result.source,
                     "processed_date": datetime.now().isoformat(),
                     "total_albums": self.stats["total_albums"],
                     "total_media_files": self.stats["total_media_files"],

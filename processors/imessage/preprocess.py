@@ -23,6 +23,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 from common.failure_tracker import FailureTracker
 from common.dedup.hashing import compute_content_hash
+from common.detection import resolve_username, detect_from_dirname, DetectionResult
 from common.processing import print_preprocessing_stats
 from common.output.progress import PHASE_PREPROCESS, progress_bar
 from common.files.filter import BannedFilesFilter
@@ -282,18 +283,42 @@ class IMessagePreprocessor:
         }
 
     def _extract_owner_name(self) -> str:
-        """Extract owner name from export directory name.
+        """Extract owner name (device identifier) from export directory name.
+
+        Expected pattern: imessage-{device}-YYYYMMDD (e.g., imessage-iph17pm-20251121)
 
         Returns:
-            Extracted owner name or 'unknown'
+            Extracted device name or 'unknown'
         """
-        dir_name = self.export_paths[0].name
-        # Pattern: mac-messages-YYYYMMDD or iph*-messages-YYYYMMDD
-        match = re.match(r"(mac|iph\w+)-messages-\d{8}", dir_name)
-        if match:
-            # Use the device type as a fallback
-            return match.group(1)
-        return "unknown"
+        result = self.detect_username()
+        return result.username or "unknown"
+
+    def detect_username(self) -> DetectionResult:
+        """Detect device identifier from export directory name.
+
+        For iMessage exports, the 'username' is actually the device identifier
+        since there's no intrinsic username in iMessage exports.
+
+        Expected pattern: imessage-{device}-YYYYMMDD
+
+        Returns:
+            DetectionResult with device identifier and source
+        """
+
+        def detect_from_imessage_dirname(path: Path) -> Optional[str]:
+            """Extract device name from imessage-{device}-YYYYMMDD pattern."""
+            dir_name = path.name
+            match = re.match(r"imessage-(\w+)-\d{8}", dir_name)
+            if match:
+                return match.group(1)
+            return None
+
+        return resolve_username(
+            self.export_paths[0],
+            [
+                ("dirname", detect_from_imessage_dirname),
+            ],
+        )
 
     def _detect_export_type(self, export_path: Path) -> str:
         """Detect whether export is from Mac or iPhone.
@@ -941,11 +966,15 @@ class IMessagePreprocessor:
         Returns:
             Metadata dictionary
         """
+        # Get username detection result for source info
+        detection_result = self.detect_username()
+
         metadata = {
             "export_info": {
                 "export_path": str(self.export_paths[0]),
                 "export_paths": [str(p) for p in self.export_paths],
                 "export_username": self.owner_name,
+                "username_source": detection_result.source,
                 "processed_date": datetime.now(timezone.utc).strftime(
                     "%Y-%m-%d %H:%M:%S UTC"
                 ),

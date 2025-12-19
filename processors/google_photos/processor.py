@@ -48,6 +48,7 @@ from common.utils import (
     is_preprocessed_directory,
     update_file_timestamps,
 )
+from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
 from processors.google_photos.preprocess import GooglePhotosPreprocessor
 
@@ -91,6 +92,14 @@ class GooglePhotosProcessor(ProcessorBase):
     @staticmethod
     def get_priority() -> int:
         return 50
+
+    @staticmethod
+    def get_output_info() -> OutputInfo:
+        return OutputInfo(
+            platform="Google",
+            service="photos",
+            username_prefix="google",
+        )
 
     @staticmethod
     def supports_dedup() -> bool:

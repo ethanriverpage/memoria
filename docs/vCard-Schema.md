@@ -173,4 +173,4 @@ END:VCARD
 
 ## Related Documentation
 
-- [iMessage Schema](iMessage-Schema.md) - Database schema for iMessage exports that use vCard contacts for handle matching
+- [iMessage Export](iMessage-Export) - Database schema for iMessage exports that use vCard contacts for handle matching

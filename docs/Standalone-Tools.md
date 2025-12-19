@@ -75,6 +75,36 @@ Compares two processed media exports and logs all differences including director
 - Console: Summary of differences found
 - Log file: Detailed comparison report with all differences
 
+## Verify Metadata
+
+Randomly samples processed media files and compares their embedded metadata against the original source export to verify correct EXIF/XMP writing.
+
+**Features:**
+
+- Random sampling of processed files for verification
+- Compares embedded metadata against source JSON files
+- Supports verification of timestamps, GPS coordinates, and descriptions
+- Detailed reporting with color-coded output
+- Configurable sample size
+
+**Usage:**
+
+```bash
+# Basic verification (default sample size)
+./standalone/verify_metadata.py
+
+# Specify sample size
+./standalone/verify_metadata.py --sample-size 50
+
+# Verbose output with details
+./standalone/verify_metadata.py --verbose
+```
+
+**Output:**
+
+- Console: Color-coded verification results (green for matches, red for mismatches)
+- Summary statistics of verification pass/fail rates
+
 ## Related Documentation
 
 - [Usage](Usage) - Main usage guide

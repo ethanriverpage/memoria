@@ -46,6 +46,7 @@ from common.utils import (
     sanitize_filename,
     update_file_timestamps,
 )
+from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
 from processors.imessage.preprocess import IMessagePreprocessor
 
@@ -131,6 +132,14 @@ class IMessageProcessor(ProcessorBase):
         Priority 80: High priority - requires specific SQLite database structure.
         """
         return 80
+
+    @staticmethod
+    def get_output_info() -> OutputInfo:
+        return OutputInfo(
+            platform="iMessage",
+            service=None,
+            username_prefix="imessage",
+        )
 
     @staticmethod
     def supports_consolidation() -> bool:

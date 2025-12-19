@@ -28,6 +28,7 @@ from common.files.utils import batch_correct_extensions
 from common.dedup.hashing import compute_content_hash
 from common.processing import print_processing_summary
 from common.output.progress import PHASE_PROCESS, progress_bar
+from common.output.paths import OutputInfo
 from processors.google_voice.preprocess import GoogleVoicePreprocessor
 from processors.base import ProcessorBase
 from common.dependency_checker import check_exiftool, print_exiftool_error
@@ -116,6 +117,14 @@ class GoogleVoiceProcessor(ProcessorBase):
     def get_priority() -> int:
         """Return priority (higher = run first)"""
         return 50  # Medium priority
+
+    @staticmethod
+    def get_output_info() -> OutputInfo:
+        return OutputInfo(
+            platform="Google",
+            service="voice",
+            username_prefix="google",
+        )
 
     @staticmethod
     def supports_dedup() -> bool:

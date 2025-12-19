@@ -4,7 +4,7 @@
 
 The `memoria.py` script supports parallel processing when using the `--originals` flag, allowing you to process multiple export directories simultaneously for significant performance improvements.
 
-**New in this version:** Automatic upload queuing ensures Immich uploads happen sequentially while processing continues in parallel. See [Upload Queuing](Upload-Queuing) for details.
+**New in this version:** Automatic upload queuing ensures Immich uploads happen sequentially while processing continues in parallel. See [Immich Upload](Immich-Upload#upload-queuing-in-parallel-mode) for details.
 
 ## Usage
 
@@ -193,6 +193,6 @@ This is normal with parallel processing. Each export's output is still grouped t
 ## Related Documentation
 
 - [Usage](Usage) - Command-line options
-- [Upload Queuing](Upload-Queuing) - Upload queuing for parallel processing
+- [Immich Upload](Immich-Upload) - Immich configuration and upload queuing
 - [Logging](Logging) - Logging configuration
 

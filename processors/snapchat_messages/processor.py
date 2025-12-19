@@ -58,6 +58,7 @@ from common.utils import (
     sanitize_filename,
     update_file_timestamps,
 )
+from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
 from processors.snapchat_messages.preprocess import (
     SnapchatPreprocessor,
@@ -152,6 +153,14 @@ class SnapchatMessagesProcessor(ProcessorBase):
     @staticmethod
     def get_priority() -> int:
         return 85
+
+    @staticmethod
+    def get_output_info() -> OutputInfo:
+        return OutputInfo(
+            platform="Snapchat",
+            service="messages",
+            username_prefix="snapchat",
+        )
 
     @staticmethod
     def supports_dedup() -> bool:

@@ -40,7 +40,7 @@ snapchat-username-20251122/
 
 **What you get instead**: Album names are preserved in EXIF metadata fields (`ImageDescription`, `IPTC:Caption-Abstract`) and used to create Immich albums during upload. The information isn't lost, just stored differently.
 
-**Related**: See [Deduplication](Deduplication.md) and [Design Decisions](Design-Decisions.md)
+**Related**: See [Deduplication](Deduplication) and [Design Decisions](Design-Decisions)
 
 ## Google Photos Deduplication Cannot Be Disabled
 
@@ -104,7 +104,7 @@ snapchat-username-20251122/
 - Be prepared for tedious manual work
 - Consider whether the effort is worth it for your use case
 - Organize downloaded files into the expected `media/` and `overlays/` structure
-- See [Snapchat Export Guide](Snapchat-Export.md) for structure requirements
+- See [Snapchat Export](Snapchat-Export) for structure requirements
 
 ## iMessage Exports Require Database Access
 
@@ -120,7 +120,7 @@ snapchat-username-20251122/
 - For iPhone exports: Either create an unencrypted backup, or use tools like iMazing to decrypt an encrypted backup first
 - Extract the `SMS/` directory from the decrypted backup before processing
 
-**Related**: See [iMessage Export Guide](iMessage-Export.md) for detailed setup instructions.
+**Related**: See [iMessage Export](iMessage-Export) for detailed setup instructions.
 
 ## iMessage Uses Device Identifier, Not Username
 
@@ -184,7 +184,7 @@ snapchat-username-20251122/
 
 - Follow the formula: `parallel_exports × (workers + 1) ≈ CPU cores`
 - Memoria warns you when you exceed cores by 50%
-- See [Parallel Processing](Parallel-Processing.md) for optimal configurations
+- See [Parallel Processing](Parallel-Processing) for optimal configurations
 
 ## Original Exports Are Never Modified
 
@@ -223,10 +223,10 @@ What would happen if timestamps were corrupted:
 
 **What you should know**: This is handled internally by Memoria's processors, but if you're developing custom processors, you must read filesystem timestamps before copying or modifying files.
 
-**Related**: See [Adding Processors](Adding-Processors.md) for developer guidelines on timestamp handling.
+**Related**: See [Adding Processors](Adding-Processors) for developer guidelines on timestamp handling.
 
 ## Related Documentation
 
-- [Design Decisions](Design-Decisions.md) - Rationale for these behaviors
-- [FAQ](FAQ.md) - Common questions and answers
-- [Getting Started](Getting-Started.md) - Setup and preparation guide
+- [Design Decisions](Design-Decisions) - Rationale for these behaviors
+- [FAQ](FAQ) - Common questions and answers
+- [Getting Started](Getting-Started) - Setup and preparation guide

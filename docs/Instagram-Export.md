@@ -34,7 +34,7 @@ Memoria supports both legacy and current Instagram export structures:
 
 The processor automatically detects which format your export uses and handles it appropriately. No manual configuration is needed.
 
-For detailed technical comparison, see [Instagram Export Format Comparison](Instagram-Export-Format-Comparison.md).
+For detailed technical comparison, see [Technical Reference: Export Format Comparison](#technical-reference-export-format-comparison) at the end of this document.
 
 ---
 
@@ -452,3 +452,160 @@ See [Immich Upload](Immich-Upload) for configuration options.
 - [Getting Started](Getting-Started) - Initial setup guide
 - [Usage](Usage) - Detailed usage options
 - [Immich Upload](Immich-Upload) - Immich upload configuration
+
+---
+
+## Technical Reference: Messages Schema
+
+This section describes the message data schema for Instagram Messages exports.
+
+### Export Format Versions
+
+Instagram has changed their export format over time. Memoria supports both versions:
+
+| Version | Era | Messages Path | Key Differences |
+|---------|-----|---------------|-----------------|
+| Current | 2023+ | `your_instagram_activity/messages/inbox/` | Uses `<h2>` for sender, no comma in timestamp |
+| Legacy | Pre-2023 | `messages/inbox/` | Uses `<div>` for sender, comma after year in timestamp |
+
+Both formats use the same CSS classes and overall HTML structure. Memoria automatically detects which format is present.
+
+### Messages Location
+
+**Current Format (2023+):**
+
+```text
+instagram-username-YYYYMMDD/
+└── your_instagram_activity/
+    └── messages/
+        ├── ai_conversations/
+        ├── chats.html
+        ├── secret_conversations.html
+        ├── inbox/
+        │   ├── username1_conversation_id/
+        │   │   ├── message_1.html
+        │   │   ├── photos/
+        │   │   └── videos/
+        │   └── ...
+        └── message_requests/
+```
+
+**Legacy Format (Pre-2023):**
+
+```text
+instagram-username-YYYYMMDD/
+├── messages/
+│   ├── chats.html
+│   ├── inbox/
+│   │   └── ...
+│   └── message_requests/
+└── content/
+```
+
+### HTML Structure
+
+Instagram messages are stored as **HTML files** (not JSON). Each `message_N.html` file contains one or more messages.
+
+**Current Format (2023+) - Uses `<h2>` for sender:**
+
+```html
+<div class="pam _3-95 _2ph- _a6-g uiBoxWhite noborder">
+  <h2 class="_3-95 _2pim _a6-h _a6-i">Sender Name</h2>
+  <div class="_3-95 _a6-p">
+    <div>Message content...</div>
+  </div>
+  <div class="_3-94 _a6-o">Sep 22, 2017 6:33 am</div>
+</div>
+```
+
+**Legacy Format (Pre-2023) - Uses `<div>` for sender:**
+
+```html
+<div class="pam _3-95 _2ph- _a6-g uiBoxWhite noborder">
+  <div class="_3-95 _2pim _a6-h _a6-i">Sender Name</div>
+  <div class="_3-95 _a6-p">
+    <div>Message content...</div>
+  </div>
+  <div class="_3-94 _a6-o">Sep 22, 2017, 6:33 AM</div>
+</div>
+```
+
+### Extracted Message Fields
+
+| Field | Extraction Method | Example |
+|-------|------------------|---------|
+| Conversation Title | `<title>` tag | `"John Doe"` or `"Family Group"` |
+| Sender | `<h2>` or `<div>` with class `_3-95 _2pim _a6-h _a6-i` | `"your_username"` |
+| Timestamp | `<div>` with class `_3-94 _a6-o` | `"Sep 22, 2017 6:33 am"` |
+| Message Text | `<div>` within `_3-95 _a6-p` container | `"Check this out!"` |
+| Photo Attachments | `<a>` and `<img>` tags with `href`/`src` | `photos/123456789.jpg` |
+| Video Attachments | `<video>` tag with `src` attribute | `videos/123456789.mp4` |
+
+### Timestamp Formats
+
+| Version | Format | Example |
+|---------|--------|---------|
+| Current (2023+) | `Mon DD, YYYY H:MM am/pm` | `Sep 22, 2017 6:33 am` |
+| Legacy (Pre-2023) | `Mon DD, YYYY, H:MM AM/PM` | `Sep 22, 2017, 6:33 AM` |
+
+### Conversation Types
+
+1. **Direct Messages (DM)**: Folder name `{username}_{conversation_id}/`
+2. **Group Chats**: Folder name `{participant1}{participant2}and{participant3}_{conversation_id}/`
+3. **AI Conversations**: In `ai_conversations/` folder (current format only)
+4. **Deleted Users**: Folder name `instagramuser_{numeric_id}/`
+
+### Platform-Specific Notes
+
+- **HTML Parsing Required**: No JSON format; must parse HTML structure
+- **CSS Class Dependencies**: Extraction relies on Instagram's CSS class names
+- **Message Requests**: Separate `message_requests/` folder for non-followers
+- **Missing Media**: Export excludes ephemeral content (View Once, expired messages)
+- **Multiple HTML Files**: Large conversations may split across `message_1.html`, `message_2.html`, etc.
+
+---
+
+## Technical Reference: Export Format Comparison
+
+Instagram changed their data export format between 2022 and 2025. Key structural changes:
+
+| Aspect | 2022 Export | 2025 Export |
+|--------|-------------|-------------|
+| Entry Point | `index.html` | `start_here.html` |
+| Metadata Location | `content/` | `your_instagram_activity/media/` |
+| Messages Location | `messages/` | `your_instagram_activity/messages/` |
+| Media Location | `media/` | `media/` + `public-media/` |
+
+### Directory Reorganization
+
+| Category | 2022 Location | 2025 Location |
+|----------|---------------|---------------|
+| Ads data | `ads_and_businesses/` | `ads_information/` |
+| Contacts | `contacts/` | `connections/contacts/` |
+| Followers | `followers_and_following/` | `connections/followers_and_following/` |
+| Comments | `comments/` | `your_instagram_activity/comments/` |
+| Likes | `likes/` | `your_instagram_activity/likes/` |
+
+### New Content Types (2025)
+
+- `your_instagram_activity/ai/` - AI-related activity
+- `your_instagram_activity/threads/` - Threads app integration
+- `media/reels/` - Reels content (separate from IGTV)
+- `public-media/` - Organized public media directory
+
+### HTML Metadata Format
+
+Both formats use the same HTML structure for posts metadata with identical CSS classes:
+
+| Class | Purpose |
+|-------|---------|
+| `pam _3-95 _2ph- _a6-g uiBoxWhite noborder` | Post container |
+| `_3-95 _2pim _a6-h _a6-i` | Caption/title |
+| `_3-95 _a6-p` | Media content wrapper |
+| `_3-94 _a6-o` | Timestamp |
+
+### Implications for Processing
+
+Memoria automatically detects which format is present and handles both:
+- Detection passes if media structure exists (`media/posts/` or `media/archived_posts/`)
+- Preprocessing looks for metadata in both `your_instagram_activity/media/` and `content/`

@@ -43,7 +43,7 @@ To participate in cross-processor deduplication, implement:
 - **`supports_dedup()`**: Return `True` to enable deduplication support
 - **`build_catalog()`**: Build file catalog with hashes (without copying files)
 
-See [Global Deduplication](Global-Deduplication) for details on cross-processor deduplication.
+See [Deduplication](Deduplication) for details on cross-processor deduplication.
 
 ### Example Structure
 
@@ -98,37 +98,41 @@ def supports_dedup() -> bool:
     return True
 
 @staticmethod
-def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
-    """Build catalog of files with hashes and metadata.
+def build_catalog(input_dir: str, **kwargs) -> Iterator[Dict[str, Any]]:
+    """Build catalog by yielding entries one at a time (memory-efficient).
     
     This method is called during Phase 1 (CATALOG) of deduplication.
-    It should scan all media files, compute hashes, and return a
-    catalog WITHOUT copying any files.
+    It should scan all media files, compute hashes, and YIELD entries
+    one at a time WITHOUT copying any files.
+    
+    Using a generator (yield) instead of returning a list allows
+    streaming entries to the database without holding all entries
+    in memory - critical for large exports with 100,000+ files.
     
     Args:
         input_dir: Path to input directory
         **kwargs: Additional arguments (verbose, workers)
     
-    Returns:
-        Catalog dictionary with structure:
+    Yields:
+        Catalog entry dictionaries with structure:
         {
-            "processor": str,           # Processor name
-            "input_dir": str,           # Input directory path
-            "files": [                  # List of file entries
-                {
-                    "source_path": str,           # Full path to source
-                    "relative_path": str,         # Path relative to input_dir
-                    "content_hash": str,          # xxHash64 hex digest
-                    "perceptual_hash": str|None,  # dhash hex or None
-                    "file_size": int,             # Size in bytes
-                    "dimensions": tuple|None,     # (width, height) or None
-                    "timestamp": str|None,        # ISO timestamp or None
-                    "metadata": dict,             # Processor-specific metadata
-                },
-            ]
+            "source_path": str,           # Full path to source
+            "relative_path": str,         # Path relative to input_dir
+            "content_hash": str,          # xxHash64 hex digest
+            "perceptual_hash": str|None,  # dhash hex or None
+            "file_size": int,             # Size in bytes
+            "dimensions": tuple|None,     # (width, height) or None
+            "timestamp": str|None,        # ISO timestamp or None
+            "metadata": dict,             # Processor-specific metadata
+            "_processor": str,            # Processor name (added automatically)
         }
     """
-    # Implementation here
+    for file_path in media_files:
+        yield {
+            "source_path": str(file_path),
+            "content_hash": compute_hash(file_path),
+            # ... other fields
+        }
 ```
 
 ### Processing with Dedup Manifest
@@ -149,8 +153,8 @@ def process(
     (they will be handled by their primary processor).
     """
     # Check if file should be skipped using hash-based lookup
-    from common.dedup_service import is_file_primary_by_hash
-    from common.perceptual_hash import compute_content_hash
+    from common.dedup.service import is_file_primary_by_hash
+    from common.dedup.hashing import compute_content_hash
     
     for file_path in media_files:
         if dedup_manifest:
@@ -162,12 +166,12 @@ def process(
 
 ### Helper Functions
 
-Use these utilities from `common/`:
+Use these utilities from `common/dedup/`:
 
 ```python
-from common.dedup_config import get_dedup_config
-from common.dedup_service import is_file_primary_by_hash
-from common.perceptual_hash import (
+from common.dedup.config import get_dedup_config
+from common.dedup.service import is_file_primary_by_hash
+from common.dedup.hashing import (
     compute_content_hash,
     compute_perceptual_hash_with_dims,
 )
@@ -253,7 +257,7 @@ def process(input_dir, output_dir):
 **See also:**
 
 - Look at `processors/instaloader/preprocess.py` for a real example
-- See [Design Decisions](Design-Decisions.md#filesystem-timestamp-handling) for detailed rationale
+- See [Design Decisions](Design-Decisions#filesystem-timestamp-handling) for detailed rationale
 
 ## Contributing
 
@@ -274,6 +278,6 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for contribution guidelines.
 
 ## Related Documentation
 
-- [Design Decisions](Design-Decisions.md) - Understand Memoria's architecture
-- [Usage](Usage.md) - Command-line options for testing
-- [Getting Started](Getting-Started.md) - Development environment setup
+- [Design Decisions](Design-Decisions) - Understand Memoria's architecture
+- [Usage](Usage) - Command-line options for testing
+- [Getting Started](Getting-Started) - Development environment setup

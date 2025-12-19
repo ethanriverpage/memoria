@@ -630,3 +630,101 @@ If you see messages about rebuilding EXIF structures:
 - [Getting Started](Getting-Started) - Initial setup guide
 - [Usage](Usage) - Detailed usage options
 - [Immich Upload](Immich-Upload) - Immich upload configuration
+
+---
+
+## Technical Reference: Messages Schema
+
+This section describes the message data schema for Snapchat Messages exports.
+
+### Messages Location
+
+```text
+snapchat-username-YYYYMMDD/
+└── messages/
+    ├── json/
+    │   ├── chat_history.json
+    │   └── snap_history.json
+    ├── chat_media/
+    │   ├── 2019-02-12_b~EiQSFTM0SEdmSTFNRzBDdkhlelFQS1hLUhoAGgAyAXxIAlAEYAE.jpg
+    │   ├── 2019-02-13_media~zip-38FDD84B-5891-4975-84BD-08763E785D32.mp4
+    │   ├── 2019-02-13_overlay~zip-31FBA148-B00D-4E1D-A802-25249ADDF1A8.png
+    │   └── ...
+    ├── html/
+    │   ├── chat_history.html
+    │   └── snap_history.html
+    └── index.html
+```
+
+### Schema: chat_history.json
+
+The `chat_history.json` file is structured as a dictionary where **keys are conversation IDs** and **values are arrays of message objects**.
+
+```json
+{
+  "conversation_id_1": [ ...messages... ],
+  "conversation_id_2": [ ...messages... ]
+}
+```
+
+### Message Object Fields
+
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `From` | string | Username of the message sender | `"friend_username"` |
+| `Media Type` | string | Type of message content | `"TEXT"`, `"MEDIA"`, `"STICKER"` |
+| `Created` | string | Timestamp when message was sent (UTC) | `"2024-04-20 01:29:22 UTC"` |
+| `Conversation Title` | string or null | Name of the conversation (null for DMs) | `"Group Chat Name"` |
+| `IsSender` | boolean | Whether the export user sent this message | `true` or `false` |
+| `Content` | string or null | Text content of the message | `"Check this out!"` |
+| `Media IDs` | string | References to media files (pipe-separated for multiple) | `"b~abc... \| b~def..."` |
+
+### Media Type Values
+
+| Type | Description |
+|------|-------------|
+| `TEXT` | Text-only message |
+| `MEDIA` | Generic media attachment (most common for photos/videos) |
+| `STICKER` | Sticker message |
+| `SHARE` | Shared content |
+| `STATUSERASEDMESSAGE` | System message indicating message was erased |
+| `STATUSPARTICIPANTREMOVED` | System message for participant removal |
+
+### Media File Naming Patterns
+
+All media files have a `YYYY-MM-DD_` date prefix:
+
+1. **Media IDs**: `2019-02-12_b~EiQSFTM0SEdmSTFNRzBD...jpg`
+2. **Media from zip**: `2019-02-13_media~zip-UUID.mp4`
+3. **Overlays**: `2019-02-13_overlay~zip-UUID.png`
+4. **Thumbnails**: `2019-02-18_thumbnail~zip-UUID.jpg`
+
+### Schema: snap_history.json
+
+Has the same top-level structure but simpler message objects:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `From` | string | Username of the sender |
+| `Media Type` | string | `"IMAGE"` or `"VIDEO"` |
+| `Created` | string | Timestamp (UTC) |
+| `Conversation Title` | string or null | Conversation name |
+| `IsSender` | boolean | Whether you sent this snap |
+
+**Key differences from chat_history.json:**
+- No `Media IDs` field
+- No `Content` field
+- Uses `IMAGE`/`VIDEO` instead of `MEDIA`
+
+### Overlay Matching
+
+Overlay files (PNG images with text/drawings/stickers) are stored separately with no explicit links to media files in the JSON. Memoria matches them using **file modification timestamps**.
+
+**Critical:** Timestamps must be preserved from the original export for overlay matching to work correctly.
+
+### Platform-Specific Notes
+
+- **Multiple Media IDs**: A single message can reference multiple media files separated by ` | `
+- **Overlay Matching**: Based on file modification timestamps (no explicit JSON links)
+- **System Messages**: Messages with `Media Type` starting with `STATUS` are system-generated
+- **Timestamp Format**: Already standardized as `YYYY-MM-DD HH:MM:SS UTC`

@@ -44,6 +44,7 @@ from common.dependency_checker import (  # noqa: E402
 from common.upload.targets import build_upload_targets  # noqa: E402
 from common.upload.immich import verify_auth, upload as immich_upload  # noqa: E402
 from common.config.processor import get_effective_output_dir  # noqa: E402
+from common.output.paths import build_processor_output_path  # noqa: E402
 from common.dedup.config import is_dedup_enabled, get_dedup_config  # noqa: E402
 from common.dedup.service import DeduplicationService, save_manifest  # noqa: E402
 from common.dedup.database import HashDatabase  # noqa: E402
@@ -506,12 +507,13 @@ def run_phased_dedup_processing(
         for processor in matching_processors:
             logger.info("  Running: %s", processor.get_name())
             try:
-                # Determine output directory
+                # Determine output directory using Platform/User structure
                 if args.output:
-                    if len(dirs_to_process) > 1:
-                        output_dir = str(Path(args.output) / export_dir.name)
-                    else:
-                        output_dir = args.output
+                    output_dir = build_processor_output_path(
+                        processor.get_output_info(),
+                        str(export_dir),
+                        args.output,
+                    )
                 else:
                     output_dir = None
 
@@ -824,8 +826,15 @@ def process_single_export(
             # Pass temp_dir to processors
             kwargs["temp_dir"] = temp_dir
 
-            # Determine output directory
-            output_dir = args.output if args.output else None
+            # Determine output directory using Platform/User structure
+            if args.output:
+                output_dir = build_processor_output_path(
+                    processor.get_output_info(),
+                    str(input_path),
+                    args.output,
+                )
+            else:
+                output_dir = None
 
             # Run processor
             success = processor.process(str(input_path), output_dir, **kwargs)
@@ -837,14 +846,18 @@ def process_single_export(
                     "%s: %s completed successfully", status, processor.get_name()
                 )
 
-                # Compute processor-specific effective output directory
-                pname = processor.get_name()
-                effective_output = get_effective_output_dir(pname, args.output)
+                # Compute effective output directory for uploads
+                # This is the Platform/User path plus service subdirectory
+                output_info = processor.get_output_info()
+                if output_dir and output_info.service:
+                    effective_output = str(Path(output_dir) / output_info.service)
+                else:
+                    effective_output = output_dir
 
                 # Upload to Immich if enabled
                 if immich_enabled and effective_output:
                     targets = build_upload_targets(
-                        pname, str(input_path), effective_output
+                        processor, str(input_path), effective_output
                     )
                     if not targets:
                         logger.info("No upload targets derived for this processor.")
@@ -1815,12 +1828,9 @@ Examples:
                         )
                         logger.info(mega_separator)
 
-                        # Create export-specific output directory to avoid mixing data
-                        if output_base:
-                            # Create a subdirectory for this export within the base output dir
-                            export_output_dir = str(output_base / export_dir.name)
-                            # Temporarily override args.output for this export
-                            args.output = export_output_dir
+                        # Note: Output directory is now built per-processor using
+                        # build_processor_output_path() which creates Platform/User paths.
+                        # No need to override args.output here.
 
                     # Process this export
                     try:
@@ -1838,10 +1848,6 @@ Examples:
                                 detection_cache,
                             )
                         )
-
-                        # Restore original output path if we modified it
-                        if len(dirs_to_process) > 1 and output_base:
-                            args.output = str(output_base)
 
                         if failed_count == 0:
                             total_exports_success += 1

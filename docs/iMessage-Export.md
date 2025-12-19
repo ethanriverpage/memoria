@@ -486,5 +486,153 @@ See [Immich Upload](Immich-Upload) for configuration options.
 - [Getting Started](Getting-Started) - Initial setup guide
 - [Usage](Usage) - Detailed usage options
 - [Immich Upload](Immich-Upload) - Immich upload configuration
-- [iMessage Schema](iMessage-Schema) - Technical database schema details
 - [vCard Schema](vCard-Schema) - Contact file format details
+
+---
+
+## Technical Reference: Database Schema
+
+This section describes the iMessage database schema relevant to media extraction.
+
+### Export Sources
+
+iMessage data can be obtained from two sources:
+
+1. **Mac Export** (`mac-*` prefix): Direct copy of `~/Library/Messages/` from a Mac
+2. **iPhone Export** (`iph*` prefix): Extracted from an iTunes/Finder backup of an iPhone
+
+Both sources use the same SQLite database schema.
+
+### Database Tables Overview
+
+| Table | Description |
+|-------|-------------|
+| `message` | All messages with content, timestamps, and metadata |
+| `chat` | Conversations (both 1:1 and group chats) |
+| `handle` | Contact identifiers (phone numbers, emails, Apple IDs) |
+| `attachment` | Attachment metadata (files stored on disk) |
+| `chat_message_join` | Links messages to conversations |
+| `chat_handle_join` | Links participants to conversations |
+| `message_attachment_join` | Links attachments to messages |
+
+### Schema: message Table
+
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `ROWID` | INTEGER | Primary key | `12345` |
+| `guid` | TEXT | Globally unique identifier | `"A4243054-B1A8-..."` |
+| `text` | TEXT | Plain text content | `"Hello!"` |
+| `attributedBody` | BLOB | Rich text content (NSAttributedString) | `(binary)` |
+| `handle_id` | INTEGER | Foreign key to `handle` table | `42` |
+| `date` | INTEGER | Timestamp in Apple Cocoa format (nanoseconds since 2001-01-01) | `731540048638000000` |
+| `is_from_me` | INTEGER | 1 if sent by device owner, 0 if received | `1` or `0` |
+| `cache_has_attachments` | INTEGER | Whether message has attachments | `1` or `0` |
+
+### Schema: chat Table
+
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `ROWID` | INTEGER | Primary key | `1` |
+| `guid` | TEXT | Globally unique identifier | `"iMessage;+;chat516..."` |
+| `style` | INTEGER | Chat style (43=group, 45=1:1) | `43` or `45` |
+| `chat_identifier` | TEXT | Identifier for the chat | `"+14155551234"` |
+| `display_name` | TEXT | User-set display name | `"Family Chat"` or `NULL` |
+
+### Schema: attachment Table
+
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `ROWID` | INTEGER | Primary key | `1` |
+| `guid` | TEXT | Unique identifier | `"at_0_5D60152C-..."` |
+| `filename` | TEXT | Path to file on disk | `"~/Library/Messages/Attachments/..."` |
+| `uti` | TEXT | Uniform Type Identifier | `"public.heic"`, `"public.jpeg"` |
+| `mime_type` | TEXT | MIME type | `"image/heic"` |
+| `transfer_state` | INTEGER | Download/upload state (5=complete) | `5` |
+| `transfer_name` | TEXT | Original filename | `"IMG_0926.HEIC"` |
+| `total_bytes` | INTEGER | File size in bytes | `148605` |
+
+### Attachment Path Structure
+
+Attachments are stored in a hashed directory structure:
+
+```text
+~/Library/Messages/Attachments/
+├── 4f/
+│   └── 15/
+│       └── D7CEBAED-9844-4B25-B841-F7748EA3BCAD/
+│           └── IMG_4911.heic
+└── ...
+```
+
+### Common File Types
+
+| UTI | MIME Type | Description |
+|-----|-----------|-------------|
+| `public.heic` | `image/heic` | HEIC photos (default iPhone format) |
+| `public.jpeg` | `image/jpeg` | JPEG photos |
+| `com.apple.quicktime-movie` | `video/quicktime` | MOV videos |
+| `public.mpeg-4` | `video/mp4` | MP4 videos |
+| `com.apple.coreaudio-format` | `audio/x-caf` | Voice messages (CAF) |
+
+### Live Photos
+
+Live Photos are stored as paired files in the same attachment directory:
+
+```text
+~/Library/Messages/Attachments/.../
+├── lp_image.HEIC    # Still image (tracked in database)
+└── lp_image.MOV     # Video component (NOT in database)
+```
+
+**Important:** The MOV video component is **not tracked in the database**. Processors must scan the filesystem for `lp_image.MOV` alongside `lp_image.HEIC` files.
+
+### Timestamp Conversion
+
+iMessage uses Apple Cocoa timestamps (nanoseconds since 2001-01-01 00:00:00 UTC).
+
+```python
+APPLE_EPOCH_OFFSET = 978307200
+
+def convert_timestamp(apple_timestamp: int) -> datetime:
+    """Convert Apple Cocoa timestamp to Python datetime."""
+    unix_timestamp = (apple_timestamp / 1_000_000_000) + APPLE_EPOCH_OFFSET
+    return datetime.fromtimestamp(unix_timestamp)
+```
+
+### Decoding attributedBody
+
+Starting with macOS Ventura (13.0) and iOS 16, message content is often stored in `attributedBody` (NSTypedStream format) rather than the `text` column.
+
+**Impact:**
+- Mac exports (macOS Ventura+): ~99% of messages have NULL `text`
+- iPhone exports: ~15-20% may need `attributedBody` extraction
+
+The blob has a `\x04\x0bstreamtyped` header. Text is located after the `\x01+` marker with a length prefix.
+
+### Example Query: Extract Attachments with Metadata
+
+```sql
+SELECT 
+    a.filename,
+    a.mime_type,
+    a.transfer_name as original_filename,
+    datetime(m.date/1000000000.0 + 978307200, 'unixepoch') as message_date,
+    c.display_name as chat_name,
+    h.id as sender_id
+FROM attachment a
+JOIN message_attachment_join maj ON a.ROWID = maj.attachment_id
+JOIN message m ON maj.message_id = m.ROWID
+JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
+JOIN chat c ON cmj.chat_id = c.ROWID
+LEFT JOIN handle h ON m.handle_id = h.ROWID
+WHERE a.filename IS NOT NULL
+  AND a.transfer_state = 5
+ORDER BY m.date;
+```
+
+### Platform-Specific Notes
+
+- **Mac export**: Paths reference `~/Library/Messages/Attachments/...`
+- **iPhone export**: Paths reference `~/Library/SMS/Attachments/...`
+- **Group chats**: `chat.style = 43`; Direct messages: `chat.style = 45`
+- **Live Photos**: Video component not in database; must scan filesystem

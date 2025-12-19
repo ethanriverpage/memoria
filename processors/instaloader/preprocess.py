@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from common.output.progress import PHASE_PREPROCESS, futures_progress
 from common.processing import print_preprocessing_stats
+from common.detection import resolve_username, detect_from_dirname, DetectionResult
 from common.utils import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, default_worker_count
 from common.files.filter import BannedFilesFilter
 from common.failure_tracker import FailureTracker
@@ -186,6 +187,61 @@ class InstaloaderPreprocessor:
             return False
 
         return True
+
+    def detect_username(self) -> DetectionResult:
+        """Detect export username using available sources.
+
+        Priority:
+        1. JSON metadata files (.json.xz or .json) - contains owner.username
+        2. Directory name pattern (instagram-username-YYYYMMDD)
+
+        Returns:
+            DetectionResult with username and source
+        """
+        import lzma
+
+        def detect_from_json_metadata(path: Path) -> Optional[str]:
+            """Extract username from Instaloader JSON metadata."""
+            # Try .json.xz files first (compressed), then .json
+            json_files = list(path.glob("*.json.xz")) or list(path.glob("*.json"))
+
+            if not json_files:
+                return None
+
+            # Try the first few files until we find owner.username
+            for json_file in json_files[:5]:
+                try:
+                    if json_file.suffix == ".xz":
+                        with lzma.open(json_file, "rt", encoding="utf-8") as f:
+                            data = json.load(f)
+                    else:
+                        with open(json_file, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+
+                    # Navigate to owner.username (may be nested under 'node')
+                    if "node" in data:
+                        data = data["node"]
+
+                    owner = data.get("owner", {})
+                    username = owner.get("username")
+                    if username:
+                        return username
+                except Exception:
+                    continue
+
+            return None
+
+        def detect_from_dirname_instagram(path: Path) -> Optional[str]:
+            """Extract username from directory name."""
+            return detect_from_dirname(path, "instagram")
+
+        return resolve_username(
+            self.export_path,
+            [
+                ("json_metadata", detect_from_json_metadata),
+                ("dirname", detect_from_dirname_instagram),
+            ],
+        )
 
     def parse_timestamp_from_filename(self, filename: str) -> Optional[str]:
         """
@@ -520,11 +576,17 @@ class InstaloaderPreprocessor:
     def save_metadata(self, metadata: List[Dict]) -> None:
         """Save cleaned metadata to metadata.json"""
         try:
+            # Detect username from export
+            detection_result = self.detect_username()
+            export_username = detection_result.username or "unknown"
+
             # Add export info
             output = {
                 "export_info": {
                     "export_path": str(self.export_path),
                     "export_name": self.export_path.name,
+                    "export_username": export_username,
+                    "username_source": detection_result.source,
                     "processed_date": datetime.now().isoformat(),
                     "total_posts": self.stats["total_posts"],
                     "total_media_files": self.stats["media_copied"],

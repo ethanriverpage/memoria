@@ -51,7 +51,7 @@ This document explains key architectural and UX decisions in Memoria and the rat
 - **Symlinks for albums**: Complex to manage, doesn't work across filesystems
 - **Hardlinks for albums**: Confusing to users, risky for modification operations
 
-**Related:** See [Deduplication](Deduplication.md) for implementation details.
+**Related:** See [Deduplication](Deduplication) for implementation details.
 
 ## Directory Naming Convention Required
 
@@ -112,7 +112,7 @@ The entire Google Photos processor architecture assumes deduplication. Making it
 
 The benefits don't justify the complexity.
 
-**Related:** See [Deduplication](Deduplication.md) for technical implementation.
+**Related:** See [Deduplication](Deduplication) for technical implementation.
 
 ## Sequential Uploads in Parallel Mode
 
@@ -143,7 +143,7 @@ Testing showed that parallel uploads to Immich:
 
 Sequential uploads with concurrent processing provides the best balance.
 
-**Related:** See [Upload Queuing](Upload-Queuing.md) for implementation details.
+**Related:** See [Immich Upload](Immich-Upload) for implementation details.
 
 ## ExifTool Over Native Libraries
 
@@ -249,7 +249,7 @@ Each processor:
 - Provides `detect()`, `get_name()`, `get_priority()`, and `process()` methods
 - Exports `get_processor()` function for auto-discovery
 
-**Related:** See [Adding Processors](Adding-Processors.md) for development guide.
+**Related:** See [Adding Processors](Adding-Processors) for development guide.
 
 ## Priority-Based Processor Ordering
 
@@ -265,11 +265,11 @@ Each processor:
 **Why it matters:**
 A Google Takeout export may contain:
 
-- Google Photos (priority 60)
+- Google Photos (priority 50)
 - Google Chat (priority 50)
 - Google Voice (priority 50)
 
-All three processors match and should run. Priority ensures they run in a sensible order.
+All three processors match and should run. Priority ensures they run in a sensible order (processors with higher priority run first).
 
 **Trade-offs:**
 
@@ -293,7 +293,7 @@ All three processors match and should run. Priority ensures they run in a sensib
 - Default: Clean, minimal output suitable for normal operation
 - Verbose: Comprehensive logging for debugging and progress monitoring
 
-**Related:** See [Logging](Logging.md) for details.
+**Related:** See [Logging](Logging) for details.
 
 ## Default to Immich Upload
 
@@ -391,7 +391,7 @@ When creating custom processors:
 - Store timestamps in your metadata structures
 - Use stored timestamps for EXIF embedding
 
-**Related:** See [Adding Processors](Adding-Processors.md) for implementation guidelines and [Common Gotchas](Common-Gotchas.md#filesystem-timestamps-can-be-fragile) for user-facing explanation.
+**Related:** See [Adding Processors](Adding-Processors) for implementation guidelines and [Common Gotchas](Common-Gotchas#filesystem-timestamps-can-be-fragile) for user-facing explanation.
 
 ## Conclusion
 
@@ -405,4 +405,4 @@ These design decisions prioritize:
 
 Some decisions limit flexibility, but they create a tool that "just works" for the common case while remaining safe and predictable.
 
-For specific behaviors and gotchas, see [Common Gotchas](Common-Gotchas.md).
+For specific behaviors and gotchas, see [Common Gotchas](Common-Gotchas).

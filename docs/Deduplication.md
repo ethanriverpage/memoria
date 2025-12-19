@@ -15,7 +15,7 @@ Memoria supports two levels of deduplication:
 
 **Within-processor deduplication** (documented below) handles duplicates within a single export - for example, the same photo appearing in multiple Google Photos albums or shared in multiple iMessage conversations.
 
-**Cross-processor deduplication** identifies duplicates across different platforms - for example, a photo that exists in both your Google Photos and Instagram. See [Global Deduplication](Global-Deduplication) for details.
+**Cross-processor deduplication** identifies duplicates across different platforms - for example, a photo that exists in both your Google Photos and Instagram. See [Cross-Processor Deduplication](#cross-processor-deduplication) below for details.
 
 ## Supported Processors
 
@@ -123,8 +123,8 @@ Generated filenames no longer include album names:
 
 ImageDescription field stores source information without album:
 
-- **Format**: `Source: Google Photos/{username}`
-- **Example**: `Source: Google Photos/johndoe`
+- **Format**: `Source: Google/{username}`
+- **Example**: `Source: Google/johndoe`
 
 ### Live Photos
 
@@ -277,9 +277,190 @@ Both conversations reference the same file because the content is identical.
 
 ---
 
+## Cross-Processor Deduplication
+
+Cross-processor deduplication identifies and eliminates duplicate files across different platform exports. The same photo might exist in your Google Photos, Instagram stories, iMessage conversations, and Discord channels. This feature ensures each unique file is stored only once, with metadata merged from all sources.
+
+### When to Use Cross-Processor Deduplication
+
+This feature is ideal when:
+
+- Processing exports from multiple platforms that may contain the same media
+- You've shared the same photos across different services
+- You want to consolidate media from multiple sources into a single library
+- Storage space is a concern
+
+### Quick Start
+
+Enable cross-processor deduplication by setting the environment variable:
+
+```bash
+CROSS_PROCESSOR_DEDUP=true ./memoria.py --originals /path/to/exports -o /output
+```
+
+Or add to your `.env` file:
+
+```bash
+CROSS_PROCESSOR_DEDUP=true
+```
+
+### How It Works
+
+When enabled, Memoria processes exports in three phases:
+
+```
+Phase 1: CATALOG
+  - Scan all exports without copying files
+  - Compute content hashes (xxHash64) for each media file
+  - Optionally compute perceptual hashes for fuzzy matching
+  - Build catalog of all files with metadata
+
+Phase 2: DEDUP ANALYSIS
+  - Group files by exact content hash
+  - For unmatched files, check perceptual similarity
+  - Validate matches using metadata (GPS, timestamp, dimensions)
+  - Select highest quality version as primary
+  - Generate dedup_manifest.json
+
+Phase 3: PROCESS
+  - Process each export using the manifest
+  - Primary files: copy and embed merged metadata
+  - Secondary files: skip copying, record reference only
+```
+
+### Duplicate Detection Strategy
+
+The system uses a hybrid matching strategy:
+
+1. **Exact Hash (xxHash64)**: Files with identical content have identical hashes
+2. **Perceptual Hash (dhash)**: Catches re-encoded or slightly modified versions
+3. **Metadata Validation**: Confirms matches using GPS, timestamp, and dimensions
+
+### What Counts as a Duplicate
+
+| Scenario | Duplicate? |
+|----------|-----------|
+| Exact same file shared on multiple platforms | Yes |
+| Same photo re-encoded (HEIC to JPG) | Maybe (perceptual match) |
+| Photo with filter applied | No |
+| Significantly cropped version | No |
+| Screenshot containing the photo | No |
+
+### Configuration
+
+#### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CROSS_PROCESSOR_DEDUP` | `false` | Enable cross-processor deduplication |
+| `DEDUP_USE_PERCEPTUAL` | `true` | Enable perceptual hashing for fuzzy matching |
+| `DEDUP_PERCEPTUAL_THRESHOLD` | `0.92` | Similarity threshold (0.0-1.0) |
+| `DEDUP_DATABASE_PATH` | `~/.memoria/dedup.db` | SQLite database for hash persistence |
+| `DEDUP_DESC_MAX_PER_SOURCE` | `250` | Max chars per source in ImageDescription |
+| `DEDUP_DESC_MAX_TOTAL` | `1500` | Max total chars for ImageDescription |
+
+#### Validation Thresholds
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DEDUP_GPS_DISTANCE` | `500` | Max GPS distance (meters) for duplicate validation |
+| `DEDUP_TIMESTAMP_DELTA` | `3600` | Max timestamp difference (seconds) |
+| `DEDUP_ASPECT_RATIO` | `0.10` | Max aspect ratio difference (10%) |
+
+### Supported Processors
+
+| Processor | Cross-Processor Dedup |
+|-----------|----------------------|
+| Google Photos | Yes |
+| iMessage | Yes |
+| Discord | Yes |
+| Instagram Messages | Yes |
+| Instagram Public Media | Yes |
+| Snapchat Memories | Yes |
+| Snapchat Messages | Yes |
+| Google Chat | No |
+| Google Voice | No |
+
+### Output Structure with Cross-Processor Deduplication
+
+Output uses the `Platform/User/Service` structure:
+
+```
+/output/
+├── Google/
+│   └── username/
+│       └── photos/
+│           └── IMG_001.jpg      # Primary copy (highest quality)
+├── Instagram/
+│   └── username/
+│       └── messages/
+│           └── unique_to_ig.jpg # Only files unique to Instagram
+├── iMessage/
+│   └── device_id/
+│       └── ...                  # iMessage files
+└── dedup_manifest.json          # Global deduplication state
+```
+
+### Metadata Merging
+
+When duplicates are found, metadata from all sources is merged:
+
+| Field | Strategy |
+|-------|----------|
+| Timestamp | Earliest with timezone preference |
+| GPS | First non-zero coordinates |
+| Camera info | Most detailed |
+| People tags | Union of all tags |
+| Albums | All albums with source attribution |
+| Provenance | All sources recorded |
+
+### ImageDescription Format
+
+The merged description includes all sources:
+
+```
+Source: Google/johndoe | Vacation 2023, Summer Highlights
++Instagram/johndoe: Story "Beach day with the squad!..." (2024-01-15)
++iMessage/iph13: John [Family] "Everyone needs to see this!" (2024-01-16)
+```
+
+### Performance
+
+| Operation | Speed |
+|-----------|-------|
+| xxHash64 | ~10 GB/s |
+| dhash (image) | ~5-20 ms |
+| ffmpeg frame extract | ~50-100 ms |
+
+For 10,000 files (~100GB):
+- Catalog phase: ~70 seconds
+- Analysis phase: ~10-30 seconds
+
+### Limitations
+
+1. **Format Conversion**: HEIC to JPG conversions may not match (different content)
+2. **Edited Photos**: Filters, crops, and edits create different files
+3. **Re-encoded Videos**: Transcoded videos have different hashes
+4. **Metadata Conflicts**: When sources disagree, earliest/most detailed wins
+
+### Troubleshooting Cross-Processor Deduplication
+
+**"No dedup-capable processors found"**
+- Ensure exports are from supported platforms
+- Check that export directories are detected correctly
+
+**High false positive rate**
+- Lower `DEDUP_PERCEPTUAL_THRESHOLD` (e.g., 0.95)
+- Increase validation thresholds for GPS/timestamp
+
+**Missing duplicates**
+- Enable perceptual hashing: `DEDUP_USE_PERCEPTUAL=true`
+- Lower threshold if files are similar but not identical
+
+---
+
 ## Related Documentation
 
-- [Global Deduplication](Global-Deduplication) - Cross-processor deduplication guide
 - [Google Export](Google-Export) - Google Photos export guide
 - [iMessage Export](iMessage-Export) - iMessage export guide
 - [Discord Export](Discord-Export) - Discord export guide

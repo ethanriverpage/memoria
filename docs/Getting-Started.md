@@ -16,7 +16,7 @@ Before diving into installation, here's what Memoria does with your data:
 
 **Your original export remains completely untouched.** All operations work on copies.
 
-For the reasoning behind these choices, see [Design Decisions](Design-Decisions.md).
+For the reasoning behind these choices, see [Design Decisions](Design-Decisions).
 
 ## Table of Contents
 

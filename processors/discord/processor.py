@@ -52,6 +52,7 @@ from common.utils import (
     sanitize_filename,
     update_file_timestamps,
 )
+from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
 from processors.discord.preprocess import DiscordPreprocessor
 
@@ -130,6 +131,14 @@ class DiscordProcessor(ProcessorBase):
     @staticmethod
     def get_priority() -> int:
         return 70
+
+    @staticmethod
+    def get_output_info() -> OutputInfo:
+        return OutputInfo(
+            platform="Discord",
+            service=None,
+            username_prefix="discord",
+        )
 
     @staticmethod
     def supports_dedup() -> bool:
@@ -252,8 +261,10 @@ def _build_description(message_info: dict, export_username: str) -> str:
 
     # Build conversation name based on channel type
     if channel_type == "dm":
-        if "Direct Message with" in channel_title:
-            recipient = channel_title.replace("Direct Message with ", "")
+        # Extract username, stripping discriminator (e.g., #0) if present
+        match = re.search(r"Direct Message with (.+?)(?:#\d+)?$", channel_title)
+        if match:
+            recipient = match.group(1)
             conv_name = f"DM with {recipient}"
         else:
             conv_name = f"DM with {channel_title}"

@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 """
-Build upload targets (path + album name) based on processor and export.
+Build upload targets (path + album name) based on processor OutputInfo.
 
-Implements the album naming rules provided by the user across Instagram,
-Google, and Snapchat processors.
+Uses the processor's OutputInfo to build consistent Platform/User/Service
+album names that match the output directory structure.
 """
 
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Union, TYPE_CHECKING
 
+from common.output.paths import OutputInfo
 from common.utils import extract_username_from_export_dir
+
+if TYPE_CHECKING:
+    from processors.base import ProcessorBase
 
 
 def _ig_public_media_targets(output_base: Path, username: str) -> List[Tuple[str, str]]:
     """Instagram public media: per-subfolder albums under Instagram/{username}/*"""
     targets: List[Tuple[str, str]] = []
-    # Expected subfolders
+    # Expected subfolders - each becomes its own service
     subfolders = [
         "posts",
         "archived_posts",
@@ -33,67 +37,44 @@ def _ig_public_media_targets(output_base: Path, username: str) -> List[Tuple[str
 
 
 def build_upload_targets(
-    processor_name: str, input_dir: str, output_base: str
+    processor: Union["ProcessorBase", OutputInfo, str],
+    input_dir: str,
+    output_base: str,
 ) -> List[Tuple[str, str]]:
-    """Return a list of (path, album) tuples to upload for a processor run."""
+    """Build upload targets using processor's OutputInfo.
+
+    Args:
+        processor: Processor instance, OutputInfo, or processor name (deprecated)
+        input_dir: Path to export directory (for username extraction)
+        output_base: Base output directory (already includes Platform/User/Service)
+
+    Returns:
+        List of (path, album) tuples for upload
+    """
     out_base = Path(output_base)
 
-    # Handle Instagram Public Media (multiple targets)
-    if processor_name in ("Instagram Public Media", "Instaloader"):
-        username = extract_username_from_export_dir(input_dir, "instagram")
+    # Get OutputInfo from processor
+    if isinstance(processor, OutputInfo):
+        output_info = processor
+    elif isinstance(processor, str):
+        # Legacy: processor name string - should not happen with new code
+        # Fall back to returning the base path with no album
+        return [(str(out_base), "")]
+    else:
+        # Processor instance
+        output_info = processor.get_output_info()
+
+    # Extract username using the prefix from OutputInfo
+    username = extract_username_from_export_dir(input_dir, output_info.username_prefix)
+
+    # Handle Instagram Public Media specially (has nested subfolder structure)
+    if output_info.platform == "Instagram" and output_info.service == "posts":
         return _ig_public_media_targets(out_base, username)
 
-    # Handle Snapchat Messages (special username extraction)
-    if processor_name == "Snapchat Messages":
-        username = extract_username_from_export_dir(input_dir, "snapmsgs")
-        if username == "unknown":
-            username = extract_username_from_export_dir(input_dir, "snapchat")
-        album = f"Snapchat/{username}/messages"
-        messages_path = out_base / "messages"
-        return [(str(messages_path), album)]
+    # Build album name: Platform/username[/service]
+    if output_info.service:
+        album = f"{output_info.platform}/{username}/{output_info.service}"
+    else:
+        album = f"{output_info.platform}/{username}"
 
-    # Handle Discord
-    if processor_name == "Discord":
-        username = extract_username_from_export_dir(input_dir, "discord")
-        album = f"Discord/{username}"
-        messages_path = out_base / "messages"
-        return [(str(messages_path), album)]
-
-    # Handle iMessage (including iMazing exports)
-    if processor_name in ("iMessage", "iMessage-iMazing"):
-        # Extract device identifier from directory name (e.g., "iph13p" from "iph13p-messages-20220426")
-        input_path = Path(input_dir)
-        dir_name = input_path.name
-        # Pattern: {device}-messages-YYYYMMDD or mac-messages-YYYYMMDD
-        if "-messages-" in dir_name:
-            device = dir_name.split("-messages-")[0]
-        else:
-            device = "unknown"
-        album = f"iMessage/{device}"
-        messages_path = out_base / "messages"
-        return [(str(messages_path), album)]
-
-    # Handle Snapchat Memories with subdirectory
-    if processor_name == "Snapchat Memories":
-        username = extract_username_from_export_dir(input_dir, "snapchat")
-        album = f"Snapchat/{username}/memories"
-        memories_path = out_base / "memories"
-        return [(str(memories_path), album)]
-
-    # Simple mapping for single-target processors
-    # Format: processor_name -> (prefix_for_username_extraction, album_template)
-    simple_mappings = {
-        "Instagram Messages": ("instagram", "Instagram/{username}/messages"),
-        "Google Chat": ("google", "Google Chat/{username}"),
-        "Google Photos": ("google", "Google Photos/{username}"),
-        "Google Voice": ("google", "Google Voice/{username}"),
-    }
-
-    if processor_name in simple_mappings:
-        prefix, album_template = simple_mappings[processor_name]
-        username = extract_username_from_export_dir(input_dir, prefix)
-        album = album_template.format(username=username)
-        return [(str(out_base), album)]
-
-    # Default: no targets
-    return []
+    return [(str(out_base), album)]

@@ -49,6 +49,7 @@ from common.utils import (
     is_preprocessed_directory,
     update_file_timestamps,
 )
+from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
 from processors.instagram_public_media.preprocess import InstagramPreprocessor
 
@@ -137,6 +138,14 @@ class InstagramPublicMediaProcessor(ProcessorBase):
     def get_priority() -> int:
         """Return priority (higher = run first)"""
         return 60  # Medium priority
+
+    @staticmethod
+    def get_output_info() -> OutputInfo:
+        return OutputInfo(
+            platform="Instagram",
+            service="posts",
+            username_prefix="instagram",
+        )
 
     @staticmethod
     def supports_dedup() -> bool:

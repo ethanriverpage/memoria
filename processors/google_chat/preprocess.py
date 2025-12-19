@@ -23,6 +23,7 @@ from threading import Lock
 
 from common.processing import print_preprocessing_stats
 from common.output.progress import PHASE_PREPROCESS, futures_progress
+from common.detection import resolve_username, detect_from_dirname, DetectionResult
 
 from common.utils import ALL_MEDIA_EXTENSIONS, default_worker_count
 from common.files.filter import BannedFilesFilter
@@ -165,61 +166,89 @@ class GoogleChatPreprocessor:
 
         return True
 
+    def detect_username(self) -> DetectionResult:
+        """Detect export username using available sources.
+
+        Priority:
+        1. Profile/Profile.json - Google account profile
+        2. Google Chat user_info.json - chat-specific user info
+        3. Directory name pattern (google-username-YYYYMMDD)
+
+        Returns:
+            DetectionResult with username and source
+        """
+
+        def detect_from_profile_json(path: Path) -> Optional[str]:
+            """Extract username from Profile/Profile.json."""
+            profile_path = path / "Profile" / "Profile.json"
+            if not profile_path.exists():
+                return None
+            try:
+                with open(profile_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # Get first email and strip @gmail.com
+                emails = data.get("emails", [])
+                if emails:
+                    email = emails[0].get("value", "")
+                    if "@gmail.com" in email:
+                        return email.replace("@gmail.com", "")
+                    # For non-gmail, use the part before @
+                    if "@" in email:
+                        return email.split("@")[0]
+                return None
+            except Exception:
+                return None
+
+        def detect_from_user_info_json(path: Path) -> Optional[str]:
+            """Extract username from Google Chat user_info.json."""
+            users_dir = path / "Google Chat" / "Users"
+            if not users_dir.exists():
+                return None
+            try:
+                user_dirs = [d for d in users_dir.iterdir() if d.is_dir()]
+                if not user_dirs:
+                    return None
+                user_info_path = user_dirs[0] / "user_info.json"
+                if not user_info_path.exists():
+                    return None
+                with open(user_info_path, "r", encoding="utf-8") as f:
+                    user_data = json.load(f)
+                email = user_data.get("user", {}).get("email")
+                if email:
+                    return email.replace("@gmail.com", "")
+                return None
+            except Exception:
+                return None
+
+        def detect_from_dirname_google(path: Path) -> Optional[str]:
+            """Extract username from directory name."""
+            return detect_from_dirname(path, "google")
+
+        return resolve_username(
+            self.export_path,
+            [
+                ("Profile.json", detect_from_profile_json),
+                ("user_info.json", detect_from_user_info_json),
+                ("dirname", detect_from_dirname_google),
+            ],
+        )
+
     def detect_export_username(self) -> bool:
         """
-        Detect export username from user_info.json
+        Detect export username (legacy wrapper).
         Returns True if successful, False otherwise
         """
-        if not self.users_dir.exists():
-            self.log_message(
-                "USERNAME_DETECTION_ERROR",
-                f"Users directory not found: {self.users_dir}",
-            )
-            return False
-
-        # Find the user info file (should be only one)
-        user_dirs = [d for d in self.users_dir.iterdir() if d.is_dir()]
-        if not user_dirs:
-            self.log_message(
-                "USERNAME_DETECTION_ERROR",
-                "No user directories found",
-            )
-            return False
-
-        user_info_path = user_dirs[0] / "user_info.json"
-        if not user_info_path.exists():
-            self.log_message(
-                "USERNAME_DETECTION_ERROR",
-                f"user_info.json not found in {user_dirs[0]}",
-            )
-            return False
-
-        try:
-            with open(user_info_path, "r", encoding="utf-8") as f:
-                user_data = json.load(f)
-
-            email = user_data.get("user", {}).get("email")
-            if not email:
-                self.log_message(
-                    "USERNAME_DETECTION_ERROR",
-                    "Email not found in user_info.json",
-                )
-                return False
-
-            self.export_email = email
-            # Strip @gmail.com to get username
-            self.export_username = email.replace("@gmail.com", "")
-
-            logger.info("Detected export user: %s", self.export_username)
+        result = self.detect_username()
+        if result.username:
+            self.export_username = result.username
+            logger.info("Detected export user: %s (via %s)", result.username, result.source)
             return True
 
-        except Exception as e:
-            self.log_message(
-                "USERNAME_DETECTION_ERROR",
-                "Failed to read user_info.json",
-                str(e),
-            )
-            return False
+        self.log_message(
+            "USERNAME_DETECTION_ERROR",
+            "All username detection methods failed",
+        )
+        return False
 
     def sanitize_name(self, name: str) -> str:
         """
@@ -875,12 +904,16 @@ class GoogleChatPreprocessor:
     def save_metadata(self, conversations: List[Dict]) -> None:
         """Save cleaned metadata to metadata.json"""
         try:
+            # Add export info with username detection source
+            detection_result = self.detect_username()
+
             # Add export info
             output = {
                 "export_info": {
                     "export_path": str(self.export_path),
                     "export_name": self.export_path.name,
                     "export_username": self.export_username,
+                    "username_source": detection_result.source,
                     "processed_date": datetime.now().isoformat(),
                     "total_conversations": self.stats["total_conversations"],
                     "total_messages_with_media": self.stats[

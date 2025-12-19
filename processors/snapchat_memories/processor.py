@@ -56,6 +56,7 @@ from common.utils import (
     get_media_type,
     update_file_timestamps,
 )
+from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
 
 # Set up logging
@@ -161,6 +162,14 @@ class SnapchatMemoriesProcessor(ProcessorBase):
     def get_priority() -> int:
         """Return priority (higher = run first)"""
         return 80  # High priority - specific structure
+
+    @staticmethod
+    def get_output_info() -> OutputInfo:
+        return OutputInfo(
+            platform="Snapchat",
+            service="memories",
+            username_prefix="snapchat",
+        )
 
     @staticmethod
     def supports_dedup() -> bool:

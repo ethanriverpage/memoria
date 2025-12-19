@@ -325,5 +325,168 @@ See [Immich Upload](Immich-Upload) for configuration options.
 - [Getting Started](Getting-Started) - Initial setup guide
 - [Usage](Usage) - Detailed usage options
 - [Immich Upload](Immich-Upload) - Immich upload configuration
-- [Discord Schema](Discord-Schema) - Technical export structure and format details
 
+---
+
+## Technical Reference: Export Schema
+
+This section describes the Discord data package schema relevant to media extraction.
+
+### Export Source
+
+Discord data is obtained via the "Request My Data" feature in User Settings > Privacy & Safety. The export is delivered as a ZIP file containing JSON files organized by category.
+
+**Note:** Discord exports only include messages sent by the requesting user. Received messages from other users are NOT included.
+
+### Full Export Structure
+
+```text
+discord-username-YYYYMMDD/
+├── README.txt                    # Export overview and folder descriptions
+├── Account/
+│   ├── avatar.png                # User's avatar image
+│   ├── user.json                 # Account information (large file)
+│   └── applications/             # Bot/application configurations
+├── Activities/                   # Discord activities data
+├── Activity/
+│   ├── reporting/
+│   │   └── events-YYYY-00000-of-00001.json  # Event logs
+│   └── tns/
+│       └── events-YYYY-00000-of-00001.json  # Trust & Safety events
+├── Ads/
+│   ├── quests_user_status.json
+│   └── traits.json               # Ad targeting traits
+├── Messages/
+│   ├── index.json                # Channel ID to name mapping
+│   └── c{channel_id}/            # One folder per channel
+│       ├── channel.json          # Channel metadata
+│       └── messages.json         # Array of message objects
+├── Servers/
+│   ├── index.json                # Server ID to name mapping
+│   └── {server_id}/
+│       ├── audit-log.json
+│       └── guild.json            # Server metadata
+└── Support_Tickets/              # Zendesk support tickets (if any)
+```
+
+### Schema: messages.json
+
+Each `messages.json` file contains an array of message objects sent by the exporting user.
+
+#### Message Object Fields
+
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `ID` | integer | Discord snowflake ID (unique message identifier) | `897870239797215243` |
+| `Timestamp` | string | UTC timestamp in `YYYY-MM-DD HH:MM:SS` format | `"2021-10-13 15:35:46"` |
+| `Contents` | string | Text content of the message | `"Check this out!"` |
+| `Attachments` | string | Space-separated CDN URLs for attachments | `"https://cdn.discordapp.com/..."` |
+
+#### Example Message Objects
+
+**Text-Only Message:**
+
+```json
+{
+  "ID": 897870239797215243,
+  "Timestamp": "2021-10-13 15:35:46",
+  "Contents": "my only 10/10 i've watched so far",
+  "Attachments": ""
+}
+```
+
+**Message with Attachment:**
+
+```json
+{
+  "ID": 1419422247004934226,
+  "Timestamp": "2025-09-21 20:37:15",
+  "Contents": "",
+  "Attachments": "https://cdn.discordapp.com/attachments/458102099301892108/1419422246845288670/File.jpg?ex=0&is=6931a2d3&hm=..."
+}
+```
+
+**Multiple Attachments:** Separated by a single space character.
+
+### Schema: channel.json
+
+Each channel folder contains a `channel.json` file describing the channel type and context.
+
+#### Channel Types
+
+| Type | Description | Example Context |
+|------|-------------|-----------------|
+| `DM` | Direct message (1:1) | Two recipient user IDs |
+| `GROUP_DM` | Group direct message | Multiple recipient user IDs |
+| `GUILD_TEXT` | Server text channel | Server (guild) ID and name |
+| `PUBLIC_THREAD` | Public thread in a channel | Thread name and parent server |
+| `PRIVATE_THREAD` | Private thread in a channel | Thread name and parent server |
+
+#### DM Channel Example
+
+```json
+{
+  "id": "502291754930929684",
+  "type": "DM",
+  "recipients": ["247424274304991233", "192775384276664320"]
+}
+```
+
+#### Guild (Server) Text Channel Example
+
+```json
+{
+  "id": "184324186284621824",
+  "type": "GUILD_TEXT",
+  "name": "offtopic",
+  "guild": {
+    "id": "184315303323238400",
+    "name": "homelab."
+  }
+}
+```
+
+### Schema: index.json (Messages)
+
+Maps channel IDs to human-readable names:
+
+```json
+{
+  "386213310258741249": "Unknown channel in Clone Hero",
+  "502291754930929684": "Direct Message with username#0",
+  "184324186284621824": "offtopic in homelab.",
+  "623392507828371479": "general in Tdarr"
+}
+```
+
+### Attachment URL Structure
+
+Discord attachment URLs follow this pattern:
+
+```text
+https://cdn.discordapp.com/attachments/{channel_id}/{attachment_id}/{filename}?ex={expiry}&is={issued}&hm={hash}
+```
+
+The query parameters (`ex`, `is`, `hm`) are for authentication and may expire.
+
+### Discord Snowflake IDs
+
+Discord uses snowflake IDs which encode creation timestamps:
+
+```python
+def snowflake_to_timestamp(snowflake: int) -> datetime:
+    """Convert Discord snowflake ID to datetime."""
+    DISCORD_EPOCH = 1420070400000  # 2015-01-01 00:00:00 UTC in ms
+    timestamp_ms = (snowflake >> 22) + DISCORD_EPOCH
+    return datetime.utcfromtimestamp(timestamp_ms / 1000)
+```
+
+### Platform-Specific Notes
+
+- **Sent Messages Only**: Export includes ONLY messages sent by the requesting user
+- **No Reactions Data**: Message reactions are not included
+- **No Edit History**: Only the final version of edited messages
+- **Attachment Expiry**: CDN URLs may expire; download promptly
+- **Multiple Attachments**: Separated by single space in the `Attachments` field
+- **Unknown Channels**: Some channels show as "Unknown channel" if server was left
+- **Spoiler Media**: Filename prefixed with `SPOILER_` for spoilered attachments

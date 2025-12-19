@@ -67,20 +67,182 @@ python3 memoria.py /path/to/export --skip-upload
 
 ### Album naming
 
+Albums follow a `Platform/username[/service]` structure:
+
 - Discord: `Discord/{USERNAME}`
-- Google Chat: `Google Chat/{USERNAME}`
-- Google Photos: `Google Photos/{USERNAME}`
-- Google Voice: `Google Voice/{USERNAME}`
+- Google Chat: `Google/{USERNAME}/chat`
+- Google Photos: `Google/{USERNAME}/photos`
+- Google Voice: `Google/{USERNAME}/voice`
 - iMessage: `iMessage/{DEVICE}` (e.g., `iMessage/mac`, `iMessage/iphone14`)
+- iMessage (iMazing): `iMessage/{DEVICE}`
 - Instagram Messages: `Instagram/{USERNAME}/messages`
-- Instagram Public/Old Media: one per subfolder → `Instagram/{USERNAME}/{posts|archived_posts|profile|stories|reels|other}`
+- Instagram Public Media: `Instagram/{USERNAME}/{service}` where service is one of: `posts`, `archived_posts`, `profile`, `stories`, `reels`, `other`
+- Instaloader: `Instagram/{USERNAME}/posts`
 - Snapchat Messages: `Snapchat/{USERNAME}/messages`
 - Snapchat Memories: `Snapchat/{USERNAME}/memories`
 
-Usernames are parsed from the export directory name formats handled by the processors.
+Usernames are extracted from the export directory name using the `platform-username-YYYYMMDD` convention.
+
+---
+
+## Upload-Only Mode
+
+Upload previously processed exports to Immich without re-processing.
+
+### Usage
+
+```bash
+./memoria.py <original_export_dir> --upload-only <processed_output_dir>
+```
+
+#### Arguments
+
+- `<original_export_dir>`: Original unprocessed export (for processor detection and username extraction)
+- `--upload-only <processed_output_dir>`: Path to processed output directory
+
+#### Requirements
+
+- Valid Immich configuration (URL and API key)
+- Original export directory must exist
+- Processed output directory must exist
+- Cannot be used with `--originals` or `--skip-upload`
+
+### How It Works
+
+1. Detects which processor(s) match the original export structure
+2. Maps processors to their expected output subdirectories
+3. Extracts username from original export directory name
+4. Uploads each output directory with correct album naming
+
+### Examples
+
+```bash
+# Original processing
+./memoria.py instagram-johndoe-20251027 -o /mnt/media/processed/output1
+
+# Later, upload-only mode
+./memoria.py instagram-johndoe-20251027 --upload-only /mnt/media/processed/output1
+```
+
+### Troubleshooting Upload-Only Mode
+
+**"No processors matched original export directory"**
+
+- Ensure directory is the actual original export (not processed output)
+- Verify export structure matches a supported format
+
+**"Expected output directory does not exist"**
+
+- Processor may have failed during original processing
+- Output structure may have been manually modified
+- Wrong processed output directory specified
+
+**"Upload-only mode requires valid Immich configuration"**
+
+- Set `IMMICH_INSTANCE_URL` and `IMMICH_API_KEY` in environment or `.env`
+- Or provide `--immich-url` and `--immich-key` arguments
+
+---
+
+## Upload Queuing in Parallel Mode
+
+When using `--parallel-exports` with Immich uploads enabled, upload queuing automatically ensures:
+
+- **Processing happens in parallel** - Multiple exports processed simultaneously
+- **Uploads happen sequentially** - One export uploads at a time
+- **Concurrent operation** - Uploads begin as soon as first export completes
+
+This maximizes efficiency while preventing network saturation and maintaining upload reliability.
+
+### Architecture
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Export 1   │     │  Export 2   │     │  Export 3   │
+│  Processing │────▶│  Processing │────▶│  Processing │
+└─────────────┘     └─────────────┘     └─────────────┘
+      │                    │                    │
+      ▼                    ▼                    ▼
+┌───────────────────────────────────────────────────┐
+│           Upload Queue (shared)                   │
+└───────────────────────────────────────────────────┘
+                      │
+                      ▼
+            ┌──────────────────┐
+            │  Upload Worker   │
+            │  (one at a time) │
+            └──────────────────┘
+```
+
+### How to Use
+
+Upload queuing is **automatically enabled** with `--parallel-exports`:
+
+```bash
+./memoria.py --originals /path/to/exports \
+  -o /output \
+  --parallel-exports 4 \
+  --immich-url http://localhost:2283 \
+  --immich-key YOUR_API_KEY
+```
+
+### Benefits
+
+1. **Prevents Network Saturation** - Consistent bandwidth usage
+2. **Maintains Upload Reliability** - Fewer timeouts and connection errors
+3. **Maximizes Efficiency** - Uploads overlap with processing
+4. **Better Resource Management** - Minimal file handles
+
+### Performance Impact
+
+**Example:** 4 exports, each 10 min processing + 5 min upload
+
+| Approach | Processing | Uploads | Total | Speedup |
+|----------|-----------|---------|-------|---------|
+| Sequential | 40 min | 20 min | 60 min | 1.0x |
+| Parallel + queued | 10 min | 20 min | ~25 min | 2.4x |
+
+### Adjusting Upload Concurrency
+
+Control files uploaded simultaneously within each export:
+
+```bash
+./memoria.py --originals /exports -o /output \
+  --parallel-exports 4 \
+  --immich-concurrency 8  # More concurrent uploads per export
+```
+
+**Recommendation**: Keep between 4-8 for best balance.
+
+### Balancing Processing and Uploads
+
+If processing is faster than uploads:
+
+```bash
+# More parallel exports to keep queue fed
+./memoria.py --originals /exports -o /output \
+  --parallel-exports 6 --workers 2
+```
+
+If uploads are faster than processing:
+
+```bash
+# Fewer parallel exports with more workers each
+./memoria.py --originals /exports -o /output \
+  --parallel-exports 2 --workers 7
+```
+
+### Disabling Upload Queuing
+
+Use sequential mode (without `--parallel-exports`), or skip uploads entirely:
+
+```bash
+./memoria.py --originals /exports -o /output --skip-upload
+```
+
+---
 
 ## Related Documentation
 
 - [Usage](Usage) - Command-line options
-- [Upload Only Mode](Upload-Only-Mode) - Upload previously processed exports
-- [Upload Queuing](Upload-Queuing) - Upload queuing for parallel processing
+- [Parallel Processing](Parallel-Processing) - Parallel export processing

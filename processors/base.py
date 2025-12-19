@@ -5,6 +5,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
+from common.output.paths import OutputInfo
+
 
 class ProcessorBase(ABC):
     """Base class for all media processors."""
@@ -25,6 +27,23 @@ class ProcessorBase(ABC):
     @abstractmethod
     def get_priority() -> int:
         """Return execution priority (higher = run first, range 1-100)."""
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def get_output_info() -> OutputInfo:
+        """Return output configuration for Platform/User/Service structure.
+
+        Returns:
+            OutputInfo with platform, service, and username_prefix.
+
+        Example:
+            return OutputInfo(
+                platform="Google",
+                service="photos",
+                username_prefix="google",
+            )
+        """
         pass
 
     @staticmethod

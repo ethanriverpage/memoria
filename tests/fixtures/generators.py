@@ -435,10 +435,29 @@ def create_instagram_messages_export(
     """
     if new_format:
         inbox_dir = base_path / "your_instagram_activity" / "messages" / "inbox"
+        personal_info_dir = base_path / "personal_information" / "personal_information"
     else:
         inbox_dir = base_path / "messages" / "inbox"
+        personal_info_dir = base_path / "personal_information"
 
     inbox_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create personal_information.html for username detection
+    personal_info_dir.mkdir(parents=True, exist_ok=True)
+    personal_info_html = f"""<!DOCTYPE html>
+<html>
+<head><title>Personal information</title></head>
+<body>
+<div class="pam _3-95 _2ph- _a6-g uiBoxWhite noborder">
+<table style="table-layout: fixed;">
+<tr><td colspan="2" class="_2pin _a6_q">Email<div><div>{username}@example.com</div></div></td></tr>
+<tr><td colspan="2" class="_2pin _a6_q">Username<div><div>{username}</div></div></td></tr>
+<tr><td colspan="2" class="_2pin _a6_q">Name<div><div>Test User</div></div></td></tr>
+</table>
+</div>
+</body>
+</html>"""
+    (personal_info_dir / "personal_information.html").write_text(personal_info_html)
 
     if conversations is None:
         conversations = {
@@ -542,6 +561,28 @@ def create_instagram_public_export(
     if include_archived:
         archived_dir.mkdir(parents=True, exist_ok=True)
 
+    # Create personal_information.html for username detection (new format)
+    personal_info_dir = base_path / "personal_information" / "personal_information"
+    personal_info_dir.mkdir(parents=True, exist_ok=True)
+    personal_info_html = f"""<!DOCTYPE html>
+<html>
+<head><title>Personal information</title></head>
+<body>
+<div class="pam _3-95 _2ph- _a6-g uiBoxWhite noborder">
+<table style="table-layout: fixed;">
+<tr><td colspan="2" class="_2pin _a6_q">Email<div><div>{username}@example.com</div></div></td></tr>
+<tr><td colspan="2" class="_2pin _a6_q">Username<div><div>{username}</div></div></td></tr>
+<tr><td colspan="2" class="_2pin _a6_q">Name<div><div>Test User</div></div></td></tr>
+</table>
+</div>
+</body>
+</html>"""
+    (personal_info_dir / "personal_information.html").write_text(personal_info_html)
+
+    # Also create the HTML metadata dir for the processor
+    html_dir = base_path / "your_instagram_activity" / "media"
+    html_dir.mkdir(parents=True, exist_ok=True)
+
     for post in posts:
         filename = post["filename"]
         is_archived = post.get("archived", False)
@@ -634,6 +675,21 @@ def create_instaloader_export(
             caption_file = f"{timestamp}_UTC{suffix}.txt"
             (base_path / caption_file).write_text(caption)
 
+        # Create JSON metadata with owner.username for username detection
+        json_file = f"{timestamp}_UTC{suffix}.json"
+        json_metadata = {
+            "node": {
+                "owner": {
+                    "username": username,
+                    "id": "607823542",
+                    "full_name": "Test User",
+                    "is_private": False,
+                },
+                "taken_at_timestamp": 1609502400,  # 2021-01-01
+            }
+        }
+        (base_path / json_file).write_text(json.dumps(json_metadata, indent=2))
+
     return base_path
 
 
@@ -694,6 +750,18 @@ def create_discord_export(
 
     messages_dir = base_path / "Messages"
     messages_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create Account/user.json for username detection
+    account_dir = base_path / "Account"
+    account_dir.mkdir(parents=True, exist_ok=True)
+    user_data = {
+        "id": "247424274304991233",
+        "username": username,
+        "discriminator": 0,
+        "global_name": username,
+        "email": f"{username}@example.com",
+    }
+    (account_dir / "user.json").write_text(json.dumps(user_data, indent=2))
 
     # Create index.json
     index = {}

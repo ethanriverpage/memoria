@@ -26,7 +26,8 @@ import requests
 
 from common.files.filter import BannedFilesFilter
 from common.dedup.hashing import compute_content_hash
-from common.utils import default_worker_count, extract_username_from_export_dir
+from common.detection import resolve_username, detect_from_dirname, DetectionResult
+from common.utils import default_worker_count
 from common.failure_tracker import FailureTracker
 from common.output.logging import get_processor_logger
 from common.processing import print_preprocessing_stats
@@ -272,6 +273,50 @@ class DiscordPreprocessor:
             return False
 
         return True
+
+    def detect_username(self) -> DetectionResult:
+        """Detect export username using available sources.
+
+        Priority:
+        1. Account/user.json - contains Discord username
+        2. Directory name pattern (discord-username-YYYYMMDD)
+
+        Returns:
+            DetectionResult with username and source
+        """
+
+        def detect_from_user_json(path: Path) -> Optional[str]:
+            """Extract username from Account/user.json."""
+            user_file = path / "Account" / "user.json"
+            if not user_file.exists():
+                return None
+            try:
+                with open(user_file, "r", encoding="utf-8") as f:
+                    # Read first part of potentially large JSON
+                    content = f.read(4096)
+                    # Parse just enough to get username
+                    data = json.loads(content.split('"settings"')[0] + "}")
+                    return data.get("username")
+            except (json.JSONDecodeError, KeyError, IndexError):
+                # Fallback: try full parse
+                try:
+                    with open(user_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        return data.get("username")
+                except Exception:
+                    return None
+
+        def detect_from_dirname_discord(path: Path) -> Optional[str]:
+            """Extract username from directory name."""
+            return detect_from_dirname(path, "discord")
+
+        return resolve_username(
+            self.export_path,
+            [
+                ("user.json", detect_from_user_json),
+                ("dirname", detect_from_dirname_discord),
+            ],
+        )
 
     def load_channel_index(self) -> Dict[str, str]:
         """Load Messages/index.json mapping channel IDs to names.
@@ -686,12 +731,15 @@ class DiscordPreprocessor:
         Returns:
             Tuple of (metadata dict, list of download task tuples)
         """
+        # Detect username from export
+        detection_result = self.detect_username()
+        export_username = detection_result.username or "unknown"
+
         metadata = {
             "export_info": {
                 "export_path": str(self.export_path),
-                "export_username": extract_username_from_export_dir(
-                    str(self.export_path), "discord"
-                ),
+                "export_username": export_username,
+                "username_source": detection_result.source,
                 "processed_date": datetime.now().isoformat(),
             },
             "conversations": {},

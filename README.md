@@ -322,17 +322,14 @@ Before processing, export your data from the platforms:
 </details>
 
 <details>
-<summary><b>Advanced Topics</b></summary>
+<summary><b>Features</b></summary>
 
 <br>
 
-- **[Immich Upload](../../wiki/Immich-Upload)** - Immich upload configuration and ignore patterns
+- **[Immich Upload](../../wiki/Immich-Upload)** - Immich upload configuration, upload-only mode, and upload queuing
 - **[Parallel Processing](../../wiki/Parallel-Processing)** - Process multiple exports in parallel
-- **[Upload Only Mode](../../wiki/Upload-Only-Mode)** - Upload previously processed exports
-- **[Upload Queuing](../../wiki/Upload-Queuing)** - Parallel processing upload queuing
+- **[Deduplication](../../wiki/Deduplication)** - Within-processor and cross-processor deduplication
 - **[Logging](../../wiki/Logging)** - Logging configuration and verbose mode
-- **[Deduplication](../../wiki/Deduplication)** - Within-processor deduplication
-- **[Global Deduplication](../../wiki/Global-Deduplication)** - Cross-processor deduplication
 - **[Standalone Tools](../../wiki/Standalone-Tools)** - Standalone utility scripts for analysis and comparison
 
 </details>

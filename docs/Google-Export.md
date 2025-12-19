@@ -34,7 +34,7 @@ Google provides data export through Google Takeout. Memoria can process:
 >
 > Album information is preserved in EXIF metadata (`ImageDescription` and `IPTC:Caption-Abstract` fields) and used to create Immich albums. No information is lost, just stored differently.
 >
-> See [Design Decisions](Design-Decisions.md#flat-directory-structure) for full rationale.
+> See [Design Decisions](Design-Decisions#flat-directory-structure) for full rationale.
 
 ---
 
@@ -105,7 +105,7 @@ If you need photos organized by albums in Immich or another photo management sys
 After processing, each file has metadata embedded directly into it. For images, the `ImageDescription` and `IPTC:Caption-Abstract` fields contain:
 
 ```text
-Source: Google Photos/john.doe
+Source: Google/john.doe
 ```
 
 For videos, the same information is embedded in the `Comment` and `Description` fields.
@@ -305,9 +305,9 @@ Process them all:
 
 When uploading to Immich, Google content is organized as:
 
-- **Google Photos**: `Google Photos/{username}`
-- **Google Chat**: `Google Chat/{username}`
-- **Google Voice**: `Google Voice/{username}`
+- **Google Photos**: `Google/{username}/photos`
+- **Google Chat**: `Google/{username}/chat`
+- **Google Voice**: `Google/{username}/voice`
 
 See [Immich Upload](Immich-Upload) for configuration options.
 
@@ -360,3 +360,112 @@ This JSON file is parsed by Memoria to extract timestamps, GPS coordinates, and 
 - [Usage](Usage) - Detailed usage options
 - [Deduplication](Deduplication) - Google Photos deduplication details
 - [Immich Upload](Immich-Upload) - Immich upload configuration
+
+---
+
+## Technical Reference: Google Chat Schema
+
+This section describes the message data schema for Google Chat exports.
+
+### Messages Location
+
+```text
+google-username-YYYYMMDD/
+└── Google Chat/
+    ├── Groups/
+    │   ├── DM XXXXXXXXXXXXX/
+    │   │   ├── messages.json
+    │   │   ├── group_info.json
+    │   │   └── File-2016-09-06.png
+    │   └── Space XXXXXXXX/
+    │       ├── messages.json
+    │       ├── group_info.json
+    │       └── ...
+    └── Users/
+        └── User XXXXXXXXXXXXX/
+            └── user_info.json
+```
+
+**Note:** Unlike some Google exports, Google Chat data is typically NOT nested inside a `Takeout/` directory.
+
+### Schema: messages.json
+
+The `messages.json` file contains a `messages` array:
+
+```json
+{
+  "messages": [
+    { ...message object... },
+    { ...message object... }
+  ]
+}
+```
+
+### Message Object Fields
+
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `creator` | object | Information about the sender | See below |
+| `created_date` | string | Timestamp when message was sent | `"Thursday, November 3, 2016 at 11:59:50 AM UTC"` |
+| `text` | string | Text content of the message | `"Check this out"` |
+| `attached_files` | array | List of attached file references | See below |
+| `topic_id` | string | Unique identifier for the thread | `"LqFDi4ScZAQ"` |
+| `message_id` | string | Unique identifier for the message | `"k6oxHQAAAAE/..."` |
+
+### Creator Object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Display name of the sender |
+| `email` | string | Email address of the sender |
+| `user_type` | string | Type of user (`"Human"`, bot types) |
+
+### Attached Files Schema
+
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `original_name` | string | Original filename | `"2016-11-22.png"` |
+| `export_name` | string | Filename in export | `"File-2016-11-22.png"` |
+
+### File Naming Patterns
+
+1. **Date-based**: `File-2016-09-06.png`, `File-2017-01-05(1).png`
+2. **UUID-based**: `File-03b06911-def0-4c33-ad50-03f90084a158.mov`
+3. **Account ID-based**: `File-284346614161283602_account_id=3.jpg`
+
+### group_info.json
+
+Contains conversation metadata:
+
+**For Spaces (Group Chats):**
+
+```json
+{
+  "name": "Group Chat",
+  "members": [
+    {"name": "User 1", "email": "user1@example.com", "user_type": "Human"}
+  ]
+}
+```
+
+**For Direct Messages (DMs):**
+
+```json
+{
+  "members": [
+    {"name": "User 1", "email": "user1@example.com", "user_type": "Human"},
+    {"name": "User 2", "email": "user2@example.com", "user_type": "Human"}
+  ]
+}
+```
+
+### Timestamp Format
+
+- Format: `"DayOfWeek, Month DD, YYYY at HH:MM:SS AM/PM UTC"`
+- Example: `"Thursday, November 3, 2016 at 11:59:50 AM UTC"`
+
+### Platform-Specific Notes
+
+- **Spaces vs DMs**: Groups labeled as "Space" or "DM" in folder names
+- **Bot Messages**: `user_type` field distinguishes human vs bot senders
+- **Same-Day Files**: Filenames include counters `(1)`, `(2)` for multiple files on same day

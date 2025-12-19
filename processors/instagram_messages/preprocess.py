@@ -21,6 +21,7 @@ from threading import Lock
 
 from common.files.filter import BannedFilesFilter
 from common.dedup.hashing import compute_content_hash
+from common.detection import resolve_username, detect_from_dirname, DetectionResult
 from common.utils import default_worker_count
 from common.output.logging import get_processor_logger
 from common.processing import print_preprocessing_stats
@@ -175,6 +176,72 @@ class InstagramMessagesPreprocessor:
             return False
 
         return True
+
+    def detect_username(self) -> DetectionResult:
+        """Detect export username using available sources.
+
+        Priority:
+        1. personal_information.html - contains Instagram username
+        2. Directory name pattern (instagram-username-YYYYMMDD)
+
+        Returns:
+            DetectionResult with username and source
+        """
+        import re
+
+        def detect_from_personal_info(path: Path) -> Optional[str]:
+            """Extract username from personal_information.html."""
+            # Try new format (2025+): personal_information/personal_information/
+            new_format_path = (
+                path
+                / "personal_information"
+                / "personal_information"
+                / "personal_information.html"
+            )
+            # Legacy format (2022): personal_information/
+            legacy_format_path = path / "personal_information" / "personal_information.html"
+
+            html_path = None
+            if new_format_path.exists():
+                html_path = new_format_path
+            elif legacy_format_path.exists():
+                html_path = legacy_format_path
+
+            if not html_path:
+                return None
+
+            try:
+                with open(html_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+
+                # Parse HTML to find Username field
+                # Pattern: <td...>Username<div><div>VALUE</div></div></td>
+                soup = BeautifulSoup(content, "html.parser")
+
+                # Find all td elements containing "Username"
+                for td in soup.find_all("td"):
+                    text = td.get_text()
+                    if text.startswith("Username"):
+                        # Extract the username value after "Username"
+                        username = text[len("Username") :].strip()
+                        if username:
+                            return username
+            except Exception:
+                return None
+
+            return None
+
+        def detect_from_dirname_instagram(path: Path) -> Optional[str]:
+            """Extract username from directory name."""
+            return detect_from_dirname(path, "instagram")
+
+        return resolve_username(
+            self.export_path,
+            [
+                ("personal_information.html", detect_from_personal_info),
+                ("dirname", detect_from_dirname_instagram),
+            ],
+        )
 
     def _compute_file_hash(self, file_path: Path) -> str:
         """Compute xxHash64 of file for deduplication.
@@ -706,11 +773,17 @@ class InstagramMessagesPreprocessor:
     def save_metadata(self, conversations: List[Dict]) -> None:
         """Save cleaned metadata to metadata.json"""
         try:
+            # Detect username from export
+            detection_result = self.detect_username()
+            export_username = detection_result.username or "unknown"
+
             # Add export info
             output = {
                 "export_info": {
                     "export_path": str(self.export_path),
                     "export_name": self.export_path.name,
+                    "export_username": export_username,
+                    "username_source": detection_result.source,
                     "processed_date": datetime.now().isoformat(),
                     "total_conversations": self.stats["total_conversations"],
                     "total_messages_with_media": self.stats[

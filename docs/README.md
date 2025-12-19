@@ -10,20 +10,22 @@ This directory contains all documentation for the Memoria project.
 - `Getting-Started.md` - Installation and setup instructions
 - `Usage.md` - Command-line reference and basic usage
 
-### Platform-Specific Guides
+### Platform Guides
 
+Each platform guide includes export instructions, processing details, and a technical reference appendix with schema information.
+
+- `Discord-Export.md` - Discord data export processing
 - `Google-Export.md` - Google Photos, Chat, and Voice export processing
+- `iMessage-Export.md` - Mac and iPhone message exports
 - `Instagram-Export.md` - Instagram messages, posts, and legacy format handling
 - `Snapchat-Export.md` - Snapchat Memories and message processing
 
-### Advanced Features
+### Features
 
-- `Immich-Upload.md` - Immich server upload configuration and options
+- `Immich-Upload.md` - Immich server upload configuration, upload-only mode, and upload queuing
 - `Parallel-Processing.md` - Process multiple exports simultaneously
-- `Upload-Only-Mode.md` - Upload previously processed exports without reprocessing
-- `Upload-Queuing.md` - Parallel processing with upload queue management
+- `Deduplication.md` - Within-processor and cross-processor duplicate detection
 - `Logging.md` - Logging levels and configuration options
-- `Deduplication.md` - Google Photos duplicate detection and handling
 
 ### Reference
 
@@ -31,10 +33,11 @@ This directory contains all documentation for the Memoria project.
 - `Common-Gotchas.md` - Important behaviors and surprises to know
 - `Design-Decisions.md` - Rationale for architectural choices
 
-### Development & Tools
+### Development
 
 - `Standalone-Tools.md` - Standalone utility scripts for analysis and maintenance
 - `Adding-Processors.md` - Guide to creating custom platform processors
+- `vCard-Schema.md` - Contact file format for iMessage handle matching
 
 ### Navigation
 

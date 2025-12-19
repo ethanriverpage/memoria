@@ -47,6 +47,7 @@ from common.utils import (
     sanitize_filename,
     update_file_timestamps,
 )
+from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
 from processors.instagram_messages.preprocess import InstagramMessagesPreprocessor
 
@@ -121,6 +122,14 @@ class InstagramMessagesProcessor(ProcessorBase):
     def get_priority() -> int:
         """Return priority (higher = run first)"""
         return 70  # High priority - specific path
+
+    @staticmethod
+    def get_output_info() -> OutputInfo:
+        return OutputInfo(
+            platform="Instagram",
+            service="messages",
+            username_prefix="instagram",
+        )
 
     @staticmethod
     def supports_dedup() -> bool:

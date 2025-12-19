@@ -44,13 +44,13 @@ New to Memoria? Start here:
 
 ### Platform-Specific Guides
 
-Detailed export setup and structure requirements for each platform:
+Detailed export setup, structure requirements, and technical schema reference for each platform:
 
-- **[Discord Schema](Discord-Schema)** - Discord data export structure and format
-- **[Google Export Guide](Google-Export)** - Google Photos, Chat, and Voice
-- **[iMessage Export Guide](iMessage-Export)** - Mac and iPhone message exports
-- **[Instagram Export Guide](Instagram-Export)** - Messages, posts, and legacy formats
-- **[Snapchat Export Guide](Snapchat-Export)** - Memories and messages
+- **[Discord Export](Discord-Export)** - Discord data export processing
+- **[Google Export](Google-Export)** - Google Photos, Chat, and Voice
+- **[iMessage Export](iMessage-Export)** - Mac and iPhone message exports
+- **[Instagram Export](Instagram-Export)** - Messages, posts, and legacy formats
+- **[Snapchat Export](Snapchat-Export)** - Memories and messages
 
 ## Quick Start
 
@@ -78,20 +78,18 @@ For all command-line options, see the [Usage Guide](Usage).
 
 ### Platform-Specific Guides
 
-- **[Discord Schema](Discord-Schema)** - Discord data export structure and format
-- **[Google Export Guide](Google-Export)** - Google Photos, Chat, and Voice export setup
-- **[iMessage Export Guide](iMessage-Export)** - Mac and iPhone message exports
-- **[Instagram Export Guide](Instagram-Export)** - Instagram Messages, posts, and legacy formats
-- **[Snapchat Export Guide](Snapchat-Export)** - Snapchat Memories and Messages setup
+- **[Discord Export](Discord-Export)** - Discord data export processing
+- **[Google Export](Google-Export)** - Google Photos, Chat, and Voice export setup
+- **[iMessage Export](iMessage-Export)** - Mac and iPhone message exports
+- **[Instagram Export](Instagram-Export)** - Instagram Messages, posts, and legacy formats
+- **[Snapchat Export](Snapchat-Export)** - Snapchat Memories and Messages setup
 
-### Advanced Topics
+### Features
 
-- **[Immich Upload](Immich-Upload)** - Immich upload configuration and ignore patterns
+- **[Immich Upload](Immich-Upload)** - Immich upload configuration, upload-only mode, and upload queuing
 - **[Parallel Processing](Parallel-Processing)** - Process multiple exports in parallel
-- **[Upload Only Mode](Upload-Only-Mode)** - Upload previously processed exports
-- **[Upload Queuing](Upload-Queuing)** - Parallel processing upload queuing
+- **[Deduplication](Deduplication)** - Within-processor and cross-processor deduplication
 - **[Logging](Logging)** - Logging configuration and verbose mode
-- **[Deduplication](Deduplication)** - Google Photos deduplication system
 - **[Standalone Tools](Standalone-Tools)** - Standalone utility scripts for analysis and comparison
 
 ### Reference
@@ -108,7 +106,7 @@ For all command-line options, see the [Usage Guide](Usage).
 
 1. **First Time?** Start with the [Getting Started](Getting-Started) guide for setup instructions
 2. **Important Behaviors**: Read [Common Gotchas](Common-Gotchas) to avoid surprises
-3. **Export Setup**: See platform-specific guides ([Discord](Discord-Schema), [Google](Google-Export), [iMessage](iMessage-Export), [Instagram](Instagram-Export), [Snapchat](Snapchat-Export)) for export preparation
+3. **Export Setup**: See platform-specific guides ([Discord](Discord-Export), [Google](Google-Export), [iMessage](iMessage-Export), [Instagram](Instagram-Export), [Snapchat](Snapchat-Export)) for export preparation
 4. **Questions?** Check the [FAQ](FAQ) for common questions and answers
 5. **Performance**: Use `--workers` to control parallelism (see [Usage Guide](Usage))
 6. **Multiple Exports**: Use `--originals` to batch process (see [Parallel Processing](Parallel-Processing))

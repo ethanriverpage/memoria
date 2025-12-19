@@ -38,7 +38,7 @@ By design, album folders are flattened into a single directory per username. Alb
 
 This prevents massive duplication - Google Photos exports often contain the same photo in multiple albums, resulting in 30-60% duplicate files.
 
-See: [Common Gotchas](Common-Gotchas.md#album-folders-are-not-preserved)
+See: [Common Gotchas](Common-Gotchas#album-folders-are-not-preserved)
 
 ### Why are some of my photos missing?
 
@@ -47,7 +47,7 @@ They're not missing - they're deduplicated. When the same photo appears in multi
 - "Media files copied" shows unique files processed
 - "Deduplicated files (not copied)" shows duplicate instances skipped
 
-See: [Deduplication](Deduplication.md)
+See: [Deduplication](Deduplication)
 
 ### Can I disable deduplication?
 
@@ -108,7 +108,7 @@ Memoria automatically detects and handles both formats.
 
 Export your contacts as a vCard file (`contacts.vcf`) and place it alongside your message exports. Memoria will parse the vCard and map phone numbers/emails to display names.
 
-See: [iMessage Export Guide](iMessage-Export.md#contacts-file)
+See: [iMessage Export](iMessage-Export#contacts-file)
 
 ### Can I process multiple iMessage exports together?
 
@@ -204,7 +204,7 @@ Not yet. Snapchat provides a large HTML file with links to download each memory 
 
 Automation is planned but not yet implemented.
 
-See: [Snapchat Export Guide](Snapchat-Export.md)
+See: [Snapchat Export](Snapchat-Export)
 
 ### Why are overlays embedded instead of kept separate?
 
@@ -244,7 +244,8 @@ This is relatively rare - most messages contain only 1 video or don't have overl
 
 No. Memoria automatically creates albums during upload using the naming scheme:
 
-- `Google Photos/{username}`
+- `Google/{username}/photos`
+- `Google/{username}/chat`
 - `iMessage/{device}`
 - `Instagram/{username}/messages`
 - `Snapchat/{username}/memories`
@@ -266,7 +267,7 @@ Yes. Immich has its own deduplication system based on content hashing. If you up
 
 This is intentional. When processing multiple exports in parallel (`--parallel-exports`), uploads happen sequentially to prevent network saturation and reduce server load. Processing continues in parallel, but uploads queue up one export at a time.
 
-See: [Upload Queuing](Upload-Queuing.md)
+See: [Immich Upload](Immich-Upload)
 
 ## Timestamps and Dates
 
@@ -304,7 +305,7 @@ No. Memoria preserves original timestamps exactly as they appear in the export. 
 
 The default is `CPU cores - 1`, which works well for most cases. If you have fast storage (NVMe SSD) and large exports, you can experiment with higher values, but avoid over-subscribing your CPU.
 
-See: [Parallel Processing](Parallel-Processing.md)
+See: [Parallel Processing](Parallel-Processing)
 
 ### Can I process multiple exports faster?
 
@@ -395,7 +396,7 @@ This is common when processing very large exports with high parallelism.
 
 ## Related Documentation
 
-- [Common Gotchas](Common-Gotchas.md) - Important behaviors to know
-- [Getting Started](Getting-Started.md) - Installation and setup
-- [Usage](Usage.md) - Complete command-line reference
-- Platform guides: [Google](Google-Export.md), [iMessage](iMessage-Export.md), [Discord](Discord-Export.md), [Instagram](Instagram-Export.md), [Snapchat](Snapchat-Export.md)
+- [Common Gotchas](Common-Gotchas) - Important behaviors to know
+- [Getting Started](Getting-Started) - Installation and setup
+- [Usage](Usage) - Complete command-line reference
+- Platform guides: [Google](Google-Export), [iMessage](iMessage-Export), [Discord](Discord-Export), [Instagram](Instagram-Export), [Snapchat](Snapchat-Export)

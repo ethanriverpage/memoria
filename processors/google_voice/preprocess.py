@@ -22,6 +22,7 @@ from html.parser import HTMLParser
 from threading import Lock
 
 from common.processing import print_preprocessing_stats
+from common.detection import resolve_username, detect_from_dirname, DetectionResult
 from common.utils import ALL_MEDIA_EXTENSIONS, default_worker_count
 from common.files.filter import BannedFilesFilter
 from common.failure_tracker import FailureTracker
@@ -260,32 +261,93 @@ class GoogleVoicePreprocessor:
 
         return True
 
+    def detect_username(self) -> DetectionResult:
+        """Detect export username using available sources.
+
+        Priority:
+        1. Profile/Profile.json - Google account profile
+        2. Google Chat user_info.json - if Chat is in same export
+        3. Directory name pattern (google-username-YYYYMMDD)
+
+        Returns:
+            DetectionResult with username and source
+        """
+
+        def detect_from_profile_json(path: Path) -> Optional[str]:
+            """Extract username from Profile/Profile.json."""
+            profile_path = path / "Profile" / "Profile.json"
+            if not profile_path.exists():
+                return None
+            try:
+                import json
+
+                with open(profile_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # Get first email and strip @gmail.com
+                emails = data.get("emails", [])
+                if emails:
+                    email = emails[0].get("value", "")
+                    if "@gmail.com" in email:
+                        return email.replace("@gmail.com", "")
+                    # For non-gmail, use the part before @
+                    if "@" in email:
+                        return email.split("@")[0]
+                return None
+            except Exception:
+                return None
+
+        def detect_from_google_chat_user_info(path: Path) -> Optional[str]:
+            """Extract username from Google Chat user_info.json if present."""
+            users_dir = path / "Google Chat" / "Users"
+            if not users_dir.exists():
+                return None
+            try:
+                import json
+
+                user_dirs = [d for d in users_dir.iterdir() if d.is_dir()]
+                if not user_dirs:
+                    return None
+                user_info_path = user_dirs[0] / "user_info.json"
+                if not user_info_path.exists():
+                    return None
+                with open(user_info_path, "r", encoding="utf-8") as f:
+                    user_data = json.load(f)
+                email = user_data.get("user", {}).get("email")
+                if email:
+                    return email.replace("@gmail.com", "")
+                return None
+            except Exception:
+                return None
+
+        def detect_from_dirname_google(path: Path) -> Optional[str]:
+            """Extract username from directory name."""
+            return detect_from_dirname(path, "google")
+
+        return resolve_username(
+            self.export_path,
+            [
+                ("Profile.json", detect_from_profile_json),
+                ("Google Chat user_info.json", detect_from_google_chat_user_info),
+                ("dirname", detect_from_dirname_google),
+            ],
+        )
+
     def detect_export_username(self) -> bool:
         """
-        Detect export username using common extractor
-        Supports patterns like:
-        - google-{username}-YYYYMMDD
-        - google-{username}-YYYY-MM-DD
+        Detect export username (legacy wrapper).
         Returns True if successful, False otherwise
         """
-        try:
-            from common.utils import extract_username_from_export_dir
-
-            username = extract_username_from_export_dir(str(self.export_path), "google")
-            if username and username != "unknown":
-                self.export_username = username
-                logger.info("   Detected export user: %s", self.export_username)
-                return True
-        except Exception as e:
-            self.log_message(
-                "USERNAME_DETECTION_ERROR",
-                "Failed to extract username using common utils",
-                str(e),
+        result = self.detect_username()
+        if result.username:
+            self.export_username = result.username
+            logger.info(
+                "Detected export user: %s (via %s)", result.username, result.source
             )
+            return True
 
         self.log_message(
             "USERNAME_DETECTION_ERROR",
-            f"Could not parse username from directory name: {self.export_path.name}",
+            "All username detection methods failed",
         )
         return False
 
@@ -735,12 +797,16 @@ class GoogleVoicePreprocessor:
         """Save cleaned metadata to metadata.json"""
 
         try:
+            # Add export info with username detection source
+            detection_result = self.detect_username()
+
             # Add export info
             output = {
                 "export_info": {
                     "export_path": str(self.export_path),
                     "export_name": self.export_path.name,
                     "export_username": self.export_username,
+                    "username_source": detection_result.source,
                     "processed_date": datetime.now().isoformat(),
                     "total_conversations": self.stats["total_conversations"],
                     "total_messages_with_media": self.stats[

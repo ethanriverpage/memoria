@@ -34,6 +34,7 @@ from common.processing import print_processing_summary
 from common.output.progress import PHASE_PROCESS, progress_bar
 from processors.instaloader.preprocess import InstaloaderPreprocessor
 from common.dependency_checker import check_exiftool, print_exiftool_error
+from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
 from common.utils import (
     extract_username_from_export_dir,
@@ -115,6 +116,14 @@ class InstaloaderProcessor(ProcessorBase):
     def get_priority() -> int:
         """Return priority (higher = run first)"""
         return 30  # Low priority - least specific pattern
+
+    @staticmethod
+    def get_output_info() -> OutputInfo:
+        return OutputInfo(
+            platform="Instagram",
+            service="posts",
+            username_prefix="instagram",
+        )
 
     @staticmethod
     def supports_dedup() -> bool:
