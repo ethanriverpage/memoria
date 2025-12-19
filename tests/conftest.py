@@ -103,6 +103,7 @@ def temp_export_dir(tmp_path) -> Path:
 def google_photos_export(temp_export_dir) -> Path:
     """Create a minimal Google Photos export."""
     from tests.fixtures.generators import create_google_photos_export
+
     return create_google_photos_export(temp_export_dir)
 
 
@@ -110,6 +111,7 @@ def google_photos_export(temp_export_dir) -> Path:
 def google_chat_export(temp_export_dir) -> Path:
     """Create a minimal Google Chat export."""
     from tests.fixtures.generators import create_google_chat_export
+
     return create_google_chat_export(temp_export_dir)
 
 
@@ -117,6 +119,7 @@ def google_chat_export(temp_export_dir) -> Path:
 def google_voice_export(temp_export_dir) -> Path:
     """Create a minimal Google Voice export."""
     from tests.fixtures.generators import create_google_voice_export
+
     return create_google_voice_export(temp_export_dir)
 
 
@@ -124,6 +127,7 @@ def google_voice_export(temp_export_dir) -> Path:
 def snapchat_memories_export(temp_export_dir) -> Path:
     """Create a minimal Snapchat Memories export."""
     from tests.fixtures.generators import create_snapchat_memories_export
+
     return create_snapchat_memories_export(temp_export_dir)
 
 
@@ -131,6 +135,7 @@ def snapchat_memories_export(temp_export_dir) -> Path:
 def snapchat_messages_export(temp_export_dir) -> Path:
     """Create a minimal Snapchat Messages export."""
     from tests.fixtures.generators import create_snapchat_messages_export
+
     return create_snapchat_messages_export(temp_export_dir)
 
 
@@ -138,6 +143,7 @@ def snapchat_messages_export(temp_export_dir) -> Path:
 def instagram_messages_export(temp_export_dir) -> Path:
     """Create a minimal Instagram Messages export."""
     from tests.fixtures.generators import create_instagram_messages_export
+
     return create_instagram_messages_export(temp_export_dir)
 
 
@@ -145,6 +151,7 @@ def instagram_messages_export(temp_export_dir) -> Path:
 def instagram_public_export(temp_export_dir) -> Path:
     """Create a minimal Instagram Public Media export."""
     from tests.fixtures.generators import create_instagram_public_export
+
     return create_instagram_public_export(temp_export_dir)
 
 
@@ -152,6 +159,7 @@ def instagram_public_export(temp_export_dir) -> Path:
 def instagram_old_export(temp_export_dir) -> Path:
     """Create a minimal Instagram Old Format export."""
     from tests.fixtures.generators import create_instagram_old_export
+
     return create_instagram_old_export(temp_export_dir)
 
 
@@ -159,6 +167,7 @@ def instagram_old_export(temp_export_dir) -> Path:
 def discord_export(temp_export_dir) -> Path:
     """Create a minimal Discord export."""
     from tests.fixtures.generators import create_discord_export
+
     return create_discord_export(temp_export_dir)
 
 
@@ -166,6 +175,7 @@ def discord_export(temp_export_dir) -> Path:
 def imessage_mac_export(temp_export_dir) -> Path:
     """Create a minimal iMessage Mac export."""
     from tests.fixtures.generators import create_imessage_mac_export
+
     return create_imessage_mac_export(temp_export_dir)
 
 
@@ -173,6 +183,7 @@ def imessage_mac_export(temp_export_dir) -> Path:
 def imessage_iphone_export(temp_export_dir) -> Path:
     """Create a minimal iMessage iPhone export."""
     from tests.fixtures.generators import create_imessage_iphone_export
+
     return create_imessage_iphone_export(temp_export_dir)
 
 
@@ -185,6 +196,7 @@ def imessage_iphone_export(temp_export_dir) -> Path:
 def google_photos_processor() -> Type[ProcessorBase]:
     """Return the Google Photos processor class."""
     from processors.google_photos.processor import GooglePhotosProcessor
+
     return GooglePhotosProcessor
 
 
@@ -192,6 +204,7 @@ def google_photos_processor() -> Type[ProcessorBase]:
 def google_chat_processor() -> Type[ProcessorBase]:
     """Return the Google Chat processor class."""
     from processors.google_chat.processor import GoogleChatProcessor
+
     return GoogleChatProcessor
 
 
@@ -199,6 +212,7 @@ def google_chat_processor() -> Type[ProcessorBase]:
 def google_voice_processor() -> Type[ProcessorBase]:
     """Return the Google Voice processor class."""
     from processors.google_voice.processor import GoogleVoiceProcessor
+
     return GoogleVoiceProcessor
 
 
@@ -206,6 +220,7 @@ def google_voice_processor() -> Type[ProcessorBase]:
 def snapchat_memories_processor() -> Type[ProcessorBase]:
     """Return the Snapchat Memories processor class."""
     from processors.snapchat_memories.processor import SnapchatMemoriesProcessor
+
     return SnapchatMemoriesProcessor
 
 
@@ -213,6 +228,7 @@ def snapchat_memories_processor() -> Type[ProcessorBase]:
 def snapchat_messages_processor() -> Type[ProcessorBase]:
     """Return the Snapchat Messages processor class."""
     from processors.snapchat_messages.processor import SnapchatMessagesProcessor
+
     return SnapchatMessagesProcessor
 
 
@@ -220,20 +236,27 @@ def snapchat_messages_processor() -> Type[ProcessorBase]:
 def instagram_messages_processor() -> Type[ProcessorBase]:
     """Return the Instagram Messages processor class."""
     from processors.instagram_messages.processor import InstagramMessagesProcessor
+
     return InstagramMessagesProcessor
 
 
 @pytest.fixture
 def instagram_public_processor() -> Type[ProcessorBase]:
     """Return the Instagram Public Media processor class."""
-    from processors.instagram_public_media.processor import InstagramPublicMediaProcessor
+    from processors.instagram_public_media.processor import (
+        InstagramPublicMediaProcessor,
+    )
+
     return InstagramPublicMediaProcessor
 
 
 @pytest.fixture
 def instagram_old_processor() -> Type[ProcessorBase]:
     """Return the Instagram Old Format processor class."""
-    from processors.instagram_old_public_media.processor import OldInstagramPublicMediaProcessor
+    from processors.instagram_old_public_media.processor import (
+        OldInstagramPublicMediaProcessor,
+    )
+
     return OldInstagramPublicMediaProcessor
 
 
@@ -241,6 +264,7 @@ def instagram_old_processor() -> Type[ProcessorBase]:
 def discord_processor() -> Type[ProcessorBase]:
     """Return the Discord processor class."""
     from processors.discord.processor import DiscordProcessor
+
     return DiscordProcessor
 
 
@@ -248,6 +272,7 @@ def discord_processor() -> Type[ProcessorBase]:
 def imessage_processor() -> Type[ProcessorBase]:
     """Return the iMessage processor class."""
     from processors.imessage.processor import IMessageProcessor
+
     return IMessageProcessor
 
 
@@ -318,14 +343,10 @@ def requires_exiftool():
     """Skip test if exiftool is not available."""
     try:
         import subprocess
-        result = subprocess.run(
-            ["exiftool", "-ver"],
-            capture_output=True,
-            text=True
-        )
+
+        result = subprocess.run(["exiftool", "-ver"], capture_output=True, text=True)
         return pytest.mark.skipif(
-            result.returncode != 0,
-            reason="exiftool not available"
+            result.returncode != 0, reason="exiftool not available"
         )
     except FileNotFoundError:
         return pytest.mark.skip(reason="exiftool not installed")
@@ -335,15 +356,9 @@ def requires_ffmpeg():
     """Skip test if ffmpeg is not available."""
     try:
         import subprocess
-        result = subprocess.run(
-            ["ffmpeg", "-version"],
-            capture_output=True,
-            text=True
-        )
-        return pytest.mark.skipif(
-            result.returncode != 0,
-            reason="ffmpeg not available"
-        )
+
+        result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
+        return pytest.mark.skipif(result.returncode != 0, reason="ffmpeg not available")
     except FileNotFoundError:
         return pytest.mark.skip(reason="ffmpeg not installed")
 
@@ -383,7 +398,7 @@ def assert_directories_equal(
     dir1: Path,
     dir2: Path,
     compare_contents: bool = False,
-    ignore_patterns: Optional[List[str]] = None
+    ignore_patterns: Optional[List[str]] = None,
 ) -> None:
     """Assert that two directories have the same structure and optionally content.
 
@@ -440,7 +455,9 @@ def assert_directories_equal(
             assert hash1 == hash2, f"Content differs for {rel_path}"
 
 
-def count_files_recursive(directory: Path, extensions: Optional[List[str]] = None) -> int:
+def count_files_recursive(
+    directory: Path, extensions: Optional[List[str]] = None
+) -> int:
     """Count files in directory recursively, optionally filtering by extension.
 
     Args:
@@ -480,19 +497,36 @@ def get_file_sizes(directory: Path) -> Dict[str, int]:
 # ============================================================================
 
 
+def pytest_addoption(parser):
+    """Add custom command line options."""
+    parser.addoption(
+        "--run-full-pipeline",
+        action="store_true",
+        default=False,
+        help="Run full pipeline: sample, process, validate, cleanup",
+    )
+    parser.addoption(
+        "--keep-dataset",
+        action="store_true",
+        default=False,
+        help="Keep generated dataset after tests (only with --run-full-pipeline)",
+    )
+
+
 def pytest_configure(config):
     """Configure pytest with custom markers."""
     config.addinivalue_line(
         "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
     )
     config.addinivalue_line(
-        "markers", "integration: marks tests requiring external tools (exiftool, ffmpeg)"
+        "markers",
+        "integration: marks tests requiring external tools (exiftool, ffmpeg)",
     )
 
 
 def pytest_sessionfinish(session, exitstatus):
     """Clean up test output directories after test session completes.
-    
+
     Removes final_* directories that are created as default output locations
     during processor tests.
     """
@@ -504,4 +538,3 @@ def pytest_sessionfinish(session, exitstatus):
                     shutil.rmtree(path)
                 except Exception:
                     pass  # Ignore errors during cleanup
-

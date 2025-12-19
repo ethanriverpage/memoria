@@ -21,13 +21,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
-import xxhash
-
 from common.failure_tracker import FailureTracker
-from common.file_utils import detect_and_correct_extension
+from common.perceptual_hash import compute_content_hash
+from common.processing import print_preprocessing_stats
 from common.progress import PHASE_PREPROCESS, progress_bar
 from common.filter_banned_files import BannedFilesFilter
-from common.utils import get_media_type
+from common.utils import default_worker_count, get_media_type
 from processors.imessage.vcard_parser import VCardParser
 
 logger = logging.getLogger(__name__)
@@ -249,7 +248,7 @@ class IMessagePreprocessor:
         self.metadata_file = self.output_dir / "metadata.json"
 
         # Parallel processing worker count
-        self.workers = workers or 8
+        self.workers = workers if workers is not None else default_worker_count()
 
         # Owner name (device owner) - extract from directory name if not provided
         self.owner_name = owner_name or self._extract_owner_name()
@@ -280,7 +279,6 @@ class IMessagePreprocessor:
             "files_copied": 0,
             "contacts_loaded": 0,
             "conversations": 0,
-            "extensions_corrected": 0,
         }
 
     def _extract_owner_name(self) -> str:
@@ -508,11 +506,7 @@ class IMessagePreprocessor:
         Returns:
             Hexadecimal hash digest
         """
-        hasher = xxhash.xxh64()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(65536), b""):
-                hasher.update(chunk)
-        return hasher.hexdigest()
+        return compute_content_hash(file_path)
 
     def _compute_hashes_parallel(
         self, attachments: List[Dict], workers: int = 8
@@ -923,43 +917,17 @@ class IMessagePreprocessor:
         return conversations, orphaned_media
 
     def _generate_output_filename(self, source_path: Path, attachment: Dict) -> str:
-        """Generate output filename with corrected extension based on actual file type.
-
-        Detects the actual file format using magic bytes and corrects the extension
-        if it doesn't match the file content. This prevents metadata write failures
-        that occur when exiftool encounters mismatched file types.
+        """Generate output filename from attachment metadata.
 
         Args:
             source_path: Path to source file
             attachment: Attachment metadata
 
         Returns:
-            Output filename with correct extension
+            Output filename
         """
         # Use original transfer_name or filename
-        original_name = attachment.get("transfer_name") or source_path.name
-        original_path = Path(original_name)
-        original_ext = original_path.suffix.lower()
-
-        # Detect actual file type and get correct extension using shared utility
-        correct_ext = detect_and_correct_extension(
-            source_path,
-            source_path.name,
-            log_callback=lambda msg, details: logger.debug(f"EXTENSION_CORRECTED: {msg} ({details})"),
-        )
-
-        # Check if extension needs correction
-        if original_ext != correct_ext:
-            # Extension mismatch - correct it
-            new_name = original_path.stem + correct_ext
-            logger.debug(
-                f"Correcting extension: {original_name} -> {new_name} "
-                f"(was {original_ext}, actually {correct_ext})"
-            )
-            self.stats["extensions_corrected"] += 1
-            return new_name
-
-        return original_name
+        return attachment.get("transfer_name") or source_path.name
 
     def _generate_metadata(
         self, conversations: Dict[str, Dict], orphaned_media: List[Dict]
@@ -1061,17 +1029,15 @@ class IMessagePreprocessor:
         return True
 
     def _print_statistics(self) -> None:
-        """Print processing statistics."""
-        print("\n" + "=" * 60)
-        print("IMESSAGE PREPROCESSING STATISTICS")
-        print("=" * 60)
-        print(f"Exports processed:          {self.stats['exports_processed']:>6}")
-        print(f"Contacts loaded:            {self.stats['contacts_loaded']:>6}")
-        print(f"Total attachments found:    {self.stats['total_attachments']:>6}")
-        print(f"Conversations:              {self.stats['conversations']:>6}")
-        print(f"Unique files:               {self.stats['unique_files']:>6}")
-        print(f"Duplicate files removed:    {self.stats['duplicate_files']:>6}")
-        print(f"Live Photo pairs:           {self.stats['live_photos']:>6}")
-        print(f"Files copied:               {self.stats['files_copied']:>6}")
-        print(f"Extensions corrected:       {self.stats['extensions_corrected']:>6}")
-        print("=" * 60)
+        """Print processing statistics as a compact table."""
+        stats = {
+            "Exports processed": self.stats["exports_processed"],
+            "Contacts loaded": self.stats["contacts_loaded"],
+            "Attachments found": self.stats["total_attachments"],
+            "Conversations": self.stats["conversations"],
+            "Unique files": self.stats["unique_files"],
+            "Duplicates removed": self.stats["duplicate_files"],
+            "Live Photo pairs": self.stats["live_photos"],
+            "Files copied": self.stats["files_copied"],
+        }
+        print_preprocessing_stats("iMessage Preprocessing", stats)

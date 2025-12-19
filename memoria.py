@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import logging
 import sys
 import os
 import threading
@@ -21,24 +22,32 @@ from pathlib import Path
 from importlib import import_module
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from queue import Empty as QueueEmpty
+from typing import Optional
 
 # Add current directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from processors.registry import ProcessorRegistry
-from common.logging_config import (
+# Set up module logger
+logger = logging.getLogger(__name__)
+
+from processors.registry import ProcessorRegistry  # noqa: E402
+from common.logging_config import (  # noqa: E402
     setup_logging,
     add_export_log_handler,
     remove_export_log_handler,
 )
-from common.env_loader import load_dotenv_file
-from common.dependency_checker import (
+from common.env_loader import load_dotenv_file  # noqa: E402
+from common.dependency_checker import (  # noqa: E402
     check_immich_cli,
     print_immich_error,
 )
-from common.upload_targets import build_upload_targets
-from common.immich_uploader import verify_auth, upload as immich_upload
-from common.processor_config import get_effective_output_dir
+from common.upload_targets import build_upload_targets  # noqa: E402
+from common.immich_uploader import verify_auth, upload as immich_upload  # noqa: E402
+from common.processor_config import get_effective_output_dir  # noqa: E402
+from common.dedup_config import is_dedup_enabled, get_dedup_config  # noqa: E402
+from common.dedup_service import DeduplicationService, save_manifest  # noqa: E402
+from common.hash_database import HashDatabase  # noqa: E402
+from common.console import console, section_header, phase_header  # noqa: E402
 
 
 def upload_worker_thread(
@@ -62,8 +71,7 @@ def upload_worker_thread(
         immich_skip_hash: Whether to skip hash checking
         stop_event: Event to signal thread should stop
     """
-    print("[Upload Worker] Started - will process uploads sequentially")
-    print()
+    logger.info("[Upload Worker] Started - will process uploads sequentially")
 
     while not stop_event.is_set():
         try:
@@ -78,19 +86,22 @@ def upload_worker_thread(
                 break
 
             # Process all uploads for this export
-            separator = "=" * 70
-            print()
-            print(separator)
-            print(
-                f"[Upload Worker] Processing {export_name} ({len(upload_tasks)} upload(s))"
+            logger.info(
+                "[Upload Worker] Processing %s (%d upload(s))",
+                export_name,
+                len(upload_tasks),
             )
-            print(separator)
-            print()
 
             for idx, (up_path, album_name, processor_name) in enumerate(
                 upload_tasks, 1
             ):
-                print(f"  [{idx}/{len(upload_tasks)}] {processor_name} → {album_name}")
+                logger.info(
+                    "  [%d/%d] %s -> %s",
+                    idx,
+                    len(upload_tasks),
+                    processor_name,
+                    album_name,
+                )
                 try:
                     rc = immich_upload(
                         path=up_path,
@@ -102,29 +113,29 @@ def upload_worker_thread(
                         include_hidden=False,
                         recursive=True,
                     )
-                    prefix = "✓" if rc == 0 else "✗"
-                    print(f"    {prefix} Completed (rc={rc})")
+                    if rc == 0:
+                        logger.info("    Completed (rc=%d)", rc)
+                    else:
+                        logger.warning("    Completed with issues (rc=%d)", rc)
                 except Exception as e:
-                    print(f"    ✗ Failed: {e}")
+                    logger.error("    Failed: %s", e)
 
-            print()
-            print(f"[Upload Worker] Completed {export_name}")
-            print(separator)
-            print()
+            logger.info("[Upload Worker] Completed %s", export_name)
 
             upload_queue.task_done()
 
         except Exception as e:
-            print(f"[Upload Worker] Error: {e}")
+            logger.error("[Upload Worker] Error: %s", e)
 
-    print("[Upload Worker] Stopped")
+    logger.info("[Upload Worker] Stopped")
 
 
-def load_all_processors(registry: ProcessorRegistry) -> None:
+def load_all_processors(registry: ProcessorRegistry, quiet: bool = False) -> None:
     """Load and register all available processors
 
     Args:
         registry: ProcessorRegistry instance to register processors with
+        quiet: If True, suppress status messages (used in worker processes)
     """
     processors_loaded = []
     processors_failed = []
@@ -158,41 +169,336 @@ def load_all_processors(registry: ProcessorRegistry) -> None:
         except Exception as e:
             processors_failed.append((pkg, f"Error: {e}"))
 
-    # Report loading status
-    if processors_loaded:
-        print(f"Loaded {len(processors_loaded)} processor(s)")
+    # Report loading status (only if not in quiet mode)
+    if not quiet:
+        if processors_loaded:
+            logger.info("Loaded %d processor(s)", len(processors_loaded))
 
-    if processors_failed:
-        print(f"Warning: {len(processors_failed)} processor(s) failed to load:")
-        for name, error in processors_failed:
-            print(f"  - {name}: {error}")
+        if processors_failed:
+            logger.warning(
+                "Warning: %d processor(s) failed to load:", len(processors_failed)
+            )
+            for name, error in processors_failed:
+                logger.warning("  - %s: %s", name, error)
+
+
+def _build_catalog_worker(
+    export_dir_str: str,
+    workers: int,
+    log_file: Optional[str] = None,
+) -> tuple[str, list[dict]]:
+    """Build catalogs for a single export directory (multiprocessing worker).
+
+    This function is designed to be called by ProcessPoolExecutor for parallel
+    catalog building. It re-creates the ProcessorRegistry in the worker process
+    since registry instances cannot be pickled across process boundaries.
+
+    Args:
+        export_dir_str: Path to the export directory as a string.
+        workers: Number of worker threads for hashing within this process.
+        log_file: Optional path to log file for verbose output.
+
+    Returns:
+        Tuple of (export_dir_name, list_of_catalogs).
+    """
+    from processors.registry import ProcessorRegistry
+    from common.logging_config import init_worker_logging
+
+    # Mark as subprocess to disable progress bars and prevent interleaved output
+    os.environ["_MEMORIA_SUBPROCESS"] = "1"
+
+    # Initialize logging for this worker process
+    init_worker_logging(
+        log_filename=log_file,
+        app_modules=["processors", "common"],
+    )
+
+    export_dir = Path(export_dir_str)
+
+    # Create and populate registry in this worker process
+    # Use quiet=True to suppress "Loaded X processors" messages from workers
+    registry = ProcessorRegistry()
+    load_all_processors(registry, quiet=True)
+
+    catalogs = []
+
+    # Detect matching processors that support dedup
+    matching_processors = registry.detect_all(export_dir)
+    dedup_processors = [p for p in matching_processors if p.supports_dedup()]
+
+    for processor in dedup_processors:
+        try:
+            catalog = processor.build_catalog(str(export_dir), workers=workers)
+            if catalog and catalog.get("files"):
+                catalogs.append(catalog)
+        except Exception as e:
+            logging.warning(
+                f"Catalog build failed for {processor.get_name()} "
+                f"in {export_dir.name}: {e}"
+            )
+
+    return export_dir.name, catalogs
+
+
+def _print_catalog_summary_table(
+    catalog_results: list[tuple[str, int, str]], total_files: int
+) -> None:
+    """Print a Rich summary table of catalog results.
+
+    Args:
+        catalog_results: List of (export_name, file_count, status) tuples.
+        total_files: Total number of files across all catalogs.
+    """
+    from rich.table import Table
+
+    table = Table(title="Catalog Results", show_header=True, header_style="bold")
+    table.add_column("Export", style="cyan", no_wrap=True)
+    table.add_column("Files", justify="right", style="green")
+    table.add_column("Status")
+
+    for name, count, status in sorted(catalog_results, key=lambda x: x[0]):
+        status_style = "green" if status == "OK" else "yellow" if count == 0 else "red"
+        table.add_row(
+            name, str(count) if count > 0 else "-", f"[{status_style}]{status}[/]"
+        )
+
+    # Add total row
+    table.add_section()
+    table.add_row("[bold]Total[/bold]", f"[bold]{total_files}[/bold]", "")
+
+    console.print()
+    console.print(table)
+    console.print()
+
+
+def run_phased_dedup_processing(
+    dirs_to_process: list[Path],
+    registry: ProcessorRegistry,
+    args,
+    temp_dir: str,
+    log_file: Optional[Path] = None,
+) -> tuple[int, int, list]:
+    """Run phased processing with cross-processor deduplication.
+
+    Phase 1: CATALOG - Build catalogs from all processors
+    Phase 2: DEDUP ANALYSIS - Analyze for duplicates
+    Phase 3: PROCESS - Process with dedup manifest
+
+    Args:
+        dirs_to_process: List of export directories
+        registry: ProcessorRegistry instance
+        args: Command line arguments
+        temp_dir: Directory for temporary files
+        log_file: Optional path to log file for worker process logging
+
+    Returns:
+        Tuple of (success_count, failed_count, results_list)
+    """
+    config = get_dedup_config()
+    phase_header("CROSS-PROCESSOR DEDUPLICATION MODE")
+    logger.info("Database: %s", config.database_path)
+    logger.info(
+        "Perceptual hashing: %s", "enabled" if config.use_perceptual else "disabled"
+    )
+    logger.info("Perceptual threshold: %s", config.perceptual_threshold)
+
+    # Phase 1: Build catalogs
+    phase_header("PHASE 1: CATALOG")
+
+    catalogs = []
+    catalog_results = []  # List of (export_name, file_count, status) for summary table
+    use_parallel_catalog = os.environ.get("PARALLEL_CATALOG", "true").lower() == "true"
+
+    if use_parallel_catalog and len(dirs_to_process) > 1:
+        # Parallel catalog building across exports
+        max_catalog_workers = min(len(dirs_to_process), 8)
+        logger.info(
+            "Building catalogs in parallel (%d workers)...", max_catalog_workers
+        )
+
+        from rich.status import Status
+
+        with ProcessPoolExecutor(max_workers=max_catalog_workers) as executor:
+            futures = {
+                executor.submit(
+                    _build_catalog_worker,
+                    str(export_dir),
+                    args.workers,
+                    str(log_file) if log_file else None,
+                ): export_dir
+                for export_dir in dirs_to_process
+            }
+
+            completed = 0
+            total = len(futures)
+            with Status(
+                f"[bold blue]Cataloging exports... [0/{total}]",
+                console=console,
+                spinner="dots",
+            ) as status:
+                for future in as_completed(futures):
+                    export_dir = futures[future]
+                    completed += 1
+                    status.update(
+                        f"[bold blue]Cataloging exports... [{completed}/{total}]"
+                    )
+                    try:
+                        export_name, export_catalogs = future.result()
+                        if export_catalogs:
+                            catalogs.extend(export_catalogs)
+                            total_in_export = sum(
+                                len(c.get("files", [])) for c in export_catalogs
+                            )
+                            catalog_results.append((export_name, total_in_export, "OK"))
+                        else:
+                            catalog_results.append((export_name, 0, "No processors"))
+                    except Exception as e:
+                        catalog_results.append((export_dir.name, 0, f"ERROR: {e}"))
+                        logger.error("Catalog failed for %s: %s", export_dir.name, e)
+    else:
+        # Sequential catalog building (single export or PARALLEL_CATALOG=false)
+        for export_dir in dirs_to_process:
+            logger.debug("Scanning: %s", export_dir.name)
+
+            # Detect matching processors that support dedup
+            matching_processors = registry.detect_all(export_dir)
+            dedup_processors = [p for p in matching_processors if p.supports_dedup()]
+
+            if not dedup_processors:
+                catalog_results.append((export_dir.name, 0, "No processors"))
+                continue
+
+            export_file_count = 0
+            for processor in dedup_processors:
+                logger.debug("  Building catalog: %s", processor.get_name())
+                try:
+                    catalog = processor.build_catalog(
+                        str(export_dir),
+                        workers=args.workers,
+                    )
+                    if catalog and catalog.get("files"):
+                        catalogs.append(catalog)
+                        export_file_count += len(catalog["files"])
+                        logger.debug("    Found %d files", len(catalog["files"]))
+                except Exception as e:
+                    logger.error("    ERROR: %s", e)
+
+            if export_file_count > 0:
+                catalog_results.append((export_dir.name, export_file_count, "OK"))
+            else:
+                catalog_results.append((export_dir.name, 0, "No files"))
+
+    # Display catalog results summary table
+    total_files = sum(len(c.get("files", [])) for c in catalogs)
+    _print_catalog_summary_table(catalog_results, total_files)
+
+    if total_files == 0:
+        logger.info("No files to process. Exiting.")
+        return 0, 0, []
+
+    # Phase 2: Deduplication Analysis
+    phase_header("PHASE 2: DEDUP ANALYSIS")
+
+    db = HashDatabase(config.database_path)
+    dedup_service = DeduplicationService(db=db, config=config)
+    manifest = dedup_service.analyze(catalogs)
+
+    # Save manifest
+    output_base = Path(args.output) if args.output else Path("processed")
+    manifest_path = output_base / "dedup_manifest.json"
+    save_manifest(manifest, manifest_path)
+    logger.info("Manifest saved: %s", manifest_path)
+
+    stats = manifest.get("statistics", {})
+    logger.info("Statistics:")
+    logger.info("  Total files: %d", stats.get("total_files_scanned", 0))
+    logger.info("  Unique files: %d", stats.get("unique_files", 0))
+    logger.info("  Duplicates found: %d", stats.get("duplicates_found", 0))
+    logger.info(
+        "  Space saved: %.1f MB", stats.get("space_saved_bytes", 0) / (1024 * 1024)
+    )
+
+    # Phase 3: Process with manifest
+    phase_header("PHASE 3: PROCESS")
+
+    success_count = 0
+    failed_count = 0
+    results = []
+
+    for export_dir in dirs_to_process:
+        section_header(f"Processing: {export_dir.name}")
+
+        matching_processors = registry.detect_all(export_dir)
+
+        for processor in matching_processors:
+            logger.info("  Running: %s", processor.get_name())
+            try:
+                # Determine output directory
+                if args.output:
+                    if len(dirs_to_process) > 1:
+                        output_dir = str(Path(args.output) / export_dir.name)
+                    else:
+                        output_dir = args.output
+                else:
+                    output_dir = None
+
+                kwargs = {
+                    "verbose": args.verbose,
+                    "workers": args.workers,
+                    "temp_dir": temp_dir,
+                }
+
+                success = processor.process(
+                    str(export_dir), output_dir, dedup_manifest=manifest, **kwargs
+                )
+
+                if success:
+                    success_count += 1
+                    results.append(
+                        (f"{export_dir.name}/{processor.get_name()}", "SUCCESS")
+                    )
+                else:
+                    failed_count += 1
+                    results.append(
+                        (f"{export_dir.name}/{processor.get_name()}", "FAILED")
+                    )
+
+            except Exception as e:
+                logger.error("    ERROR: %s", e)
+                failed_count += 1
+                results.append((f"{export_dir.name}/{processor.get_name()}", "ERROR"))
+
+    phase_header("DEDUP PROCESSING COMPLETE")
+    logger.info("Results: %d succeeded, %d failed", success_count, failed_count)
+
+    # Clean up preprocessing cache
+    from common.processing import cleanup_preprocessing_cache
+
+    cleanup_preprocessing_cache()
+
+    return success_count, failed_count, results
 
 
 def show_supported_formats() -> None:
     """Display all supported export formats"""
-    print("\nSupported formats (can match multiple per export):")
-    print()
-    print("  Google Services (can match multiple):")
-    print("    • Google Photos: Google Photos/ directory with album folders")
-    print("    • Google Chat: Google Chat/Groups/ and Google Chat/Users/")
-    print("    • Google Voice: Voice/Calls/ with HTML files")
-    print()
-    print("  Snapchat:")
-    print("    • Snapchat (Unified): memories/ and messages/ subdirectories")
-    print("    • Snapchat Memories: media/, overlays/, metadata.json")
-    print("    • Snapchat Messages: json/ with chat_history.json")
-    print()
-    print("  Instagram (can match multiple):")
-    print("    • Instagram Messages: your_instagram_activity/messages/inbox/")
-    print("    • Instagram Public Media: media/posts/ and media/archived_posts/")
-    print("    • Instagram Old Format: YYYY-MM-DD_HH-MM-SS_UTC.* files in root")
-    print()
-    print("Examples:")
-    print("  google-username-20250526/     → Google Photos + Chat + Voice")
-    print("  instagram-username-20251007/  → Instagram Messages + Public Media")
-    print("  snapchat-username-20251007/   → Snapchat Memories")
-    print("  snapmsgs-username-20251017/   → Snapchat Messages")
-    print()
+    logger.info("Supported formats (can match multiple per export):")
+    logger.info("  Google Services (can match multiple):")
+    logger.info("    - Google Photos: Google Photos/ directory with album folders")
+    logger.info("    - Google Chat: Google Chat/Groups/ and Google Chat/Users/")
+    logger.info("    - Google Voice: Voice/Calls/ with HTML files")
+    logger.info("  Snapchat:")
+    logger.info("    - Snapchat (Unified): memories/ and messages/ subdirectories")
+    logger.info("    - Snapchat Memories: media/, overlays/, metadata.json")
+    logger.info("    - Snapchat Messages: json/ with chat_history.json")
+    logger.info("  Instagram (can match multiple):")
+    logger.info("    - Instagram Messages: your_instagram_activity/messages/inbox/")
+    logger.info("    - Instagram Public Media: media/posts/ and media/archived_posts/")
+    logger.info("    - Instagram Old Format: YYYY-MM-DD_HH-MM-SS_UTC.* files in root")
+    logger.info("Examples:")
+    logger.info("  google-username-20250526/     -> Google Photos + Chat + Voice")
+    logger.info("  instagram-username-20251007/  -> Instagram Messages + Public Media")
+    logger.info("  snapchat-username-20251007/   -> Snapchat Memories")
+    logger.info("  snapmsgs-username-20251017/   -> Snapchat Messages")
 
 
 def _get_structure_signature(path: Path) -> tuple:
@@ -265,7 +571,7 @@ def _process_export_worker(
     sys.path.insert(0, str(Path(__file__).parent))
     # Reimport needed for pickled worker processes
     from processors.registry import ProcessorRegistry  # noqa: F811
-    from common.utils import (  # noqa: F811
+    from common.logging_config import (  # noqa: F811
         add_export_log_handler,
         remove_export_log_handler,
     )
@@ -296,14 +602,12 @@ def _process_export_worker(
             export_output_dir = str(Path(output_base) / export_dir.name)
             args.output = export_output_dir
 
-        # Print header for this export
+        # Log header for this export
         if total_exports > 1:
             mega_separator = "#" * 70
-            print()
-            print(mega_separator)
-            print(f"EXPORT {export_idx}/{total_exports}: {export_dir.name}")
-            print(mega_separator)
-            print()
+            logger.info(mega_separator)
+            logger.info("EXPORT %d/%d: %s", export_idx, total_exports, export_dir.name)
+            logger.info(mega_separator)
 
         # Process the export (no detection cache in parallel mode to avoid sharing issues)
         success_count, failed_count, _upload_tasks = process_single_export(
@@ -361,8 +665,7 @@ def process_single_export(
         upload_tasks is a list of (up_path, album_name, processor_name) tuples
     """
     # Detect ALL matching processors with caching
-    print(f"Analyzing: {input_path}")
-    print()
+    logger.info("Analyzing: %s", input_path)
 
     matching_processors = None
     cache_key = None
@@ -371,7 +674,7 @@ def process_single_export(
         cache_key = _get_structure_signature(input_path)
         if cache_key and cache_key in detection_cache:
             matching_processors = detection_cache[cache_key]
-            print("(using cached processor detection)")
+            logger.debug("(using cached processor detection)")
 
     if matching_processors is None:
         matching_processors = registry.detect_all(input_path)
@@ -390,29 +693,29 @@ def process_single_export(
     if not matching_processors:
         if processor_filter:
             # Specified processor not found in this export - warning, not error
-            print(f"No {processor_filter} exports found in: {input_path}")
+            logger.warning("No %s exports found in: %s", processor_filter, input_path)
             return 0, 0, []
         else:
             # No processors matched at all - this is an error
-            print(f"ERROR: No processors matched input directory: {input_path}")
+            logger.error("No processors matched input directory: %s", input_path)
             show_supported_formats()
-            print("Run with --list-processors to see all available processors.")
+            logger.info("Run with --list-processors to see all available processors.")
             return 0, 1, []
 
     # Show detected processors
-    print(f"Detected {len(matching_processors)} processor(s):")
+    logger.info("Detected %d processor(s):", len(matching_processors))
     for processor in matching_processors:
-        print(f"  • {processor.get_name()}")
-    print()
+        logger.info("  - %s", processor.get_name())
 
     if args.output:
-        print(f"Output base directory: {args.output}")
-        print()
+        logger.info("Output base directory: %s", args.output)
         # Ensure base output directory exists
         try:
             Path(args.output).mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            print(f"ERROR: Failed to create output base directory '{args.output}': {e}")
+            logger.error(
+                "Failed to create output base directory '%s': %s", args.output, e
+            )
             return 0, 1, []
 
     # Run ALL matching processors
@@ -423,10 +726,11 @@ def process_single_export(
 
     for idx, processor in enumerate(matching_processors, 1):
         separator = "=" * 70
-        print(separator)
-        print(f"[{idx}/{len(matching_processors)}] Running: {processor.get_name()}")
-        print(separator)
-        print()
+        logger.info(separator)
+        logger.info(
+            "[%d/%d] Running: %s", idx, len(matching_processors), processor.get_name()
+        )
+        logger.info(separator)
 
         try:
             # Prepare kwargs for processor
@@ -447,9 +751,10 @@ def process_single_export(
 
             if success:
                 success_count += 1
-                status = "✓ SUCCESS"
-                print()
-                print(f"{status}: {processor.get_name()} completed successfully")
+                status = "SUCCESS"
+                logger.info(
+                    "%s: %s completed successfully", status, processor.get_name()
+                )
 
                 # Compute processor-specific effective output directory
                 pname = processor.get_name()
@@ -461,18 +766,19 @@ def process_single_export(
                         pname, str(input_path), effective_output
                     )
                     if not targets:
-                        print("No upload targets derived for this processor.")
+                        logger.info("No upload targets derived for this processor.")
                     else:
                         if upload_queue is not None:
                             # Queue uploads for the upload worker thread
-                            print(
-                                f"Queueing {len(targets)} upload(s) for sequential processing..."
+                            logger.info(
+                                "Queueing %d upload(s) for sequential processing...",
+                                len(targets),
                             )
                             for up_path, album_name in targets:
                                 upload_tasks.append((up_path, album_name, pname))
                         else:
                             # Upload immediately (sequential mode)
-                            print("Starting Immich uploads:")
+                            logger.info("Starting Immich uploads:")
                             for up_path, album_name in targets:
                                 try:
                                     rc = immich_upload(
@@ -485,58 +791,68 @@ def process_single_export(
                                         include_hidden=False,
                                         recursive=True,
                                     )
-                                    prefix = "✓" if rc == 0 else "✗"
-                                    print(
-                                        f"  {prefix} {pname} → {album_name} from {up_path}"
-                                    )
+                                    if rc == 0:
+                                        logger.info(
+                                            "  %s -> %s from %s",
+                                            pname,
+                                            album_name,
+                                            up_path,
+                                        )
+                                    else:
+                                        logger.warning(
+                                            "  %s -> %s from %s (rc=%d)",
+                                            pname,
+                                            album_name,
+                                            up_path,
+                                            rc,
+                                        )
                                 except Exception as e:
-                                    print(
-                                        f"  ✗ Upload failed for {up_path} → {album_name}: {e}"
+                                    logger.error(
+                                        "  Upload failed for %s -> %s: %s",
+                                        up_path,
+                                        album_name,
+                                        e,
                                     )
             else:
                 failed_count += 1
-                status = "✗ FAILED"
-                print()
-                print(f"{status}: {processor.get_name()} failed")
+                status = "FAILED"
+                logger.error("%s: %s failed", status, processor.get_name())
 
             results.append((processor.get_name(), status))
 
         except KeyboardInterrupt:
-            print()
-            print()
-            print("Interrupted by user")
+            logger.warning("Interrupted by user")
             failed_count += 1
-            results.append((processor.get_name(), "✗ INTERRUPTED"))
+            results.append((processor.get_name(), "INTERRUPTED"))
             raise  # Re-raise to stop processing other exports
         except Exception as e:
             failed_count += 1
-            status = f"✗ ERROR: {e}"
-            print()
-            print(f"ERROR: {processor.get_name()} failed with exception:")
-            print(f"  {e}")
-            results.append((processor.get_name(), "✗ ERROR"))
-
-        print()
+            status = f"ERROR: {e}"
+            logger.error("%s failed with exception: %s", processor.get_name(), e)
+            results.append((processor.get_name(), "ERROR"))
 
     # Summary
     separator = "=" * 70
-    print(separator)
-    print("SUMMARY")
-    print(separator)
-    print()
+    logger.info(separator)
+    logger.info("SUMMARY")
+    logger.info(separator)
 
     for processor_name, status in results:
-        print(f"  {status:15s} {processor_name}")
+        logger.info("  %-15s %s", status, processor_name)
 
-    print()
-    print(
-        f"Total: {success_count} succeeded, {failed_count} failed out of {len(matching_processors)}"
+    logger.info(
+        "Total: %d succeeded, %d failed out of %d",
+        success_count,
+        failed_count,
+        len(matching_processors),
     )
-    print(separator)
+    logger.info(separator)
 
     # If uploads were queued, add them to the queue
     if upload_queue is not None and upload_tasks:
-        print(f"Adding {len(upload_tasks)} upload(s) to queue for {input_path.name}...")
+        logger.info(
+            "Adding %d upload(s) to queue for %s...", len(upload_tasks), input_path.name
+        )
         upload_queue.put((input_path.name, upload_tasks))
 
     return success_count, failed_count, upload_tasks
@@ -636,10 +952,9 @@ def upload_only_mode(
     """
     from datetime import datetime
 
-    print("Upload-only mode")
-    print(f"Original export: {input_path}")
-    print(f"Processed output: {upload_path}")
-    print()
+    logger.info("Upload-only mode")
+    logger.info("Original export: %s", input_path)
+    logger.info("Processed output: %s", upload_path)
 
     # Create logs directory and upload log file
     logs_dir = Path("logs")
@@ -649,31 +964,29 @@ def upload_only_mode(
     log_filename = f"upload_only_{input_path.name}_{timestamp}.log"
     log_file = logs_dir / log_filename
 
-    print(f"Upload log will be saved to: {log_file}")
-    print()
+    logger.info("Upload log will be saved to: %s", log_file)
 
     # Validate paths
     if not input_path.exists():
-        print(f"ERROR: Original export directory does not exist: {input_path}")
+        logger.error("Original export directory does not exist: %s", input_path)
         return 1
 
     if not upload_path.exists():
-        print(f"ERROR: Processed output directory does not exist: {upload_path}")
+        logger.error("Processed output directory does not exist: %s", upload_path)
         return 1
 
     # Detect processors from original export
-    print("Analyzing original export to detect processor types...")
+    logger.info("Analyzing original export to detect processor types...")
     matching_processors = registry.detect_all(input_path)
 
     if not matching_processors:
-        print(f"ERROR: No processors matched original export directory: {input_path}")
+        logger.error("No processors matched original export directory: %s", input_path)
         show_supported_formats()
         return 1
 
-    print(f"Detected {len(matching_processors)} processor(s):")
+    logger.info("Detected %d processor(s):", len(matching_processors))
     for processor in matching_processors:
-        print(f"  • {processor.get_name()}")
-    print()
+        logger.info("  - %s", processor.get_name())
 
     # Map processor names to their expected output subdirectories within upload_path
     processor_output_map = {}
@@ -685,23 +998,23 @@ def upload_only_mode(
         effective_output_str = get_effective_output_dir(pname, str(upload_path))
 
         if not effective_output_str:
-            print(f"WARNING: Unknown processor '{pname}', skipping uploads")
+            logger.warning("Unknown processor '%s', skipping uploads", pname)
             continue
 
         effective_output = Path(effective_output_str)
 
         # Verify the directory exists
         if not effective_output.exists():
-            print(
-                f"WARNING: Expected output directory does not exist: {effective_output}"
+            logger.warning(
+                "Expected output directory does not exist: %s", effective_output
             )
-            print(f"         Skipping uploads for {pname}")
+            logger.warning("         Skipping uploads for %s", pname)
             continue
 
         processor_output_map[pname] = str(effective_output)
 
     if not processor_output_map:
-        print("ERROR: No valid output directories found for detected processors")
+        logger.error("No valid output directories found for detected processors")
         return 1
 
     # Get default ignore patterns (same as used by immich_upload)
@@ -723,8 +1036,7 @@ def upload_only_mode(
         log.write(f"{'=' * 70}\n\n")
 
         # Perform uploads for each processor
-        print("Starting Immich uploads:")
-        print()
+        logger.info("Starting Immich uploads:")
 
         success_count = 0
         failed_count = 0
@@ -739,25 +1051,23 @@ def upload_only_mode(
             effective_output = processor_output_map[pname]
 
             separator = "=" * 70
-            print(separator)
-            print(f"[{idx}/{len(matching_processors)}] Uploading: {pname}")
-            print(separator)
-            print()
+            logger.info(separator)
+            logger.info("[%d/%d] Uploading: %s", idx, len(matching_processors), pname)
+            logger.info(separator)
 
             try:
                 # Build upload targets using the original export path and effective output
                 targets = build_upload_targets(pname, str(input_path), effective_output)
 
                 if not targets:
-                    print(f"No upload targets derived for {pname}")
+                    logger.info("No upload targets derived for %s", pname)
                     log.write(f"Processor: {pname}\n")
                     log.write("  No upload targets\n\n")
                     continue
 
-                print(f"Found {len(targets)} upload target(s):")
+                logger.info("Found %d upload target(s):", len(targets))
                 for up_path, album_name in targets:
-                    print(f"  • {up_path} → {album_name}")
-                print()
+                    logger.info("  - %s -> %s", up_path, album_name)
 
                 # Perform uploads
                 for up_path, album_name in targets:
@@ -790,10 +1100,21 @@ def upload_only_mode(
                             include_hidden=False,
                             recursive=True,
                         )
-                        prefix = "✓" if rc == 0 else "✗"
-                        print(
-                            f"  {prefix} {pname} → {album_name} ({len(files_to_upload)} files)"
-                        )
+                        if rc == 0:
+                            logger.info(
+                                "  %s -> %s (%d files)",
+                                pname,
+                                album_name,
+                                len(files_to_upload),
+                            )
+                        else:
+                            logger.warning(
+                                "  %s -> %s (%d files) - rc=%d",
+                                pname,
+                                album_name,
+                                len(files_to_upload),
+                                rc,
+                            )
 
                         # Log result
                         log.write(
@@ -805,17 +1126,17 @@ def upload_only_mode(
                         else:
                             failed_count += 1
                     except Exception as e:
-                        print(f"  ✗ Upload failed for {up_path} → {album_name}: {e}")
+                        logger.error(
+                            "  Upload failed for %s -> %s: %s", up_path, album_name, e
+                        )
                         log.write(f"  Upload result: EXCEPTION - {e}\n\n")
                         failed_count += 1
 
             except Exception as e:
-                print(f"ERROR: Failed to upload {pname}: {e}")
+                logger.error("Failed to upload %s: %s", pname, e)
                 log.write(f"Processor: {pname}\n")
                 log.write(f"  ERROR: {e}\n\n")
                 failed_count += 1
-
-            print()
 
         # Write summary to log
         log.write(f"{'=' * 70}\n")
@@ -827,15 +1148,13 @@ def upload_only_mode(
 
     # Summary
     separator = "=" * 70
-    print(separator)
-    print("UPLOAD SUMMARY")
-    print(separator)
-    print()
-    print(f"Total files: {total_files_uploaded}")
-    print(f"Upload tasks: {success_count} succeeded, {failed_count} failed")
-    print()
-    print(f"Upload log saved to: {log_file}")
-    print(separator)
+    logger.info(separator)
+    logger.info("UPLOAD SUMMARY")
+    logger.info(separator)
+    logger.info("Total files: %d", total_files_uploaded)
+    logger.info("Upload tasks: %d succeeded, %d failed", success_count, failed_count)
+    logger.info("Upload log saved to: %s", log_file)
+    logger.info(separator)
 
     return 0 if failed_count == 0 else 1
 
@@ -899,8 +1218,9 @@ Examples:
     parser.add_argument(
         "--verbose",
         "-v",
-        action="store_true",
-        help="Enable verbose logging",
+        action="count",
+        default=0,
+        help="Enable verbose logging (-v for summaries, -vv for file-level details)",
     )
     parser.add_argument(
         "--workers",
@@ -979,7 +1299,7 @@ Examples:
         log_file = (
             logs_dir / f"media_processor_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         )
-    setup_logging(verbose=args.verbose, log_file=log_file)
+    setup_logging(verbosity=args.verbose, log_file=log_file)
 
     # Initialize registry and load all processors
     registry = ProcessorRegistry()
@@ -988,26 +1308,26 @@ Examples:
     # Validate --processor argument if provided
     if args.processor:
         if not registry.get_by_name(args.processor):
-            print(f"ERROR: Unknown processor '{args.processor}'")
-            print("Available processors:")
+            logger.error("Unknown processor '%s'", args.processor)
+            logger.info("Available processors:")
             for p in registry.get_all_processors():
-                print(f"  - {p.get_name()}")
+                logger.info("  - %s", p.get_name())
             return 1
 
     # Handle --list-processors
     if args.list_processors:
-        print("Available processors:")
-        print()
+        console.print("[bold]Available processors:[/bold]")
+        console.print()
         processors = registry.get_all_processors()
         if not processors:
-            print("  No processors loaded.")
+            console.print("  No processors loaded.")
         else:
             for processor in processors:
-                print(
-                    f"  • {processor.get_name():30s} (priority: {processor.get_priority()})"
+                console.print(
+                    f"  [cyan]{processor.get_name():30s}[/cyan] (priority: {processor.get_priority()})"
                 )
-        print()
-        print(f"Total: {registry.get_processor_count()} processor(s)")
+        console.print()
+        console.print(f"Total: {registry.get_processor_count()} processor(s)")
         return 0
 
     # Require input_dir or --originals if not listing processors
@@ -1027,11 +1347,11 @@ Examples:
         originals_path = Path(args.originals).resolve()
 
         if not originals_path.exists():
-            print(f"ERROR: Originals directory does not exist: {originals_path}")
+            logger.error("Originals directory does not exist: %s", originals_path)
             return 1
 
         if not originals_path.is_dir():
-            print(f"ERROR: Originals path is not a directory: {originals_path}")
+            logger.error("Originals path is not a directory: %s", originals_path)
             return 1
 
         # Get all subdirectories, skip hidden directories
@@ -1045,13 +1365,14 @@ Examples:
         )
 
         if not subdirs:
-            print(f"ERROR: No subdirectories found in: {originals_path}")
+            logger.error("No subdirectories found in: %s", originals_path)
             return 1
 
-        print(f"Found {len(subdirs)} export(s) to process in: {originals_path}")
+        logger.info(
+            "Found %d export(s) to process in: %s", len(subdirs), originals_path
+        )
         for subdir in subdirs:
-            print(f"  • {subdir.name}")
-        print()
+            logger.info("  - %s", subdir.name)
 
         dirs_to_process = subdirs
     else:
@@ -1059,11 +1380,11 @@ Examples:
         input_path = Path(args.input_dir).resolve()
 
         if not input_path.exists():
-            print(f"ERROR: Input directory does not exist: {input_path}")
+            logger.error("Input directory does not exist: %s", input_path)
             return 1
 
         if not input_path.is_dir():
-            print(f"ERROR: Input path is not a directory: {input_path}")
+            logger.error("Input path is not a directory: %s", input_path)
             return 1
 
         dirs_to_process = [input_path]
@@ -1076,7 +1397,7 @@ Examples:
 
     # Validate parallel_exports for --originals mode
     if args.parallel_exports and not args.originals:
-        print("WARNING: --parallel-exports is only used with --originals; ignoring")
+        logger.warning("--parallel-exports is only used with --originals; ignoring")
         parallel_exports = 1
 
     # Smart defaults and warnings for parallel processing
@@ -1089,26 +1410,31 @@ Examples:
 
         # Warn if over-subscribing significantly
         if total_processes > cpu_count * 1.5:
-            print(
-                f"WARNING: Running {parallel_exports} exports with {workers_per_export} workers each"
+            logger.warning(
+                "Running %d exports with %d workers each",
+                parallel_exports,
+                workers_per_export,
             )
-            print(
-                f"         will create ~{total_processes} processes on {cpu_count} CPU cores"
+            logger.warning(
+                "         will create ~%d processes on %d CPU cores",
+                total_processes,
+                cpu_count,
             )
-            print(
+            logger.warning(
                 "         This may cause performance degradation due to over-subscription."
             )
-            print()
 
             # Suggest better configuration
             suggested_workers = max(1, (cpu_count // parallel_exports) - 1)
-            print(
-                f"SUGGESTION: Try --parallel-exports {parallel_exports} --workers {suggested_workers}"
+            logger.info(
+                "SUGGESTION: Try --parallel-exports %d --workers %d",
+                parallel_exports,
+                suggested_workers,
             )
-            print(
-                f"            or reduce --parallel-exports to {max(1, cpu_count // (workers_per_export + 1))}"
+            logger.info(
+                "            or reduce --parallel-exports to %d",
+                max(1, cpu_count // (workers_per_export + 1)),
             )
-            print()
 
     immich_url = args.immich_url or os.environ.get("IMMICH_INSTANCE_URL")
     immich_key = args.immich_key or os.environ.get("IMMICH_API_KEY")
@@ -1143,18 +1469,20 @@ Examples:
         elif not check_immich_cli():
             # Only error if user has configured Immich but CLI is missing
             print_immich_error()
-            print("Continuing without upload (use --skip-upload to hide this message).")
+            logger.warning(
+                "Continuing without upload (use --skip-upload to hide this message)."
+            )
             immich_enabled = False
         elif not verify_auth(immich_url, immich_key):
-            print(
-                "WARNING: Immich authentication failed (server-info). Skipping upload."
+            logger.warning(
+                "Immich authentication failed (server-info). Skipping upload."
             )
             immich_enabled = False
 
     # Handle upload-only mode
     if args.upload_only:
         if not immich_enabled:
-            print("ERROR: Upload-only mode requires valid Immich configuration")
+            logger.error("Upload-only mode requires valid Immich configuration")
             return 1
 
         input_path = Path(args.input_dir).resolve()
@@ -1179,6 +1507,27 @@ Examples:
     output_base_str = args.output if args.output else None
     output_base = Path(args.output) if args.output else None
 
+    # Handle cross-processor deduplication mode
+    if is_dedup_enabled() and len(dirs_to_process) >= 1:
+        logger.info(
+            "Cross-processor deduplication enabled (CROSS_PROCESSOR_DEDUP=true)"
+        )
+
+        success_count, failed_count, results = run_phased_dedup_processing(
+            dirs_to_process,
+            registry,
+            args,
+            temp_dir,
+            log_file,
+        )
+
+        # Handle uploads if enabled
+        if immich_enabled and args.output:
+            logger.info("Uploading processed files...")
+            # Upload logic would go here
+
+        return 0 if failed_count == 0 else 1
+
     # Handle consolidation mode
     consolidated_paths = set()
     if consolidate_exports and len(dirs_to_process) > 1:
@@ -1195,12 +1544,13 @@ Examples:
 
         for processor, paths in consolidation_groups.items():
             separator = "=" * 70
-            print(separator)
-            print(f"Consolidating {len(paths)} {processor.get_name()} exports...")
-            print(separator)
+            logger.info(separator)
+            logger.info(
+                "Consolidating %d %s exports...", len(paths), processor.get_name()
+            )
+            logger.info(separator)
             for p in paths:
-                print(f"  - {p.name}")
-            print()
+                logger.info("  - %s", p.name)
 
             # Determine output directory for consolidated export
             if output_base:
@@ -1237,7 +1587,7 @@ Examples:
                         (f"{processor.get_name()} (consolidated)", "FAILED")
                     )
             except Exception as e:
-                print(f"ERROR: Consolidation failed for {processor.get_name()}: {e}")
+                logger.error("Consolidation failed for %s: %s", processor.get_name(), e)
                 total_exports_failed += 1
                 export_results.append(
                     (f"{processor.get_name()} (consolidated)", "ERROR")
@@ -1249,10 +1599,11 @@ Examples:
     try:
         if parallel_exports > 1 and len(dirs_to_process) > 1:
             # ============== PARALLEL PROCESSING MODE ==============
-            print(
-                f"Processing {len(dirs_to_process)} exports in parallel ({parallel_exports} at a time)..."
+            logger.info(
+                "Processing %d exports in parallel (%d at a time)...",
+                len(dirs_to_process),
+                parallel_exports,
             )
-            print()
 
             # Create upload queue and start upload worker thread if Immich is enabled
             upload_queue = None
@@ -1277,10 +1628,9 @@ Examples:
                     daemon=True,
                 )
                 upload_thread.start()
-                print(
+                logger.info(
                     "Upload worker started - uploads will be processed sequentially as exports complete"
                 )
-                print()
 
             # Use ProcessPoolExecutor for parallel processing
             with ProcessPoolExecutor(max_workers=parallel_exports) as executor:
@@ -1314,39 +1664,35 @@ Examples:
 
                         if failed_count == 0:
                             total_exports_success += 1
-                            export_results.append((export_name, "✓ SUCCESS"))
+                            export_results.append((export_name, "SUCCESS"))
                         else:
                             total_exports_failed += 1
-                            export_results.append((export_name, "✗ FAILED"))
+                            export_results.append((export_name, "FAILED"))
 
                     except KeyboardInterrupt:
-                        print()
-                        print()
-                        print("Processing interrupted by user")
+                        logger.warning("Processing interrupted by user")
                         total_exports_failed += 1
-                        export_results.append((export_dir.name, "✗ INTERRUPTED"))
+                        export_results.append((export_dir.name, "INTERRUPTED"))
                         # Cancel remaining futures
                         for f in future_to_export:
                             f.cancel()
                         raise
                     except Exception as e:
-                        print(
-                            f"ERROR: Export {export_dir.name} failed with exception: {e}"
+                        logger.error(
+                            "Export %s failed with exception: %s", export_dir.name, e
                         )
                         total_exports_failed += 1
-                        export_results.append((export_dir.name, "✗ ERROR"))
+                        export_results.append((export_dir.name, "ERROR"))
 
             # Wait for upload queue to finish if it exists
             if upload_queue is not None:
-                print()
-                print(
+                logger.info(
                     "All processing complete. Waiting for remaining uploads to finish..."
                 )
                 upload_queue.put((None, None))  # Sentinel to stop upload worker
                 if upload_thread:
                     upload_thread.join(timeout=3600)  # Wait up to 1 hour for uploads
-                print("All uploads complete.")
-                print()
+                logger.info("All uploads complete.")
 
             # Clean up the manager
             if manager is not None:
@@ -1366,13 +1712,14 @@ Examples:
                     if len(dirs_to_process) > 1:
                         # Multi-export mode: add visual separator and export indicator
                         mega_separator = "#" * 70
-                        print()
-                        print(mega_separator)
-                        print(
-                            f"EXPORT {export_idx}/{len(dirs_to_process)}: {export_dir.name}"
+                        logger.info(mega_separator)
+                        logger.info(
+                            "EXPORT %d/%d: %s",
+                            export_idx,
+                            len(dirs_to_process),
+                            export_dir.name,
                         )
-                        print(mega_separator)
-                        print()
+                        logger.info(mega_separator)
 
                         # Create export-specific output directory to avoid mixing data
                         if output_base:
@@ -1404,17 +1751,17 @@ Examples:
 
                         if failed_count == 0:
                             total_exports_success += 1
-                            export_results.append((export_dir.name, "✓ SUCCESS"))
+                            export_results.append((export_dir.name, "SUCCESS"))
                         else:
                             total_exports_failed += 1
-                            export_results.append((export_dir.name, "✗ FAILED"))
+                            export_results.append((export_dir.name, "FAILED"))
 
                     except KeyboardInterrupt:
                         # Restore original output path if we modified it
                         if len(dirs_to_process) > 1 and output_base:
                             args.output = str(output_base)
                         total_exports_failed += 1
-                        export_results.append((export_dir.name, "✗ INTERRUPTED"))
+                        export_results.append((export_dir.name, "INTERRUPTED"))
                         raise  # Stop processing remaining exports
 
                 finally:
@@ -1423,31 +1770,36 @@ Examples:
                         remove_export_log_handler(export_log_handler)
 
     except KeyboardInterrupt:
-        print()
-        print()
-        print("Processing interrupted by user")
+        logger.warning("Processing interrupted by user")
 
     # Overall summary for multi-export mode
     if len(dirs_to_process) > 1:
         mega_separator = "#" * 70
-        print()
-        print(mega_separator)
-        print("OVERALL SUMMARY")
-        print(mega_separator)
-        print()
+        logger.info(mega_separator)
+        logger.info("OVERALL SUMMARY")
+        logger.info(mega_separator)
 
         for export_name, status in export_results:
-            print(f"  {status:15s} {export_name}")
+            logger.info("  %-15s %s", status, export_name)
 
-        print()
-        print(
-            f"Total: {total_exports_success} succeeded, {total_exports_failed} failed "
-            f"out of {len(dirs_to_process)} export(s)"
+        logger.info(
+            "Total: %d succeeded, %d failed out of %d export(s)",
+            total_exports_success,
+            total_exports_failed,
+            len(dirs_to_process),
         )
-        print(mega_separator)
+        logger.info(mega_separator)
 
     return 0 if total_exports_failed == 0 else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    finally:
+        # Restore terminal state in case Rich progress bars left it in a bad state
+        # This handles cases where Ctrl+C or crashes occur during progress rendering
+        try:
+            os.system("stty sane 2>/dev/null")
+        except Exception:
+            pass

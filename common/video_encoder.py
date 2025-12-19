@@ -139,39 +139,47 @@ class VideoEncoder:
                 "ffmpeg",
                 "-hide_banner",
             ]
-            
+
             # VAAPI encoders need hardware device initialization
             if "_vaapi" in encoder_name:
-                test_cmd.extend([
-                    "-init_hw_device",
-                    "vaapi=va:/dev/dri/renderD128",
-                    "-hwaccel",
-                    "vaapi",
-                    "-hwaccel_output_format",
-                    "vaapi",
-                ])
-            
-            test_cmd.extend([
-                "-f",
-                "lavfi",
-                "-i",
-                "color=c=black:s=320x240:d=0.1",
-            ])
-            
+                test_cmd.extend(
+                    [
+                        "-init_hw_device",
+                        "vaapi=va:/dev/dri/renderD128",
+                        "-hwaccel",
+                        "vaapi",
+                        "-hwaccel_output_format",
+                        "vaapi",
+                    ]
+                )
+
+            test_cmd.extend(
+                [
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=320x240:d=0.1",
+                ]
+            )
+
             # VAAPI encoders need format conversion
             if "_vaapi" in encoder_name:
-                test_cmd.extend([
-                    "-vf",
-                    "format=nv12,hwupload",
-                ])
-            
-            test_cmd.extend([
-                "-c:v",
-                encoder_name,
-                "-f",
-                "null",
-                "-",
-            ])
+                test_cmd.extend(
+                    [
+                        "-vf",
+                        "format=nv12,hwupload",
+                    ]
+                )
+
+            test_cmd.extend(
+                [
+                    "-c:v",
+                    encoder_name,
+                    "-f",
+                    "null",
+                    "-",
+                ]
+            )
 
             result = subprocess.run(
                 test_cmd,
@@ -392,50 +400,71 @@ class VideoEncoder:
 
         # Common bitrate arguments used by most encoders
         bitrate_args = [
-            "-b:v", f"{adjusted_mbps:.1f}M",
-            "-maxrate:v", f"{adjusted_mbps * 1.2:.1f}M",
-            "-bufsize:v", f"{adjusted_mbps * 2:.1f}M",
+            "-b:v",
+            f"{adjusted_mbps:.1f}M",
+            "-maxrate:v",
+            f"{adjusted_mbps * 1.2:.1f}M",
+            "-bufsize:v",
+            f"{adjusted_mbps * 2:.1f}M",
         ]
-        
+
         # Encoder-specific configurations
         encoder_configs = {
             "hevc_videotoolbox": [
-                "-c:v", "hevc_videotoolbox",
+                "-c:v",
+                "hevc_videotoolbox",
                 *bitrate_args,
-                "-tag:v", "hvc1",
-                "-allow_sw", "1",
+                "-tag:v",
+                "hvc1",
+                "-allow_sw",
+                "1",
             ],
             "hevc_vaapi": [
-                "-c:v", "hevc_vaapi",
+                "-c:v",
+                "hevc_vaapi",
                 *bitrate_args,
             ],
             "hevc_nvenc": [
-                "-c:v", "hevc_nvenc",
-                "-preset", "p4",
+                "-c:v",
+                "hevc_nvenc",
+                "-preset",
+                "p4",
                 *bitrate_args,
-                "-spatial_aq", "1",
-                "-temporal_aq", "1",
+                "-spatial_aq",
+                "1",
+                "-temporal_aq",
+                "1",
             ],
             "hevc_qsv": [
-                "-c:v", "hevc_qsv",
-                "-preset", "medium",
+                "-c:v",
+                "hevc_qsv",
+                "-preset",
+                "medium",
                 *bitrate_args,
-                "-look_ahead", "1",
+                "-look_ahead",
+                "1",
             ],
             "hevc_amf": [
-                "-c:v", "hevc_amf",
-                "-quality", "quality",
-                "-b:v", f"{adjusted_mbps:.1f}M",
-                "-maxrate:v", f"{adjusted_mbps * 1.2:.1f}M",
+                "-c:v",
+                "hevc_amf",
+                "-quality",
+                "quality",
+                "-b:v",
+                f"{adjusted_mbps:.1f}M",
+                "-maxrate:v",
+                f"{adjusted_mbps * 1.2:.1f}M",
             ],
             "libx265": [
-                "-c:v", "libx265",
-                "-preset", "medium",
+                "-c:v",
+                "libx265",
+                "-preset",
+                "medium",
                 *bitrate_args,
-                "-x265-params", "log-level=error",
+                "-x265-params",
+                "log-level=error",
             ],
         }
-        
+
         # Return encoder-specific config or default args
         return encoder_configs.get(self.encoder_name, self.encoder_args.copy())
 
@@ -590,7 +619,6 @@ def is_hardware_acceleration_error(error_message: str) -> bool:
         "No hw frames available",
         "hardware accelerator failed to decode picture",
     ]
-    
+
     error_lower = error_message.lower()
     return any(pattern.lower() in error_lower for pattern in hardware_error_patterns)
-

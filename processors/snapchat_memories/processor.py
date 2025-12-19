@@ -10,21 +10,30 @@ import logging
 import multiprocessing
 import os
 import shutil
-from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+from common.catalog import catalog_media_files
+from common.dedup_service import is_file_primary_by_hash
+from common.file_utils import batch_correct_extensions
+from common.perceptual_hash import compute_content_hash
 from common.dependency_checker import (
     check_exiftool,
     check_ffmpeg,
+    check_pillow,
     print_exiftool_error,
     print_ffmpeg_error,
+    print_pillow_error,
 )
 from common.exiftool_batch import (
     batch_validate_exif,
     batch_rebuild_exif,
     batch_read_existing_metadata,
-    batch_write_metadata_snapchat_memories,
+    batch_write_metadata_requests,
+    DEFAULT_PREAMBLE,
+    DescriptionWriteSpec,
+    GPSData,
+    MetadataWriteRequest,
 )
 from common.failure_tracker import FailureTracker
 from common.filter_banned_files import BannedFilesFilter
@@ -37,6 +46,7 @@ from common.progress import PHASE_PROCESS, progress_bar
 from common.utils import (
     default_worker_count,
     extract_username_from_export_dir,
+    FilenameGenerator,
     get_media_type,
     update_file_timestamps,
 )
@@ -147,12 +157,55 @@ class SnapchatMemoriesProcessor(ProcessorBase):
         return 80  # High priority - specific structure
 
     @staticmethod
-    def process(input_dir: str, output_dir: Optional[str] = None, **kwargs) -> bool:
+    def supports_dedup() -> bool:
+        """Return True - Snapchat Memories supports cross-processor deduplication."""
+        return True
+
+    @staticmethod
+    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
+        """Build catalog of files with hashes and metadata."""
+        input_path = Path(input_dir)
+        workers = kwargs.get("workers", 4)
+
+        # Find media directory (may be in memories/ subdirectory)
+        media_dir = input_path / "media"
+        if not media_dir.exists():
+            memories_subdir = input_path / "memories"
+            if memories_subdir.exists():
+                media_dir = memories_subdir / "media"
+
+        if not media_dir or not media_dir.exists():
+            logger.warning(f"No media directory found in: {input_path}")
+            return {
+                "processor": "Snapchat Memories",
+                "input_dir": str(input_path),
+                "files": [],
+            }
+
+        media_files = [
+            f for f in media_dir.iterdir() if f.is_file() and get_media_type(f)
+        ]
+
+        return catalog_media_files(
+            processor_name="Snapchat Memories",
+            input_path=input_path,
+            media_files=media_files,
+            workers=workers,
+        )
+
+    @staticmethod
+    def process(
+        input_dir: str,
+        output_dir: Optional[str] = None,
+        dedup_manifest: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> bool:
         """Process Snapchat Memories export
 
         Args:
             input_dir: Path to input directory
             output_dir: Optional base output directory
+            dedup_manifest: Optional deduplication manifest
             **kwargs: Additional arguments (verbose, workers)
 
         Returns:
@@ -210,6 +263,7 @@ class SnapchatMemoriesProcessor(ProcessorBase):
                 verbose=kwargs.get("verbose", False),
                 workers=kwargs.get("workers"),
                 export_username_override=export_username_override,
+                dedup_manifest=dedup_manifest,
             )
             return True
 
@@ -235,52 +289,62 @@ def get_processor():
 # ============================================================================
 
 
-def check_pillow():
-    """Check if PIL/Pillow is installed"""
-    try:
-        __import__("PIL")
-        return True
-    except ImportError:
-        return False
+def _build_metadata_requests(
+    file_info: List[Tuple[str, dict, str]],
+) -> List[MetadataWriteRequest]:
+    """Build MetadataWriteRequest objects for Snapchat Memories files.
 
-
-def generate_unique_filename(memory_data, export_username, extension, used_filenames):
-    """Generate a unique filename for a processed memory
-
-    Format: snap-memories-{exportUsername}-YYYYMMDD.extension
-    If duplicate: snap-memories-{exportUsername}-YYYYMMDD_N.extension
+    Filters out MKV files as they already have metadata embedded during overlay creation.
 
     Args:
-        memory_data: Dict containing memory metadata
-        export_username: Username extracted from input directory
-        extension: File extension (including the dot)
-        used_filenames: Set tracking already-used filenames
+        file_info: List of (file_path, memory_data, export_username) tuples
 
     Returns:
-        str: Generated filename
+        List of MetadataWriteRequest objects
     """
-    # Parse date from memory_data
-    # Format: "2021-01-04 23:08:30 UTC"
-    date_str = memory_data["date"]
-    date_obj = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S UTC")
-    date_key = date_obj.strftime("%Y%m%d")
+    requests: List[MetadataWriteRequest] = []
 
-    # Generate base filename without sequence
-    base_filename = f"snap-memories-{export_username}-{date_key}{extension}"
+    for file_path, memory_data, export_username in file_info:
+        # Skip MKV files (they already have metadata from overlay creation)
+        if file_path.endswith(".mkv"):
+            continue
 
-    # Check if base filename is already used
-    if base_filename not in used_filenames:
-        used_filenames.add(base_filename)
-        return base_filename
+        # Build datetime tags
+        datetime_tags: List[Tuple[str, str]] = []
+        date_str = memory_data.get("date")
+        if date_str:
+            exif_date = date_str.replace("-", ":").replace(" UTC", "")
+            datetime_tags = [
+                ("DateTimeOriginal", exif_date),
+                ("CreateDate", exif_date),
+                ("ModifyDate", exif_date),
+            ]
 
-    # If duplicate, find next available sequence number
-    sequence = 2
-    while True:
-        filename = f"snap-memories-{export_username}-{date_key}_{sequence}{extension}"
-        if filename not in used_filenames:
-            used_filenames.add(filename)
-            return filename
-        sequence += 1
+        # Build GPS data
+        gps: Optional[GPSData] = None
+        if "latitude" in memory_data and "longitude" in memory_data:
+            gps = GPSData(
+                latitude=float(memory_data["latitude"]),
+                longitude=float(memory_data["longitude"]),
+            )
+
+        # Build description
+        default_description = f"Source: Snapchat/{export_username}/memories"
+
+        requests.append(
+            MetadataWriteRequest(
+                file_path=file_path,
+                arg_preamble=DEFAULT_PREAMBLE,
+                datetime_tags=datetime_tags,
+                gps=gps,
+                description=DescriptionWriteSpec(
+                    default_description=default_description,
+                ),
+                processor_name="snapchat_memories",
+            )
+        )
+
+    return requests
 
 
 def _update_memory_timestamps(file_path, memory_data):
@@ -412,6 +476,7 @@ def process_logic(
     verbose=False,
     workers=None,
     export_username_override=None,
+    dedup_manifest: Optional[Dict[str, Any]] = None,
 ):
     """Core processing logic for Snapchat Memories exports
 
@@ -421,6 +486,7 @@ def process_logic(
         verbose: Enable verbose logging
         workers: Number of parallel workers (None = auto-detect)
         export_username_override: Optional override for export username (used for consolidated exports)
+        dedup_manifest: Optional deduplication manifest for filtering secondary files
     """
     # Logging is configured by the main process
     # Verbose mode enables detailed logging to file
@@ -441,9 +507,7 @@ def process_logic(
 
     # Check for Pillow (for image overlay processing)
     if not check_pillow():
-        logger.error("PIL/Pillow is not installed")
-        logger.error("Please install Pillow:")
-        logger.error("  pip install Pillow")
+        print_pillow_error()
         return
 
     logger.info("Snapchat Memories Downloader - Step 2: Process")
@@ -492,7 +556,9 @@ def process_logic(
                 if banned_filter.is_banned(media_file):
                     continue
                 if media_file.name not in referenced_files:
-                    logger.debug(f"Orphaned media file (no metadata): {media_file.name}")
+                    logger.debug(
+                        f"Orphaned media file (no metadata): {media_file.name}"
+                    )
                     failure_tracker.add_orphaned_media(
                         media_path=media_file,
                         reason="No matching metadata found",
@@ -509,10 +575,14 @@ def process_logic(
 
     # Pre-generate all output filenames to avoid race conditions
     logger.debug("Pre-generating filenames...")
-    used_filenames = set()
+    # Use custom timestamp format for Snapchat memories: "2021-01-04 23:08:30 UTC"
+    filename_gen = FilenameGenerator(
+        "snap-memories", timestamp_format="%Y-%m-%d %H:%M:%S UTC"
+    )
     processing_tasks = []
     skipped_count = 0
 
+    skipped_dedup = 0
     for memory in memories:
         media_filename = memory["media_filename"]
         overlay_filename = memory.get("overlay_filename")
@@ -532,11 +602,26 @@ def process_logic(
                 skipped_count += 1
                 continue
 
+        # Build full path for dedup check
+        full_media_path = os.path.join(raw_dir, "media", media_filename)
+
+        # Skip secondary files based on dedup manifest (using hash-based lookup)
+        if dedup_manifest:
+            content_hash = compute_content_hash(full_media_path)
+            if not is_file_primary_by_hash(
+                dedup_manifest, content_hash, "Snapchat Memories"
+            ):
+                skipped_dedup += 1
+                continue
+
         file_ext = os.path.splitext(media_filename)[1].lower()
 
-        # Generate output filename
-        output_filename = generate_unique_filename(
-            memory, export_username, file_ext, used_filenames
+        # Generate output filename using shared FilenameGenerator
+        # Snapchat uses "date" field instead of "timestamp"
+        output_filename = filename_gen.generate(
+            memory.get("date"),
+            export_username,
+            file_ext,
         )
 
         # Create task tuple for worker
@@ -544,12 +629,15 @@ def process_logic(
             (memory, output_filename, raw_dir, output_path, export_username)
         )
 
+    if skipped_dedup > 0:
+        logger.info(f"Skipped {skipped_dedup} secondary files (dedup)")
+
     # Report on filtered files
     if skipped_count > 0:
         logger.info(f"Skipped {skipped_count} banned files")
 
     # Phase 1: Create all files with overlays in parallel
-    print(f"\nProcessing {len(processing_tasks)} memories to {output_path}/")
+    logger.info("Processing %d memories to %s/", len(processing_tasks), output_path)
     logger.info("=" * 50)
 
     success_count = 0
@@ -593,7 +681,18 @@ def process_logic(
         f"\nCreated {success_count} files ({len(file_info)} need EXIF processing)"
     )
 
-    # Phase 3: Batch process EXIF operations on non-MKV files
+    # Phase 3: Correct file extensions based on actual content
+    if file_paths:
+        corrections = batch_correct_extensions([Path(p) for p in file_paths])
+        if corrections:
+            # Update file_paths and file_info with corrected paths
+            file_paths = [corrections.get(p, p) for p in file_paths]
+            file_info = [
+                (corrections.get(fp, fp), mem, eu)
+                for fp, mem, eu in file_info
+            ]
+
+    # Phase 4: Batch process EXIF operations on non-MKV files
     exif_rebuilt_count = 0
     if file_paths:
         logger.info("Batch processing EXIF metadata...")
@@ -609,7 +708,8 @@ def process_logic(
 
         # Batch read and write metadata
         existing_metadata_map = batch_read_existing_metadata(file_paths)
-        batch_write_metadata_snapchat_memories(file_info, existing_metadata_map)
+        requests = _build_metadata_requests(file_info)
+        batch_write_metadata_requests(requests, existing_metadata_map)
 
     # Handle failures - copy orphaned files and generate report
     failure_tracker.handle_failures(output_path)
@@ -626,7 +726,7 @@ def process_logic(
             "Total memories": len(memories),
         },
     )
-    print("\nNote: Videos with overlays are saved as multi-track MKV files:")
-    print("  - Track 0 (default): Video with overlay embedded")
-    print("  - Track 1: Original video without overlay")
-    print("  Switch tracks in VLC: Video > Video Track > Select track")
+    logger.info("Note: Videos with overlays are saved as multi-track MKV files:")
+    logger.info("  - Track 0 (default): Video with overlay embedded")
+    logger.info("  - Track 1: Original video without overlay")
+    logger.info("  Switch tracks in VLC: Video > Video Track > Select track")

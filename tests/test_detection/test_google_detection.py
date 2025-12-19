@@ -5,8 +5,6 @@ Tests verify that each processor correctly identifies valid export
 structures and rejects invalid ones.
 """
 
-
-
 from tests.fixtures.generators import (
     create_google_photos_export,
     create_google_chat_export,

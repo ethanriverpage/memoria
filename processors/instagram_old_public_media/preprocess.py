@@ -20,9 +20,9 @@ import sys
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
-import multiprocessing
 from common.progress import PHASE_PREPROCESS, futures_progress
-from common.utils import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+from common.processing import print_preprocessing_stats
+from common.utils import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, default_worker_count
 from common.filter_banned_files import BannedFilesFilter
 from common.failure_tracker import FailureTracker
 
@@ -53,7 +53,9 @@ class OldInstagramPreprocessor:
         self.log_file = output_base / "preprocessing.log"
 
         # Final output directory for processor (for failure tracking)
-        self.final_output_dir = Path(final_output_dir) if final_output_dir else output_base
+        self.final_output_dir = (
+            Path(final_output_dir) if final_output_dir else output_base
+        )
 
         # Initialize banned files filter
         self.banned_filter = BannedFilesFilter()
@@ -65,12 +67,8 @@ class OldInstagramPreprocessor:
         )
 
         # Threading configuration
-        if workers is None:
-            # Default to CPU count - 1, minimum 1
-            self.workers = max(1, multiprocessing.cpu_count() - 1)
-        else:
-            self.workers = max(1, workers)
-        
+        self.workers = workers if workers is not None else default_worker_count()
+
         # Thread-safe locks for shared data structures
         self.stats_lock = Lock()
         self.log_lock = Lock()
@@ -150,18 +148,18 @@ class OldInstagramPreprocessor:
 
                 f.write(f"\nTotal logged issues: {len(self.log_entries)}\n")
 
-            print(f"SUCCESS: Saved preprocessing log to {self.log_file}")
+            logger.info("Saved preprocessing log to %s", self.log_file)
         except Exception as e:
-            print(f"WARNING: Failed to save log file: {e}")
+            logger.warning("Failed to save log file: %s", e)
 
     def validate_export(self) -> bool:
         """Validate that export directory exists and contains media files"""
         if not self.export_path.exists():
-            print(f"ERROR: Export path does not exist: {self.export_path}")
+            logger.error("Export path does not exist: %s", self.export_path)
             return False
 
         if not self.export_path.is_dir():
-            print(f"ERROR: Export path is not a directory: {self.export_path}")
+            logger.error("Export path is not a directory: %s", self.export_path)
             return False
 
         # Check if at least one media file exists
@@ -170,7 +168,7 @@ class OldInstagramPreprocessor:
             media_files.extend(list(self.export_path.glob(f"*{ext}")))
 
         if not media_files:
-            print(f"ERROR: No media files found in {self.export_path}")
+            logger.error("No media files found in %s", self.export_path)
             return False
 
         return True
@@ -225,10 +223,11 @@ class OldInstagramPreprocessor:
         """
         catalog = {}
 
-        print("\nScanning export directory...")
+        logger.info("Scanning export directory...")
 
         # Scan all files in export directory
         import os
+
         with os.scandir(self.export_path) as entries:
             for entry in entries:
                 if not entry.is_file():
@@ -368,15 +367,15 @@ class OldInstagramPreprocessor:
     def _process_single_post(self, post_tuple: Tuple[str, Dict]) -> Dict:
         """
         Process a single post (used by multithreaded processing)
-        
+
         Args:
             post_tuple: Tuple of (base_name, entry dict)
-            
+
         Returns:
             Post data dict
         """
         base_name, entry = post_tuple
-        
+
         post_data = {
             "media_type": "posts",
             "caption": "",
@@ -430,7 +429,7 @@ class OldInstagramPreprocessor:
         """
         all_posts = []
 
-        print(f"\nProcessing posts (using {self.workers} workers)...")
+        logger.info("Processing posts (using %d workers)...", self.workers)
 
         catalog_items = list(catalog.items())
 
@@ -441,9 +440,11 @@ class OldInstagramPreprocessor:
                 executor.submit(self._process_single_post, post_tuple): post_tuple[0]
                 for post_tuple in catalog_items
             }
-            
+
             # Collect results as they complete
-            for future in futures_progress(future_to_post, PHASE_PREPROCESS, "Parsing posts", unit="post"):
+            for future in futures_progress(
+                future_to_post, PHASE_PREPROCESS, "Parsing posts", unit="post"
+            ):
                 try:
                     post_data = future.result()
                     all_posts.append(post_data)
@@ -466,8 +467,10 @@ class OldInstagramPreprocessor:
         # Create output media directory
         self.media_output_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info("\nCopying media files...")
-        logger.debug(f"Copying {self.stats['total_media_files']} media files to {self.media_output_dir}")
+        logger.info("Copying media files...")
+        logger.debug(
+            f"Copying {self.stats['total_media_files']} media files to {self.media_output_dir}"
+        )
 
         for post in metadata:
             media_files = post.get("media_files", [])
@@ -485,7 +488,9 @@ class OldInstagramPreprocessor:
                     continue
 
                 try:
-                    logger.debug(f"Copying {filename} ({source_path.stat().st_size} bytes)")
+                    logger.debug(
+                        f"Copying {filename} ({source_path.stat().st_size} bytes)"
+                    )
                     shutil.copy2(source_path, dest_path)
                     self.stats["media_copied"] += 1
                 except Exception as e:
@@ -516,31 +521,30 @@ class OldInstagramPreprocessor:
             with open(self.metadata_file, "w", encoding="utf-8") as f:
                 json.dump(output, f, indent=2, ensure_ascii=False)
 
-            print(f"\nSUCCESS: Saved metadata to {self.metadata_file}")
+            logger.info("Saved metadata to %s", self.metadata_file)
         except Exception as e:
             logger.error(f"Failed to save metadata: {e}")
             sys.exit(1)
 
     def print_statistics(self) -> None:
-        """Print processing statistics"""
-        print("\n" + "=" * 70)
-        print("PREPROCESSING STATISTICS")
-        print("=" * 70)
-        print(f"Total posts processed:      {self.stats['total_posts']:>6}")
-        print(f"Total media files found:    {self.stats['total_media_files']:>6}")
-        print(f"Media files copied:         {self.stats['media_copied']:>6}")
-        print(f"Carousel posts:             {self.stats['carousel_posts']:>6}")
-        print(f"Posts with JSON metadata:   {self.stats['posts_with_json']:>6}")
-        print(f"Posts with TXT captions:    {self.stats['posts_with_txt']:>6}")
-        print(f"Posts with only media:      {self.stats['posts_with_only_media']:>6}")
-        print(f"Banned files skipped:       {self.stats['banned_files_skipped']:>6}")
-        print("=" * 70)
+        """Print processing statistics as a compact table."""
+        stats = {
+            "Posts processed": self.stats["total_posts"],
+            "Media files found": self.stats["total_media_files"],
+            "Files copied": self.stats["media_copied"],
+            "Carousel posts": self.stats["carousel_posts"],
+            "With JSON metadata": self.stats["posts_with_json"],
+            "With TXT captions": self.stats["posts_with_txt"],
+            "Media only": self.stats["posts_with_only_media"],
+            "Banned skipped": self.stats["banned_files_skipped"],
+        }
+        print_preprocessing_stats("Preprocessing Stats", stats)
 
     def process(self) -> None:
         """Main processing pipeline"""
         logger.info("Starting Old Instagram Export Preprocessing")
-        print(f"Export path: {self.export_path}")
-        print(f"Output path: {self.output_dir}\n")
+        logger.info("Export path: %s", self.export_path)
+        logger.info("Output path: %s", self.output_dir)
 
         # Validate export structure
         if not self.validate_export():
@@ -615,7 +619,9 @@ Examples:
     export_path = Path(args.export_directory)
     output_path = Path(args.output) if args.output else None
 
-    preprocessor = OldInstagramPreprocessor(export_path, output_path, workers=args.workers)
+    preprocessor = OldInstagramPreprocessor(
+        export_path, output_path, workers=args.workers
+    )
     preprocessor.process()
 
 

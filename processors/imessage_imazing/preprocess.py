@@ -22,11 +22,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import xxhash
-
 from common.failure_tracker import FailureTracker
-from common.file_utils import detect_and_correct_extension
 from common.filter_banned_files import BannedFilesFilter
+from common.perceptual_hash import compute_content_hash
+from common.processing import print_preprocessing_stats
+from common.utils import default_worker_count
 from common.progress import PHASE_PREPROCESS, progress_bar
 
 logger = logging.getLogger(__name__)
@@ -164,7 +164,7 @@ class ImazingPreprocessor:
         self.metadata_file = self.output_dir / "metadata.json"
 
         # Parallel processing worker count
-        self.workers = workers or 8
+        self.workers = workers if workers is not None else default_worker_count()
 
         # Owner name (device owner) - extract from Device-Info.txt if not provided
         self.owner_name = owner_name or self._extract_owner_name()
@@ -195,7 +195,6 @@ class ImazingPreprocessor:
             "files_copied": 0,
             "csv_messages_loaded": 0,
             "conversations": 0,
-            "extensions_corrected": 0,
         }
 
     def _extract_owner_name(self) -> str:
@@ -344,11 +343,7 @@ class ImazingPreprocessor:
         Returns:
             Hexadecimal hash digest
         """
-        hasher = xxhash.xxh64()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(65536), b""):
-                hasher.update(chunk)
-        return hasher.hexdigest()
+        return compute_content_hash(file_path)
 
     def _compute_hashes_parallel(
         self, media_files: List[Path]
@@ -434,27 +429,15 @@ class ImazingPreprocessor:
         return results
 
     def _generate_output_filename(self, source_path: Path) -> str:
-        """Generate output filename with corrected extension based on actual file type.
-
-        Detects the actual file format using python-magic and corrects the extension
-        if it doesn't match the file content. This prevents metadata write failures
-        that occur when exiftool encounters mismatched file types.
+        """Generate output filename from source path.
 
         Args:
             source_path: Path to source file
 
         Returns:
-            Output filename with correct extension
+            Output filename
         """
-        original_name = source_path.name
-
-        def log_correction(msg, details):
-            logger.debug(f"{msg} - {details}")
-            self.stats["extensions_corrected"] += 1
-
-        return detect_and_correct_extension(
-            source_path, original_name, log_callback=log_correction
-        )
+        return source_path.name
 
     def _build_conversations(
         self, hash_to_files: Dict[str, List[Dict]]
@@ -725,15 +708,13 @@ class ImazingPreprocessor:
         return True
 
     def _print_statistics(self) -> None:
-        """Print processing statistics."""
-        print("\n" + "=" * 60)
-        print("IMAZING IMESSAGE PREPROCESSING STATISTICS")
-        print("=" * 60)
-        print(f"Media files found:          {self.stats['media_files_found']:>6}")
-        print(f"CSV messages loaded:        {self.stats['csv_messages_loaded']:>6}")
-        print(f"Conversations:              {self.stats['conversations']:>6}")
-        print(f"Unique files:               {self.stats['unique_files']:>6}")
-        print(f"Duplicate files removed:    {self.stats['duplicate_files']:>6}")
-        print(f"Files copied:               {self.stats['files_copied']:>6}")
-        print(f"Extensions corrected:       {self.stats['extensions_corrected']:>6}")
-        print("=" * 60)
+        """Print processing statistics as a compact table."""
+        stats = {
+            "Media files found": self.stats["media_files_found"],
+            "CSV messages loaded": self.stats["csv_messages_loaded"],
+            "Conversations": self.stats["conversations"],
+            "Unique files": self.stats["unique_files"],
+            "Duplicates removed": self.stats["duplicate_files"],
+            "Files copied": self.stats["files_copied"],
+        }
+        print_preprocessing_stats("iMazing Preprocessing", stats)

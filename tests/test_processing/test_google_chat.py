@@ -18,7 +18,9 @@ from tests.fixtures.media_samples import write_media_file
 class TestGoogleChatConversations:
     """Tests for conversation handling in Google Chat processing."""
 
-    def test_group_conversation_with_media(self, google_chat_processor, temp_export_dir, temp_output_dir):
+    def test_group_conversation_with_media(
+        self, google_chat_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process group conversation with attached media."""
         create_google_chat_export(
             temp_export_dir,
@@ -38,14 +40,16 @@ class TestGoogleChatConversations:
                     },
                 ]
             },
-            include_media=True
+            include_media=True,
         )
 
         group_dir = temp_export_dir / "Google Chat" / "Groups" / "Test Group"
         assert (group_dir / "messages.json").exists()
         assert (group_dir / "photo.jpg").exists()
 
-    def test_dm_conversation_with_media(self, google_chat_processor, temp_export_dir, temp_output_dir):
+    def test_dm_conversation_with_media(
+        self, google_chat_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process DM conversation with attached media."""
         create_google_chat_export(
             temp_export_dir,
@@ -59,14 +63,16 @@ class TestGoogleChatConversations:
                     },
                 ]
             },
-            include_media=True
+            include_media=True,
         )
 
         dm_dir = temp_export_dir / "Google Chat" / "Users" / "Other User"
         assert (dm_dir / "messages.json").exists()
         assert (dm_dir / "document.png").exists()
 
-    def test_conversation_without_attachments(self, google_chat_processor, temp_export_dir, temp_output_dir):
+    def test_conversation_without_attachments(
+        self, google_chat_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process conversation with text-only messages."""
         create_google_chat_export(
             temp_export_dir,
@@ -86,7 +92,7 @@ class TestGoogleChatConversations:
                     },
                 ]
             },
-            include_media=False
+            include_media=False,
         )
 
         group_dir = temp_export_dir / "Google Chat" / "Groups" / "Text Only"
@@ -99,14 +105,14 @@ class TestGoogleChatConversations:
 class TestGoogleChatEdgeCases:
     """Tests for edge cases in Google Chat processing."""
 
-    def test_empty_conversation(self, google_chat_processor, temp_export_dir, temp_output_dir):
+    def test_empty_conversation(
+        self, google_chat_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle conversation with no messages."""
         create_google_chat_export(
             temp_export_dir,
-            conversations={
-                "Groups/Empty Group": []
-            },
-            include_media=False
+            conversations={"Groups/Empty Group": []},
+            include_media=False,
         )
 
         group_dir = temp_export_dir / "Google Chat" / "Groups" / "Empty Group"
@@ -115,7 +121,9 @@ class TestGoogleChatEdgeCases:
         messages_data = json.loads((group_dir / "messages.json").read_text())
         assert messages_data["messages"] == []
 
-    def test_multiple_attachments_per_message(self, google_chat_processor, temp_export_dir, temp_output_dir):
+    def test_multiple_attachments_per_message(
+        self, google_chat_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle message with multiple attachments."""
         chat_dir = temp_export_dir / "Google Chat" / "Groups" / "Multi Attach"
         chat_dir.mkdir(parents=True)
@@ -145,7 +153,9 @@ class TestGoogleChatEdgeCases:
         assert (chat_dir / "file2.png").exists()
         assert (chat_dir / "file3.mp4").exists()
 
-    def test_special_characters_in_conversation_name(self, google_chat_processor, temp_export_dir, temp_output_dir):
+    def test_special_characters_in_conversation_name(
+        self, google_chat_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle conversation names with special characters."""
         create_google_chat_export(
             temp_export_dir,
@@ -159,31 +169,55 @@ class TestGoogleChatEdgeCases:
                     },
                 ]
             },
-            include_media=False
+            include_media=False,
         )
 
-        group_dir = temp_export_dir / "Google Chat" / "Groups" / "Project Team (2021) - Q4!"
+        group_dir = (
+            temp_export_dir / "Google Chat" / "Groups" / "Project Team (2021) - Q4!"
+        )
         assert group_dir.exists()
 
-    def test_mixed_groups_and_users(self, google_chat_processor, temp_export_dir, temp_output_dir):
+    def test_mixed_groups_and_users(
+        self, google_chat_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle export with both groups and DMs."""
         create_google_chat_export(
             temp_export_dir,
             conversations={
                 "Groups/Group One": [
-                    {"creator": {"name": "User"}, "created_date": "2021-01-01T12:00:00Z", "text": "Hi", "attached_files": []}
+                    {
+                        "creator": {"name": "User"},
+                        "created_date": "2021-01-01T12:00:00Z",
+                        "text": "Hi",
+                        "attached_files": [],
+                    }
                 ],
                 "Groups/Group Two": [
-                    {"creator": {"name": "User"}, "created_date": "2021-01-02T12:00:00Z", "text": "Hello", "attached_files": []}
+                    {
+                        "creator": {"name": "User"},
+                        "created_date": "2021-01-02T12:00:00Z",
+                        "text": "Hello",
+                        "attached_files": [],
+                    }
                 ],
                 "Users/Alice": [
-                    {"creator": {"name": "Alice"}, "created_date": "2021-01-03T12:00:00Z", "text": "Hey", "attached_files": []}
+                    {
+                        "creator": {"name": "Alice"},
+                        "created_date": "2021-01-03T12:00:00Z",
+                        "text": "Hey",
+                        "attached_files": [],
+                    }
                 ],
                 "Users/Bob": [
-                    {"creator": {"name": "Bob"}, "created_date": "2021-01-04T12:00:00Z", "text": "Hi there", "attached_files": []}
+                    {
+                        "creator": {"name": "Bob"},
+                        "created_date": "2021-01-04T12:00:00Z",
+                        "text": "Hi there",
+                        "attached_files": [],
+                    }
                 ],
             },
-            include_media=False
+            include_media=False,
         )
 
         assert (temp_export_dir / "Google Chat" / "Groups" / "Group One").exists()
@@ -195,7 +229,9 @@ class TestGoogleChatEdgeCases:
 class TestGoogleChatMediaTypes:
     """Tests for various media type handling in Google Chat."""
 
-    def test_image_attachment(self, google_chat_processor, temp_export_dir, temp_output_dir):
+    def test_image_attachment(
+        self, google_chat_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle image attachments."""
         create_google_chat_export(
             temp_export_dir,
@@ -209,12 +245,16 @@ class TestGoogleChatMediaTypes:
                     },
                 ]
             },
-            include_media=True
+            include_media=True,
         )
 
-        assert (temp_export_dir / "Google Chat" / "Users" / "Test" / "photo.jpg").exists()
+        assert (
+            temp_export_dir / "Google Chat" / "Users" / "Test" / "photo.jpg"
+        ).exists()
 
-    def test_video_attachment(self, google_chat_processor, temp_export_dir, temp_output_dir):
+    def test_video_attachment(
+        self, google_chat_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle video attachments."""
         chat_dir = temp_export_dir / "Google Chat" / "Users" / "Test"
         chat_dir.mkdir(parents=True)
@@ -233,4 +273,3 @@ class TestGoogleChatMediaTypes:
         write_media_file(chat_dir / "video.mp4", "mp4")
 
         assert (chat_dir / "video.mp4").exists()
-

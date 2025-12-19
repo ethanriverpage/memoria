@@ -9,16 +9,24 @@ import json
 import logging
 import os
 import shutil
-from datetime import datetime
-from pathlib import Path
-from typing import Optional
+from concurrent.futures import ThreadPoolExecutor
 
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from common.catalog import catalog_media_files
+from common.dedup_service import filter_primary_files
 from common.dependency_checker import check_exiftool, print_exiftool_error
+from common.file_utils import batch_correct_extensions
+from common.perceptual_hash import compute_content_hash
 from common.exiftool_batch import (
     batch_validate_exif,
     batch_rebuild_exif,
     batch_read_existing_metadata,
-    batch_write_metadata_google_chat,
+    batch_write_metadata_requests,
+    DescriptionWriteSpec,
+    MetadataWriteRequest,
+    PREAMBLE_WITH_IGNORE_ERRORS,
 )
 from common.processing import (
     process_batches_parallel,
@@ -26,7 +34,9 @@ from common.processing import (
     temp_processing_directory,
 )
 from common.utils import (
+    ALL_MEDIA_EXTENSIONS,
     default_worker_count,
+    FilenameGenerator,
     is_preprocessed_directory,
     sanitize_filename,
     update_file_timestamps,
@@ -109,12 +119,67 @@ class GoogleChatProcessor(ProcessorBase):
         return 50  # Medium priority
 
     @staticmethod
-    def process(input_dir: str, output_dir: Optional[str] = None, **kwargs) -> bool:
+    def supports_dedup() -> bool:
+        """Return True - Google Chat supports cross-processor deduplication."""
+        return True
+
+    @staticmethod
+    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
+        """Build catalog of files with hashes and metadata.
+
+        Scans all media files in the Google Chat export, computes hashes,
+        and returns a catalog structure without copying any files.
+
+        Args:
+            input_dir: Path to input directory
+            **kwargs: Additional arguments (verbose, workers)
+
+        Returns:
+            Catalog dictionary with processor name and file entries.
+        """
+        input_path = Path(input_dir)
+        workers = kwargs.get("workers", 4)
+
+        # Find media in Google Chat structure
+        chat_dir = input_path / "Google Chat"
+        if not chat_dir.exists():
+            return {
+                "processor": "Google Chat",
+                "input_dir": str(input_path),
+                "files": [],
+            }
+
+        media_files = []
+        for subdir in ["Groups", "Users"]:
+            search_dir = chat_dir / subdir
+            if search_dir.exists():
+                for file_path in search_dir.rglob("*"):
+                    if (
+                        file_path.is_file()
+                        and file_path.suffix.lower() in ALL_MEDIA_EXTENSIONS
+                    ):
+                        media_files.append(file_path)
+
+        return catalog_media_files(
+            processor_name="Google Chat",
+            input_path=input_path,
+            media_files=media_files,
+            workers=workers,
+        )
+
+    @staticmethod
+    def process(
+        input_dir: str,
+        output_dir: Optional[str] = None,
+        dedup_manifest: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> bool:
         """Process Google Chat export
 
         Args:
             input_dir: Path to input directory
             output_dir: Optional base output directory
+            dedup_manifest: Optional deduplication manifest
             **kwargs: Additional arguments (verbose, workers, temp_dir)
 
         Returns:
@@ -139,6 +204,7 @@ class GoogleChatProcessor(ProcessorBase):
                 temp_dir=kwargs.get("temp_dir", "../pre"),
                 verbose=kwargs.get("verbose", False),
                 workers=kwargs.get("workers"),
+                dedup_manifest=dedup_manifest,
             )
             return True
 
@@ -164,69 +230,66 @@ def get_processor():
 # ============================================================================
 
 
-def generate_unique_filename(
-    message_data, conversation_name, export_username, extension, used_filenames
-):
-    """Generate a unique filename for a processed media file
-
-    Format: googlechat-{exportUsername}-{conversationName}-YYYYMMDD.extension
-    If duplicate, adds _N suffix: googlechat-{exportUsername}-{conversationName}-YYYYMMDD_N.extension
+def _build_metadata_requests(
+    file_info: List[Tuple[str, dict, str, str]],
+) -> List[MetadataWriteRequest]:
+    """Build MetadataWriteRequest objects for Google Chat files.
 
     Args:
-        message_data: Dict containing message metadata
-        conversation_name: Name of the conversation (original with spaces)
-        export_username: Username extracted from metadata
-        extension: File extension (including the dot)
-        used_filenames: Set tracking already-used filenames
+        file_info: List of (file_path, message_data, conversation_name, export_username) tuples
 
     Returns:
-        str: Generated filename
+        List of MetadataWriteRequest objects
     """
-    # Sanitize conversation name for use in filename
-    sanitized_name = sanitize_filename(conversation_name)
+    requests: List[MetadataWriteRequest] = []
 
-    # Parse date from message_data
-    # Format: "2016-08-23 16:27:32"
-    date_str = message_data["timestamp"]
+    for file_path, message_data, conversation_name, export_username in file_info:
+        # Build datetime tags
+        datetime_tags: List[Tuple[str, str]] = []
+        date_str = message_data["timestamp"]
+        if date_str:
+            exif_date = date_str.replace("-", ":")
+            datetime_tags = [
+                ("DateTimeOriginal", exif_date),
+                ("CreateDate", exif_date),
+                ("ModifyDate", exif_date),
+            ]
 
-    # Handle None timestamp
-    if date_str is None:
-        # Use a fallback date for messages without timestamps
-        date_key = "00000000"
-    else:
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
-        date_key = date_obj.strftime("%Y%m%d")
+        # Build description
+        default_description = f"Source: Google Chat/{export_username}&#xa;Conversation: \"{conversation_name}\"&#xa;Sender: \"{message_data['sender']}\""
 
-    # Generate base filename without sequence
-    base_filename = f"gchat-{export_username}-{sanitized_name}-{date_key}{extension}"
-
-    # Check if filename is unique
-    if base_filename not in used_filenames:
-        used_filenames.add(base_filename)
-        return base_filename
-
-    # If not unique, try adding sequence numbers
-    sequence = 1
-    while True:
-        filename = (
-            f"gchat-{export_username}-{sanitized_name}-{date_key}_{sequence}{extension}"
+        requests.append(
+            MetadataWriteRequest(
+                file_path=file_path,
+                arg_preamble=PREAMBLE_WITH_IGNORE_ERRORS,
+                datetime_tags=datetime_tags,
+                gps=None,
+                description=DescriptionWriteSpec(
+                    default_description=default_description,
+                ),
+                processor_name="google_chat",
+            )
         )
-        if filename not in used_filenames:
-            used_filenames.add(filename)
-            return filename
-        sequence += 1
+
+    return requests
 
 
 def process_media_batch(batch_args):
     """Process a batch of media files (worker function for multiprocessing)
+
+    Copies files, corrects extensions, and updates timestamps.
+    EXIF validation/rebuild and metadata writing happen in the main process.
 
     Args:
         batch_args: List of tuples, each containing (media_file, message_data,
                     conversation_name, output_filename, media_dir, output_dir, export_username)
 
     Returns:
-        List of (success, failed, exif_rebuilt) tuples
+        List of (success, output_path, file_info_tuple) tuples where file_info_tuple is
+        (output_path, message_data, conversation_name, export_username) or None on failure
     """
+    results = []
+
     # Phase 1: Copy all files
     file_paths = []
     file_info = []
@@ -247,6 +310,7 @@ def process_media_batch(batch_args):
 
         if not os.path.exists(media_path):
             logger.warning(f"Media file not found: {media_path}")
+            results.append((False, None, None))
             continue
 
         try:
@@ -257,32 +321,30 @@ def process_media_batch(batch_args):
             )
         except Exception as e:
             logger.error(f"Failed to copy {media_file}: {e}")
+            results.append((False, None, None))
 
     if not file_paths:
-        return [(False, True, False)] * len(batch_args)
+        return results if results else [(False, None, None)] * len(batch_args)
 
-    # Phase 2: Batch validate and rebuild
-    corrupted_files = batch_validate_exif(file_paths)
-    if corrupted_files:
-        batch_rebuild_exif(list(corrupted_files))
+    # Phase 2: Correct file extensions based on actual content
+    corrections = batch_correct_extensions([Path(p) for p in file_paths])
+    if corrections:
+        # Update file_paths and file_info with corrected paths
+        file_paths = [corrections.get(p, p) for p in file_paths]
+        file_info = [
+            (corrections.get(fp, fp), md, cn, eu)
+            for fp, md, cn, eu in file_info
+        ]
 
-    # Phase 3: Batch read metadata, then batch write
-    existing_metadata_map = batch_read_existing_metadata(file_paths)
-    batch_write_metadata_google_chat(file_info, existing_metadata_map)
-
-    # Phase 4: Update timestamps and compile results
-    results = []
-    for output_path, message_data, _, _ in file_info:
+    # Phase 3: Update timestamps and compile results
+    for output_path, message_data, conversation_name, export_username in file_info:
         # Google Chat uses format: "2016-08-23 16:27:32"
         timestamp_str = message_data.get("timestamp")
         if timestamp_str:
             update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
-        exif_rebuilt = output_path in corrupted_files
-        results.append((True, False, exif_rebuilt))
-
-    # Add failed results for files that didn't get copied
-    while len(results) < len(batch_args):
-        results.append((False, True, False))
+        results.append(
+            (True, output_path, (output_path, message_data, conversation_name, export_username))
+        )
 
     return results
 
@@ -293,6 +355,7 @@ def process_logic(
     temp_dir="../pre",
     verbose=False,
     workers=None,
+    dedup_manifest: Optional[Dict[str, Any]] = None,
 ):
     """Core processing logic for Google Chat exports
 
@@ -302,6 +365,7 @@ def process_logic(
         temp_dir: Directory for temporary preprocessing files
         verbose: Enable verbose logging
         workers: Number of parallel workers (None = auto-detect)
+        dedup_manifest: Optional deduplication manifest for filtering secondary files
     """
     # Logging is configured by the main process
     # Verbose mode enables detailed logging to file
@@ -317,7 +381,7 @@ def process_logic(
     # Check if input is already preprocessed
     if is_preprocessed_directory(input_dir):
         logger.info(f"Input directory is already preprocessed: {input_dir}")
-        _process_working_directory(input_dir, output_dir, workers)
+        _process_working_directory(input_dir, output_dir, workers, dedup_manifest)
     else:
         logger.info(f"Input directory is raw export: {input_dir}")
         logger.info("Running preprocessing...")
@@ -337,16 +401,24 @@ def process_logic(
             preprocessor.process()
 
             logger.info(f"Preprocessing complete. Using: {temp_dir_path}")
-            _process_working_directory(str(temp_dir_path), output_dir, workers)
+            _process_working_directory(
+                str(temp_dir_path), output_dir, workers, dedup_manifest
+            )
 
 
-def _process_working_directory(working_dir, output_dir, workers):
+def _process_working_directory(
+    working_dir,
+    output_dir,
+    workers,
+    dedup_manifest: Optional[Dict[str, Any]] = None,
+):
     """Process a working directory (preprocessed export)
 
     Args:
         working_dir: Path to preprocessed directory with metadata.json and media/
         output_dir: Output directory for processed files
         workers: Number of parallel workers
+        dedup_manifest: Optional deduplication manifest for filtering secondary files
     """
     # Configuration
     metadata_file = os.path.join(working_dir, "metadata.json")
@@ -393,27 +465,42 @@ def _process_working_directory(working_dir, output_dir, workers):
 
     # Pre-generate all output filenames to avoid race conditions
     logger.debug("Pre-generating filenames...")
-    used_filenames = set()
+    filename_gen = FilenameGenerator("gchat")
     processing_tasks = []
 
+    skipped_dedup = 0
     for conversation in conversations:
         conversation_name = conversation.get("conversation_name", "unknown")
+        sanitized_name = sanitize_filename(conversation_name)
         messages = conversation.get("messages", [])
 
         for message in messages:
             media_files = message.get("media_files", [])
 
             for media_file in media_files:
+                # Build full path for dedup check
+                full_path = os.path.join(media_dir, media_file)
+
+                # Skip secondary files based on dedup manifest (using hash-based lookup)
+                if dedup_manifest:
+                    content_hash = compute_content_hash(full_path)
+                    from common.dedup_service import is_file_primary_by_hash
+
+                    if not is_file_primary_by_hash(
+                        dedup_manifest, content_hash, "Google Chat"
+                    ):
+                        skipped_dedup += 1
+                        continue
+
                 # Get file extension
                 file_ext = os.path.splitext(media_file)[1].lower()
 
-                # Generate output filename
-                output_filename = generate_unique_filename(
-                    message,
-                    conversation_name,
-                    export_username,
+                # Generate output filename using shared FilenameGenerator
+                identifier = f"{export_username}-{sanitized_name}"
+                output_filename = filename_gen.generate(
+                    message.get("timestamp"),
+                    identifier,
                     file_ext,
-                    used_filenames,
                 )
 
                 # Create task tuple for worker
@@ -429,31 +516,57 @@ def _process_working_directory(working_dir, output_dir, workers):
                     )
                 )
 
+    if skipped_dedup > 0:
+        logger.info(f"Skipped {skipped_dedup} secondary files (dedup)")
+
     # Process media files in parallel
-    print(f"\nProcessing media files to {output_dir}/")
+    logger.info("Processing media files to %s/", output_dir)
     logger.info("=" * 50)
 
-    # Use shared batch processing utility
+    # Use shared batch processing utility (copy files only)
     results = process_batches_parallel(
         tasks=processing_tasks,
         worker_fn=process_media_batch,
         num_workers=num_workers,
         batch_size=100,
-        description="Creating files",
+        description="Copying files",
     )
 
-    # Aggregate results
+    # Collect successful files for EXIF processing
     success_count = 0
     failed_count = 0
-    exif_rebuilt_count = 0
+    file_paths = []
+    file_info = []
 
-    for success, failed, exif_rebuilt in results:
-        if success:
+    for success, output_path, info_tuple in results:
+        if success and output_path:
             success_count += 1
-        if failed:
+            file_paths.append(output_path)
+            file_info.append(info_tuple)
+        else:
             failed_count += 1
-        if exif_rebuilt:
-            exif_rebuilt_count += 1
+
+    logger.info(f"Copied {success_count} files ({failed_count} failed)")
+
+    # Consolidated EXIF processing
+    exif_rebuilt_count = 0
+    if file_paths:
+        logger.info("Batch processing EXIF metadata...")
+
+        # Validate and rebuild corrupted EXIF
+        corrupted_files = batch_validate_exif(file_paths)
+        if corrupted_files:
+            logger.info(
+                f"Rebuilding {len(corrupted_files)} corrupted EXIF structures..."
+            )
+            batch_rebuild_exif(list(corrupted_files))
+            exif_rebuilt_count = len(corrupted_files)
+
+        # Batch read and write metadata
+        existing_metadata_map = batch_read_existing_metadata(file_paths)
+        requests = _build_metadata_requests(file_info)
+        batch_write_metadata_requests(requests, existing_metadata_map)
+        logger.info(f"EXIF metadata written for {len(file_info)} files")
 
     # Print summary using shared utility
     print_processing_summary(

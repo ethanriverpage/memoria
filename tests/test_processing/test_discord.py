@@ -21,7 +21,9 @@ from tests.fixtures.media_samples import write_media_file
 class TestDiscordChannelTypes:
     """Tests for different channel type handling."""
 
-    def test_server_channel_messages(self, discord_processor, temp_export_dir, temp_output_dir):
+    def test_server_channel_messages(
+        self, discord_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process server channel messages."""
         create_discord_export(
             temp_export_dir,
@@ -39,7 +41,7 @@ class TestDiscordChannelTypes:
                         },
                     ],
                 },
-            }
+            },
         )
 
         channel_dir = temp_export_dir / "Messages" / "c123456789"
@@ -64,14 +66,16 @@ class TestDiscordChannelTypes:
                         },
                     ],
                 },
-            }
+            },
         )
 
         channel_dir = temp_export_dir / "Messages" / "c987654321"
         assert channel_dir.exists()
         assert (channel_dir / "messages.json").exists()
 
-    def test_group_dm_messages(self, discord_processor, temp_export_dir, temp_output_dir):
+    def test_group_dm_messages(
+        self, discord_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process group DM channels."""
         create_discord_export(
             temp_export_dir,
@@ -88,7 +92,7 @@ class TestDiscordChannelTypes:
                         },
                     ],
                 },
-            }
+            },
         )
 
         channel_dir = temp_export_dir / "Messages" / "c111111111"
@@ -98,7 +102,9 @@ class TestDiscordChannelTypes:
 class TestDiscordAttachments:
     """Tests for attachment handling."""
 
-    def test_single_attachment(self, discord_processor, temp_export_dir, temp_output_dir):
+    def test_single_attachment(
+        self, discord_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle message with single attachment."""
         create_discord_export(
             temp_export_dir,
@@ -116,13 +122,15 @@ class TestDiscordAttachments:
                         },
                     ],
                 },
-            }
+            },
         )
 
         channel_dir = temp_export_dir / "Messages" / "c123456789"
         assert (channel_dir / "image.jpg").exists()
 
-    def test_multiple_attachments(self, discord_processor, temp_export_dir, temp_output_dir):
+    def test_multiple_attachments(
+        self, discord_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle message with multiple attachments."""
         channel_dir = temp_export_dir / "Messages" / "c123456789"
         channel_dir.mkdir(parents=True)
@@ -142,14 +150,20 @@ class TestDiscordAttachments:
         write_media_file(channel_dir / "file2.png", "png")
         write_media_file(channel_dir / "file3.mp4", "mp4")
 
-        (channel_dir / "channel.json").write_text('{"id": "123456789", "name": "general", "type": 0}')
-        (temp_export_dir / "Messages" / "index.json").write_text('{"c123456789": "general"}')
+        (channel_dir / "channel.json").write_text(
+            '{"id": "123456789", "name": "general", "type": 0}'
+        )
+        (temp_export_dir / "Messages" / "index.json").write_text(
+            '{"c123456789": "general"}'
+        )
 
         assert (channel_dir / "file1.jpg").exists()
         assert (channel_dir / "file2.png").exists()
         assert (channel_dir / "file3.mp4").exists()
 
-    def test_message_without_attachments(self, discord_processor, temp_export_dir, temp_output_dir):
+    def test_message_without_attachments(
+        self, discord_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle text-only messages."""
         create_discord_export(
             temp_export_dir,
@@ -167,7 +181,7 @@ class TestDiscordAttachments:
                         },
                     ],
                 },
-            }
+            },
         )
 
         channel_dir = temp_export_dir / "Messages" / "c123456789"
@@ -193,8 +207,12 @@ class TestDiscordExpiredURLs:
             },
         ]
         (channel_dir / "messages.json").write_text(json.dumps(messages))
-        (channel_dir / "channel.json").write_text('{"id": "123456789", "name": "general", "type": 0}')
-        (temp_export_dir / "Messages" / "index.json").write_text('{"c123456789": "general"}')
+        (channel_dir / "channel.json").write_text(
+            '{"id": "123456789", "name": "general", "type": 0}'
+        )
+        (temp_export_dir / "Messages" / "index.json").write_text(
+            '{"c123456789": "general"}'
+        )
 
         # No file created - simulates expired/unavailable attachment
         assert not (channel_dir / "expired_image.jpg").exists()
@@ -203,15 +221,32 @@ class TestDiscordExpiredURLs:
 class TestDiscordMultipleChannels:
     """Tests for multiple channel handling."""
 
-    def test_multiple_server_channels(self, discord_processor, temp_export_dir, temp_output_dir):
+    def test_multiple_server_channels(
+        self, discord_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle multiple channels from same server."""
         create_discord_export(
             temp_export_dir,
             channels={
-                "c111111111": {"name": "general", "type": "server", "guild_name": "Test Server", "messages": []},
-                "c222222222": {"name": "random", "type": "server", "guild_name": "Test Server", "messages": []},
-                "c333333333": {"name": "memes", "type": "server", "guild_name": "Test Server", "messages": []},
-            }
+                "c111111111": {
+                    "name": "general",
+                    "type": "server",
+                    "guild_name": "Test Server",
+                    "messages": [],
+                },
+                "c222222222": {
+                    "name": "random",
+                    "type": "server",
+                    "guild_name": "Test Server",
+                    "messages": [],
+                },
+                "c333333333": {
+                    "name": "memes",
+                    "type": "server",
+                    "guild_name": "Test Server",
+                    "messages": [],
+                },
+            },
         )
 
         messages_dir = temp_export_dir / "Messages"
@@ -219,14 +254,26 @@ class TestDiscordMultipleChannels:
         assert (messages_dir / "c222222222").exists()
         assert (messages_dir / "c333333333").exists()
 
-    def test_channels_from_different_servers(self, discord_processor, temp_export_dir, temp_output_dir):
+    def test_channels_from_different_servers(
+        self, discord_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle channels from different servers."""
         create_discord_export(
             temp_export_dir,
             channels={
-                "c111111111": {"name": "general", "type": "server", "guild_name": "Server A", "messages": []},
-                "c222222222": {"name": "general", "type": "server", "guild_name": "Server B", "messages": []},
-            }
+                "c111111111": {
+                    "name": "general",
+                    "type": "server",
+                    "guild_name": "Server A",
+                    "messages": [],
+                },
+                "c222222222": {
+                    "name": "general",
+                    "type": "server",
+                    "guild_name": "Server B",
+                    "messages": [],
+                },
+            },
         )
 
         channel1 = json.loads(
@@ -243,19 +290,25 @@ class TestDiscordMultipleChannels:
 class TestDiscordIndexFile:
     """Tests for index.json handling."""
 
-    def test_index_contains_all_channels(self, discord_processor, temp_export_dir, temp_output_dir):
+    def test_index_contains_all_channels(
+        self, discord_processor, temp_export_dir, temp_output_dir
+    ):
         """Should have all channels listed in index.json."""
         create_discord_export(
             temp_export_dir,
             channels={
-                "c111": {"name": "channel1", "type": "server", "guild_name": "Server", "messages": []},
+                "c111": {
+                    "name": "channel1",
+                    "type": "server",
+                    "guild_name": "Server",
+                    "messages": [],
+                },
                 "c222": {"name": "channel2", "type": "dm", "messages": []},
                 "c333": {"name": "channel3", "type": "dm", "messages": []},
-            }
+            },
         )
 
         index = json.loads((temp_export_dir / "Messages" / "index.json").read_text())
         assert "c111" in index
         assert "c222" in index
         assert "c333" in index
-

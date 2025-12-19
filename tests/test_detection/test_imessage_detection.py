@@ -23,7 +23,9 @@ class TestIMessageMacDetection:
         create_imessage_mac_export(temp_export_dir)
         assert imessage_processor.detect(temp_export_dir) is True
 
-    def test_detect_mac_export_with_attachments(self, imessage_processor, temp_export_dir):
+    def test_detect_mac_export_with_attachments(
+        self, imessage_processor, temp_export_dir
+    ):
         """Should detect Mac export with multiple attachments."""
         create_imessage_mac_export(
             temp_export_dir,
@@ -31,11 +33,19 @@ class TestIMessageMacDetection:
                 {
                     "chat_identifier": "+1234567890",
                     "messages": [
-                        {"text": "Photo 1", "attachment": "00/00/image1.jpg", "date": 631152000000000000},
-                        {"text": "Photo 2", "attachment": "00/01/image2.jpg", "date": 631152000000000001},
+                        {
+                            "text": "Photo 1",
+                            "attachment": "00/00/image1.jpg",
+                            "date": 631152000000000000,
+                        },
+                        {
+                            "text": "Photo 2",
+                            "attachment": "00/01/image2.jpg",
+                            "date": 631152000000000001,
+                        },
                     ],
                 },
-            ]
+            ],
         )
         assert imessage_processor.detect(temp_export_dir) is True
 
@@ -65,7 +75,9 @@ class TestIMessageIPhoneDetection:
         create_imessage_iphone_export(temp_export_dir)
         assert imessage_processor.detect(temp_export_dir) is True
 
-    def test_detect_iphone_export_with_attachments(self, imessage_processor, temp_export_dir):
+    def test_detect_iphone_export_with_attachments(
+        self, imessage_processor, temp_export_dir
+    ):
         """Should detect iPhone export with multiple attachments."""
         create_imessage_iphone_export(
             temp_export_dir,
@@ -73,11 +85,19 @@ class TestIMessageIPhoneDetection:
                 {
                     "chat_identifier": "+1234567890",
                     "messages": [
-                        {"text": "Photo 1", "attachment": "00/00/image1.jpg", "date": 631152000000000000},
-                        {"text": "Video", "attachment": "00/01/video.mp4", "date": 631152000000000001},
+                        {
+                            "text": "Photo 1",
+                            "attachment": "00/00/image1.jpg",
+                            "date": 631152000000000000,
+                        },
+                        {
+                            "text": "Video",
+                            "attachment": "00/01/video.mp4",
+                            "date": 631152000000000001,
+                        },
                     ],
                 },
-            ]
+            ],
         )
         assert imessage_processor.detect(temp_export_dir) is True
 
@@ -88,7 +108,9 @@ class TestIMessageIPhoneDetection:
         attachments_dir.mkdir(parents=True)
         assert imessage_processor.detect(temp_export_dir) is False
 
-    def test_reject_missing_sms_attachments_dir(self, imessage_processor, temp_export_dir):
+    def test_reject_missing_sms_attachments_dir(
+        self, imessage_processor, temp_export_dir
+    ):
         """Should reject export without SMS/Attachments directory."""
         sms_dir = temp_export_dir / "SMS"
         sms_dir.mkdir(parents=True)
@@ -125,7 +147,9 @@ class TestIMessagePreprocessedDetection:
 
         assert imessage_processor.detect(temp_export_dir) is True
 
-    def test_detect_preprocessed_with_sms_path(self, imessage_processor, temp_export_dir):
+    def test_detect_preprocessed_with_sms_path(
+        self, imessage_processor, temp_export_dir
+    ):
         """Should detect preprocessed export with SMS in path."""
         media_dir = temp_export_dir / "media"
         media_dir.mkdir(parents=True)
@@ -140,7 +164,9 @@ class TestIMessagePreprocessedDetection:
 
         assert imessage_processor.detect(temp_export_dir) is True
 
-    def test_reject_preprocessed_without_imessage_markers(self, imessage_processor, temp_export_dir):
+    def test_reject_preprocessed_without_imessage_markers(
+        self, imessage_processor, temp_export_dir
+    ):
         """Should reject preprocessed export without iMessage-specific markers."""
         media_dir = temp_export_dir / "media"
         media_dir.mkdir(parents=True)
@@ -185,4 +211,3 @@ class TestIMessageCrossExportDetection:
     def test_supports_consolidation(self, imessage_processor):
         """iMessage processor should support consolidation."""
         assert imessage_processor.supports_consolidation() is True
-

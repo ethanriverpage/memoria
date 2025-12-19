@@ -18,7 +18,9 @@ from tests.fixtures.media_samples import write_media_file
 class TestUnicodeFilenames:
     """Tests for unicode character handling in filenames."""
 
-    def test_unicode_album_name_google_photos(self, google_photos_processor, temp_export_dir, temp_output_dir):
+    def test_unicode_album_name_google_photos(
+        self, google_photos_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle album names with unicode characters."""
         from tests.fixtures.generators import create_google_photos_export
 
@@ -28,7 +30,9 @@ class TestUnicodeFilenames:
         )
         assert google_photos_processor.detect(temp_export_dir) is True
 
-    def test_unicode_conversation_name_google_chat(self, google_chat_processor, temp_export_dir, temp_output_dir):
+    def test_unicode_conversation_name_google_chat(
+        self, google_chat_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle conversation names with unicode."""
         from tests.fixtures.generators import create_google_chat_export
 
@@ -47,7 +51,9 @@ class TestUnicodeFilenames:
         )
         assert google_chat_processor.detect(temp_export_dir) is True
 
-    def test_emoji_in_discord_message(self, discord_processor, temp_export_dir, temp_output_dir):
+    def test_emoji_in_discord_message(
+        self, discord_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle emoji characters in Discord messages."""
         from tests.fixtures.generators import create_discord_export
 
@@ -67,7 +73,7 @@ class TestUnicodeFilenames:
                         },
                     ],
                 },
-            }
+            },
         )
 
         channel_dir = temp_export_dir / "Messages" / "c123456789"
@@ -78,7 +84,9 @@ class TestUnicodeFilenames:
 class TestEmptyMetadata:
     """Tests for handling empty metadata arrays."""
 
-    def test_snapchat_memories_empty_metadata(self, snapchat_memories_processor, temp_export_dir, temp_output_dir):
+    def test_snapchat_memories_empty_metadata(
+        self, snapchat_memories_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle empty metadata.json array gracefully."""
         media_dir = temp_export_dir / "media"
         overlays_dir = temp_export_dir / "overlays"
@@ -91,7 +99,9 @@ class TestEmptyMetadata:
         # Processor should not detect empty export as valid
         assert snapchat_memories_processor.detect(temp_export_dir) is False
 
-    def test_google_chat_empty_messages(self, google_chat_processor, temp_export_dir, temp_output_dir):
+    def test_google_chat_empty_messages(
+        self, google_chat_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle conversation with empty messages array."""
         # Detection requires both Groups/ and Users/ directories
         groups_dir = temp_export_dir / "Google Chat" / "Groups" / "Empty Group"
@@ -140,12 +150,16 @@ class TestFilesystemTimestamps:
 class TestLargeExports:
     """Tests for handling larger export structures."""
 
-    def test_many_albums_google_photos(self, google_photos_processor, temp_export_dir, temp_output_dir):
+    def test_many_albums_google_photos(
+        self, google_photos_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle export with many albums."""
         from tests.fixtures.generators import create_google_photos_export
 
         # Create 20 albums with 2 files each
-        albums = {f"Album {i}": [f"photo_{i}_1.jpg", f"photo_{i}_2.jpg"] for i in range(20)}
+        albums = {
+            f"Album {i}": [f"photo_{i}_1.jpg", f"photo_{i}_2.jpg"] for i in range(20)
+        }
 
         create_google_photos_export(temp_export_dir, albums=albums)
 
@@ -155,7 +169,9 @@ class TestLargeExports:
         album_count = len(list(photos_dir.iterdir()))
         assert album_count == 20
 
-    def test_many_conversations_instagram(self, instagram_messages_processor, temp_export_dir, temp_output_dir):
+    def test_many_conversations_instagram(
+        self, instagram_messages_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle export with many conversations."""
         from tests.fixtures.generators import create_instagram_messages_export
 
@@ -267,16 +283,29 @@ class TestDuplicateHandling:
                     "type": "server",
                     "guild_name": "Test Server",
                     "messages": [
-                        {"ID": "msg001", "Timestamp": "2021-01-01 12:00:00", "Contents": "First", "Attachments": ""},
-                        {"ID": "msg002", "Timestamp": "2021-01-01 12:00:01", "Contents": "Second", "Attachments": ""},
-                        {"ID": "msg003", "Timestamp": "2021-01-01 12:00:02", "Contents": "Third", "Attachments": ""},
+                        {
+                            "ID": "msg001",
+                            "Timestamp": "2021-01-01 12:00:00",
+                            "Contents": "First",
+                            "Attachments": "",
+                        },
+                        {
+                            "ID": "msg002",
+                            "Timestamp": "2021-01-01 12:00:01",
+                            "Contents": "Second",
+                            "Attachments": "",
+                        },
+                        {
+                            "ID": "msg003",
+                            "Timestamp": "2021-01-01 12:00:02",
+                            "Contents": "Third",
+                            "Attachments": "",
+                        },
                     ],
                 },
-            }
+            },
         )
 
         channel_dir = temp_export_dir / "Messages" / "c123456789"
         messages = json.loads((channel_dir / "messages.json").read_text())
         assert len(messages) == 3
-
-

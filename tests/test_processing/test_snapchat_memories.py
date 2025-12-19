@@ -20,7 +20,9 @@ from tests.fixtures.media_samples import write_media_file
 class TestSnapchatMemoriesOverlays:
     """Tests for overlay handling in Snapchat Memories processing."""
 
-    def test_image_with_overlay(self, snapchat_memories_processor, temp_export_dir, temp_output_dir):
+    def test_image_with_overlay(
+        self, snapchat_memories_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process image memory with overlay."""
         create_snapchat_memories_export(
             temp_export_dir,
@@ -32,13 +34,15 @@ class TestSnapchatMemoriesOverlays:
                     "overlay_filename": "overlay.png",
                 }
             ],
-            include_overlays=True
+            include_overlays=True,
         )
 
         assert (temp_export_dir / "media" / "photo.jpg").exists()
         assert (temp_export_dir / "overlays" / "overlay.png").exists()
 
-    def test_image_without_overlay(self, snapchat_memories_processor, temp_export_dir, temp_output_dir):
+    def test_image_without_overlay(
+        self, snapchat_memories_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process image memory without overlay."""
         media_dir = temp_export_dir / "media"
         overlays_dir = temp_export_dir / "overlays"
@@ -60,7 +64,9 @@ class TestSnapchatMemoriesOverlays:
         assert (media_dir / "photo.jpg").exists()
         assert not (overlays_dir / "overlay.png").exists()
 
-    def test_video_with_overlay(self, snapchat_memories_processor, temp_export_dir, temp_output_dir):
+    def test_video_with_overlay(
+        self, snapchat_memories_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process video memory with overlay."""
         create_snapchat_memories_export(
             temp_export_dir,
@@ -72,7 +78,7 @@ class TestSnapchatMemoriesOverlays:
                     "overlay_filename": "overlay.png",
                 }
             ],
-            include_overlays=True
+            include_overlays=True,
         )
 
         assert (temp_export_dir / "media" / "video.mp4").exists()
@@ -82,7 +88,9 @@ class TestSnapchatMemoriesOverlays:
 class TestSnapchatMemoriesMissingFiles:
     """Tests for handling missing files in Snapchat Memories."""
 
-    def test_missing_overlay_file(self, snapchat_memories_processor, temp_export_dir, temp_output_dir):
+    def test_missing_overlay_file(
+        self, snapchat_memories_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle memory with referenced but missing overlay file."""
         media_dir = temp_export_dir / "media"
         overlays_dir = temp_export_dir / "overlays"
@@ -105,7 +113,9 @@ class TestSnapchatMemoriesMissingFiles:
         assert (media_dir / "photo.jpg").exists()
         assert not (overlays_dir / "missing_overlay.png").exists()
 
-    def test_missing_media_file(self, snapchat_memories_processor, temp_export_dir, temp_output_dir):
+    def test_missing_media_file(
+        self, snapchat_memories_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle memory with referenced but missing media file."""
         media_dir = temp_export_dir / "media"
         overlays_dir = temp_export_dir / "overlays"
@@ -132,7 +142,9 @@ class TestSnapchatMemoriesMissingFiles:
 class TestSnapchatMemoriesMetadata:
     """Tests for metadata handling in Snapchat Memories."""
 
-    def test_multiple_memories(self, snapchat_memories_processor, temp_export_dir, temp_output_dir):
+    def test_multiple_memories(
+        self, snapchat_memories_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process multiple memories."""
         create_snapchat_memories_export(
             temp_export_dir,
@@ -156,14 +168,16 @@ class TestSnapchatMemoriesMetadata:
                     "overlay_filename": "overlay3.png",
                 },
             ],
-            include_overlays=True
+            include_overlays=True,
         )
 
         assert (temp_export_dir / "media" / "photo1.jpg").exists()
         assert (temp_export_dir / "media" / "photo2.jpg").exists()
         assert (temp_export_dir / "media" / "video.mp4").exists()
 
-    def test_memories_on_same_date(self, snapchat_memories_processor, temp_export_dir, temp_output_dir):
+    def test_memories_on_same_date(
+        self, snapchat_memories_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle multiple memories with same timestamp."""
         create_snapchat_memories_export(
             temp_export_dir,
@@ -181,7 +195,7 @@ class TestSnapchatMemoriesMetadata:
                     "overlay_filename": "overlay2.png",
                 },
             ],
-            include_overlays=True
+            include_overlays=True,
         )
 
         metadata = json.loads((temp_export_dir / "metadata.json").read_text())
@@ -192,7 +206,9 @@ class TestSnapchatMemoriesMetadata:
 class TestSnapchatMemoriesFileTypes:
     """Tests for various file types in Snapchat Memories."""
 
-    def test_jpg_extension(self, snapchat_memories_processor, temp_export_dir, temp_output_dir):
+    def test_jpg_extension(
+        self, snapchat_memories_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle .jpg files."""
         create_snapchat_memories_export(
             temp_export_dir,
@@ -204,11 +220,13 @@ class TestSnapchatMemoriesFileTypes:
                     "overlay_filename": None,
                 }
             ],
-            include_overlays=False
+            include_overlays=False,
         )
         assert (temp_export_dir / "media" / "photo.jpg").exists()
 
-    def test_mp4_extension(self, snapchat_memories_processor, temp_export_dir, temp_output_dir):
+    def test_mp4_extension(
+        self, snapchat_memories_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle .mp4 files."""
         create_snapchat_memories_export(
             temp_export_dir,
@@ -220,7 +238,7 @@ class TestSnapchatMemoriesFileTypes:
                     "overlay_filename": None,
                 }
             ],
-            include_overlays=False
+            include_overlays=False,
         )
         assert (temp_export_dir / "media" / "video.mp4").exists()
 
@@ -228,7 +246,9 @@ class TestSnapchatMemoriesFileTypes:
 class TestSnapchatMemoriesConsolidated:
     """Tests for consolidated export structure."""
 
-    def test_consolidated_structure(self, snapchat_memories_processor, temp_export_dir, temp_output_dir):
+    def test_consolidated_structure(
+        self, snapchat_memories_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle consolidated export with memories/ subdirectory."""
         memories_dir = temp_export_dir / "memories"
         create_snapchat_memories_export(
@@ -241,10 +261,9 @@ class TestSnapchatMemoriesConsolidated:
                     "overlay_filename": None,
                 }
             ],
-            include_overlays=False
+            include_overlays=False,
         )
 
         # Verify structure is within memories/ subdirectory
         assert (memories_dir / "media" / "photo.jpg").exists()
         assert (memories_dir / "metadata.json").exists()
-

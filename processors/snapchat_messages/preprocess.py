@@ -18,14 +18,25 @@ import re
 import sys
 import argparse
 from threading import Lock
-import multiprocessing
-import xxhash
 
 from common.filter_banned_files import BannedFilesFilter
+from common.perceptual_hash import compute_content_hash
+from common.utils import default_worker_count
 from common.failure_tracker import FailureTracker
+from common.processing import print_preprocessing_stats
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+
+class PreprocessingError(Exception):
+    """Exception raised when preprocessing fails.
+
+    This replaces sys.exit() calls to allow proper error handling
+    when the preprocessor is called from library code (e.g., parallel cataloging).
+    """
+
+    pass
 
 
 class SnapchatPreprocessor:
@@ -43,7 +54,7 @@ class SnapchatPreprocessor:
         self.chat_media_dir = self.export_path / "chat_media"
         self.json_dir = self.export_path / "json"
         self.chat_history_file = self.json_dir / "chat_history.json"
-        
+
         # Store username override for consolidated exports
         self.username_override = username_override
 
@@ -57,7 +68,9 @@ class SnapchatPreprocessor:
         self.log_file = output_base / "preprocessing.log"
 
         # Final output directory for processor (for failure tracking)
-        self.final_output_dir = Path(final_output_dir) if final_output_dir else output_base
+        self.final_output_dir = (
+            Path(final_output_dir) if final_output_dir else output_base
+        )
 
         # Initialize banned files filter
         self.banned_filter = BannedFilesFilter()
@@ -69,12 +82,8 @@ class SnapchatPreprocessor:
         )
 
         # Threading configuration
-        if workers is None:
-            # Default to CPU count - 1, minimum 1
-            self.workers = max(1, multiprocessing.cpu_count() - 1)
-        else:
-            self.workers = max(1, workers)
-        
+        self.workers = workers if workers is not None else default_worker_count()
+
         # Thread-safe locks for shared data structures
         self.stats_lock = Lock()
         self.log_lock = Lock()
@@ -99,7 +108,7 @@ class SnapchatPreprocessor:
 
         # Log entries for unmatched files
         self.log_entries = []
-        
+
         # Track file hashes for deduplication across conversations
         # Maps hash -> {"filename": str, "messages": [Dict], "overlay_file": str}
         self.file_hashes = {}
@@ -135,22 +144,22 @@ class SnapchatPreprocessor:
 
                 f.write(f"\nTotal logged issues: {len(self.log_entries)}\n")
 
-            print(f"SUCCESS: Saved preprocessing log to {self.log_file}")
+            logger.info("Saved preprocessing log to %s", self.log_file)
         except Exception as e:
-            print(f"WARNING: Failed to save log file: {e}")
+            logger.warning("Failed to save log file: %s", e)
 
     def validate_export(self) -> bool:
         """Validate that export directory has required structure"""
         if not self.export_path.exists():
-            print(f"ERROR: Export path does not exist: {self.export_path}")
+            logger.error("Export path does not exist: %s", self.export_path)
             return False
 
         if not self.chat_media_dir.exists():
-            print(f"ERROR: chat_media directory not found: {self.chat_media_dir}")
+            logger.error("chat_media directory not found: %s", self.chat_media_dir)
             return False
 
         if not self.chat_history_file.exists():
-            print(f"ERROR: chat_history.json not found: {self.chat_history_file}")
+            logger.error("chat_history.json not found: %s", self.chat_history_file)
             return False
 
         return True
@@ -161,29 +170,31 @@ class SnapchatPreprocessor:
             with open(self.chat_history_file, "r", encoding="utf-8") as f:
                 chat_history = json.load(f)
 
-            print("SUCCESS: Loaded chat_history.json")
+            logger.info("Loaded chat_history.json")
             return chat_history
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse chat_history.json: {e}")
-            sys.exit(1)
+            raise PreprocessingError(f"Failed to parse chat_history.json: {e}")
         except Exception as e:
-            print(f"ERROR: Error loading chat_history.json: {e}")
-            sys.exit(1)
+            logger.error(f"Error loading chat_history.json: {e}")
+            raise PreprocessingError(f"Error loading chat_history.json: {e}")
 
     def extract_username(self, chat_history: Dict) -> str:
         """Extract exporter's username from directory name or chat history"""
         # Use override if provided (for consolidated exports)
         if self.username_override:
-            print(f"SUCCESS: Using username from parent directory: {self.username_override}")
+            logger.info(
+                "Using username from parent directory: %s", self.username_override
+            )
             return self.username_override
-        
+
         # Method 1: From directory name using regex to handle both date formats
         dir_name = self.export_path.name
         # Pattern: snapchat-{username}-YYYY-MM-DD or snapchat-{username}-YYYYMMDD
         match = re.match(r"snapchat-(.+?)-\d{4}-?\d{2}-?\d{2}", dir_name)
         if match:
             username = match.group(1)
-            print(f"SUCCESS: Extracted username from directory: {username}")
+            logger.info("Extracted username from directory: %s", username)
             return username
 
         # Method 2: Find messages where IsSender is True
@@ -191,10 +202,10 @@ class SnapchatPreprocessor:
             for message in messages:
                 if message.get("IsSender", False):
                     username = message["From"]
-                    print(f"SUCCESS: Extracted username from IsSender: {username}")
+                    logger.info("Extracted username from IsSender: %s", username)
                     return username
 
-        print("WARNING: Could not extract username")
+        logger.warning("Could not extract username")
         return "unknown"
 
     def classify_file(self, filename: str) -> str:
@@ -273,24 +284,21 @@ class SnapchatPreprocessor:
     def get_media_type(self, filename: str) -> str:
         """Determine if file is image or video based on extension - use common utility"""
         from common.utils import get_media_type as common_get_media_type
+
         result = common_get_media_type(filename)
         return result if result else "unknown"
 
     def _compute_file_hash(self, file_path: Path) -> str:
         """
         Compute xxHash64 of file for deduplication (fast, non-cryptographic)
-        
+
         Args:
             file_path: Path to file to hash
-            
+
         Returns:
             str: Hexadecimal hash digest
         """
-        hasher = xxhash.xxh64()
-        with open(file_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(65536), b''):  # 64KB chunks
-                hasher.update(chunk)
-        return hasher.hexdigest()
+        return compute_content_hash(file_path)
 
     def classify_conversation(
         self, conversation_id: str, messages: List[Dict]
@@ -346,6 +354,7 @@ class SnapchatPreprocessor:
         catalog = {}
 
         import os
+
         with os.scandir(self.chat_media_dir) as entries:
             for entry in entries:
                 if not entry.is_file():
@@ -381,7 +390,7 @@ class SnapchatPreprocessor:
                     self.log_failure(
                         "UNKNOWN_FILE", filename, "File type could not be determined"
                     )
-                    print(f"WARNING: Unknown file type: {filename}")
+                    logger.warning("Unknown file type: %s", filename)
                     continue
 
                 # Get file modification time (key for matching media with overlays)
@@ -469,16 +478,14 @@ class SnapchatPreprocessor:
 
         return media_id_to_filename, media_id_to_overlay, mtime_to_filenames
 
-    def _deduplicate_media_messages(
-        self, metadata: Dict, file_catalog: Dict
-    ) -> Dict:
+    def _deduplicate_media_messages(self, metadata: Dict, file_catalog: Dict) -> Dict:
         """
         Detect and merge duplicate media files across conversations
-        
+
         Args:
             metadata: Metadata dict with conversations
             file_catalog: File catalog with media file paths
-            
+
         Returns:
             Updated metadata dict with merged duplicates
         """
@@ -493,11 +500,11 @@ class SnapchatPreprocessor:
                         media_hashes[filename] = file_hash
                 except Exception as e:
                     logger.warning(f"Failed to compute hash for {filename}: {e}")
-        
+
         # Track which messages belong to which hash
         # hash -> list of (conv_id, message_index, message_dict)
         hash_to_messages = {}
-        
+
         # Scan all messages and group by media file hash
         for conv_id, conv_data in metadata["conversations"].items():
             messages = conv_data.get("messages", [])
@@ -508,15 +515,17 @@ class SnapchatPreprocessor:
                     media_files = [message["media_file"]]
                 elif "media_files" in message:
                     media_files = message["media_files"]
-                
+
                 # For each media file, look up its hash
                 for media_file in media_files:
                     if media_file in media_hashes:
                         file_hash = media_hashes[media_file]
                         if file_hash not in hash_to_messages:
                             hash_to_messages[file_hash] = []
-                        hash_to_messages[file_hash].append((conv_id, idx, message.copy()))
-        
+                        hash_to_messages[file_hash].append(
+                            (conv_id, idx, message.copy())
+                        )
+
         # Scan orphaned media as well
         orphaned_media = metadata.get("orphaned_media", [])
         for idx, message in enumerate(orphaned_media):
@@ -526,26 +535,26 @@ class SnapchatPreprocessor:
                 if file_hash not in hash_to_messages:
                     hash_to_messages[file_hash] = []
                 hash_to_messages[file_hash].append((None, idx, message.copy()))
-        
+
         # Identify duplicates (hash with multiple messages)
         duplicates_found = 0
         messages_to_remove = {}  # conv_id -> list of message indices to remove
         orphaned_to_remove = []  # list of orphaned media indices to remove
-        
+
         for file_hash, message_list in hash_to_messages.items():
             if len(message_list) > 1:
                 # Found duplicate! Merge messages
                 duplicates_found += 1
-                
+
                 # Sort by timestamp to find oldest
                 sorted_messages = sorted(
                     message_list,
-                    key=lambda x: x[2].get("created", "9999-99-99 99:99:99 UTC")
+                    key=lambda x: x[2].get("created", "9999-99-99 99:99:99 UTC"),
                 )
-                
+
                 # Use oldest message as base
                 oldest_conv_id, oldest_idx, oldest_msg = sorted_messages[0]
-                
+
                 # Get the media file from oldest message
                 if "media_file" in oldest_msg:
                     primary_media = oldest_msg["media_file"]
@@ -553,10 +562,10 @@ class SnapchatPreprocessor:
                     primary_media = oldest_msg["media_files"][0]
                 else:
                     continue  # Skip if no media file
-                
+
                 # Get overlay from oldest message (if exists)
                 primary_overlay = oldest_msg.get("overlay_file")
-                
+
                 # Create merged message structure
                 merged_message = {
                     "media_file": primary_media,
@@ -564,23 +573,25 @@ class SnapchatPreprocessor:
                     "primary_created": oldest_msg.get("created"),
                     "is_duplicate": True,
                 }
-                
+
                 if primary_overlay:
                     merged_message["overlay_file"] = primary_overlay
-                
+
                 # Add all message metadata to the messages array
                 for conv_id, msg_idx, msg in sorted_messages:
-                    merged_message["messages"].append({
-                        "conversation_id": msg.get("conversation_id"),
-                        "conversation_type": msg.get("conversation_type"),
-                        "conversation_title": msg.get("conversation_title"),
-                        "sender": msg.get("sender"),
-                        "created": msg.get("created"),
-                        "content": msg.get("content", ""),
-                        "is_sender": msg.get("is_sender"),
-                        "media_id": msg.get("media_id", ""),
-                    })
-                    
+                    merged_message["messages"].append(
+                        {
+                            "conversation_id": msg.get("conversation_id"),
+                            "conversation_type": msg.get("conversation_type"),
+                            "conversation_title": msg.get("conversation_title"),
+                            "sender": msg.get("sender"),
+                            "created": msg.get("created"),
+                            "content": msg.get("content", ""),
+                            "is_sender": msg.get("is_sender"),
+                            "media_id": msg.get("media_id", ""),
+                        }
+                    )
+
                     # Mark for removal (except the oldest one)
                     if conv_id != oldest_conv_id or msg_idx != oldest_idx:
                         if conv_id is not None:
@@ -589,23 +600,27 @@ class SnapchatPreprocessor:
                             messages_to_remove[conv_id].append(msg_idx)
                         else:
                             orphaned_to_remove.append(msg_idx)
-                
+
                 # Replace oldest message with merged version
                 if oldest_conv_id is not None:
-                    conv_messages = metadata["conversations"][oldest_conv_id]["messages"]
+                    conv_messages = metadata["conversations"][oldest_conv_id][
+                        "messages"
+                    ]
                     conv_messages[oldest_idx] = merged_message
                 else:
                     orphaned_media[oldest_idx] = merged_message
-                
+
                 # Log the deduplication
-                conv_list = [m.get("conversation_id") for m in merged_message["messages"]]
+                conv_list = [
+                    m.get("conversation_id") for m in merged_message["messages"]
+                ]
                 self.log_failure(
                     "DEDUPLICATED",
                     primary_media,
                     f"Found in {len(message_list)} conversations",
-                    f"Hash: {file_hash[:16]}..., Conversations: {', '.join(filter(None, conv_list))}"
+                    f"Hash: {file_hash[:16]}..., Conversations: {', '.join(filter(None, conv_list))}",
                 )
-        
+
         # Remove duplicate message entries (in reverse order to maintain indices)
         for conv_id, indices in messages_to_remove.items():
             conv_messages = metadata["conversations"][conv_id]["messages"]
@@ -613,21 +628,23 @@ class SnapchatPreprocessor:
                 del conv_messages[idx]
             # Update message count
             metadata["conversations"][conv_id]["message_count"] = len(conv_messages)
-        
+
         # Remove from orphaned media
         for idx in sorted(orphaned_to_remove, reverse=True):
             del orphaned_media[idx]
-        
+
         # Update statistics
         with self.stats_lock:
             self.stats["duplicate_files"] = duplicates_found
             self.stats["deduplicated_files"] = sum(
                 len(msgs) - 1 for msgs in hash_to_messages.values() if len(msgs) > 1
             )
-        
+
         return metadata
 
-    def create_metadata(self, chat_history: Dict, file_catalog: Dict) -> Tuple[Dict, List]:
+    def create_metadata(
+        self, chat_history: Dict, file_catalog: Dict
+    ) -> Tuple[Dict, List]:
         """
         Create cleaned metadata structure
 
@@ -792,7 +809,13 @@ class SnapchatPreprocessor:
 
                                 # Determine if we can safely match overlays
                                 # Only count VIDEO files for overlay matching (images never have overlays)
-                                video_count = len([mf for mf in media_files if self.get_media_type(mf) == "video"])
+                                video_count = len(
+                                    [
+                                        mf
+                                        for mf in media_files
+                                        if self.get_media_type(mf) == "video"
+                                    ]
+                                )
                                 media_count = len(media_files)
                                 overlay_count = len(overlays_at_timestamp)
 
@@ -800,7 +823,9 @@ class SnapchatPreprocessor:
                                     # SAFE: Unique 1:1 match (1 video, 1 overlay)
                                     overlay_files.append(overlays_at_timestamp[0])
                                     matched_overlays.add(overlays_at_timestamp[0])
-                                elif overlay_count > 0 and (video_count > 1 or overlay_count > 1):
+                                elif overlay_count > 0 and (
+                                    video_count > 1 or overlay_count > 1
+                                ):
                                     # AMBIGUOUS: Skip overlay matching and save for manual review
                                     ambiguous_case = {
                                         "timestamp": date_str,
@@ -826,10 +851,14 @@ class SnapchatPreprocessor:
                                             ambiguous_case["media_files"].append(
                                                 {
                                                     "filename": media_file,
-                                                    "media_id": file_info.get("media_id"),
+                                                    "media_id": file_info.get(
+                                                        "media_id"
+                                                    ),
                                                     "uuid": file_info.get("uuid"),
                                                     "type": media_type,
-                                                    "extension": Path(media_file).suffix,
+                                                    "extension": Path(
+                                                        media_file
+                                                    ).suffix,
                                                 }
                                             )
 
@@ -887,7 +916,7 @@ class SnapchatPreprocessor:
                         cleaned_msg["overlay_file"] = overlay_files[0]
                     elif len(overlay_files) > 1:
                         cleaned_msg["overlay_files"] = overlay_files
-                    
+
                     # Track orphaned metadata (media IDs referenced but files not found)
                     # Only track if still orphaned after all matching phases
                     if orphaned_media_ids:
@@ -908,7 +937,7 @@ class SnapchatPreprocessor:
                                     "matched_files_count": len(media_files),
                                     "expected_files_count": len(media_ids),
                                     "matching_phases_completed": "media_id + timestamp",
-                                }
+                                },
                             )
 
                 cleaned_messages.append(cleaned_msg)
@@ -981,7 +1010,7 @@ class SnapchatPreprocessor:
 
                 metadata["orphaned_media"].append(orphaned_entry)
                 orphaned_count += 1
-                
+
                 # Track with FailureTracker
                 media_path = Path(file_info["original_path"])
                 self.failure_tracker.add_orphaned_media(
@@ -993,7 +1022,7 @@ class SnapchatPreprocessor:
                         "date": file_info.get("date"),
                         "mtime": file_info.get("mtime"),
                         "has_overlay": overlay_found,
-                    }
+                    },
                 )
 
         # Store statistics
@@ -1015,8 +1044,8 @@ class SnapchatPreprocessor:
         self.media_dir.mkdir(exist_ok=True)
         self.overlays_dir.mkdir(exist_ok=True)
 
-        print("\nOrganizing files...")
-        print(f"   Output directory: {self.output_dir}")
+        logger.info("Organizing files...")
+        logger.info("   Output directory: %s", self.output_dir)
 
         for filename, file_info in file_catalog.items():
             source = Path(file_info["original_path"])
@@ -1028,7 +1057,7 @@ class SnapchatPreprocessor:
                     "File missing at source",
                     f"expected at {source}",
                 )
-                print(f"WARNING: File not found: {source}")
+                logger.warning("File not found: %s", source)
                 continue
 
             # Determine destination
@@ -1050,7 +1079,7 @@ class SnapchatPreprocessor:
                     f"Failed to copy file: {e}",
                     f"source={source}, dest={destination}",
                 )
-                print(f"ERROR: Failed to copy {filename}: {e}")
+                logger.error("Failed to copy %s: %s", filename, e)
 
     def organize_ambiguous_files(
         self, ambiguous_cases: List[Dict], export_username: str
@@ -1061,8 +1090,8 @@ class SnapchatPreprocessor:
 
         self.needs_matching_dir.mkdir(exist_ok=True)
 
-        print(
-            f"\nOrganizing {len(ambiguous_cases)} ambiguous cases for manual matching..."
+        logger.info(
+            "Organizing %d ambiguous cases for manual matching...", len(ambiguous_cases)
         )
 
         for case in ambiguous_cases:
@@ -1086,9 +1115,9 @@ class SnapchatPreprocessor:
                     try:
                         shutil.copy2(source, dest)
                     except Exception as e:
-                        print(f"WARNING: Failed to copy {filename}: {e}")
+                        logger.warning("Failed to copy %s: %s", filename, e)
                 else:
-                    print(f"WARNING: Source file not found: {source}")
+                    logger.warning("Source file not found: %s", source)
 
             # Copy overlay files
             for overlay_info in case["overlays"]:
@@ -1099,9 +1128,9 @@ class SnapchatPreprocessor:
                     try:
                         shutil.copy2(source, dest)
                     except Exception as e:
-                        print(f"WARNING: Failed to copy {filename}: {e}")
+                        logger.warning("Failed to copy %s: %s", filename, e)
                 else:
-                    print(f"WARNING: Source overlay not found: {source}")
+                    logger.warning("Source overlay not found: %s", source)
 
             # Add export username to case
             case["export_username"] = export_username
@@ -1112,10 +1141,10 @@ class SnapchatPreprocessor:
                 with open(match_info_path, "w", encoding="utf-8") as f:
                     json.dump(case, f, indent=2, ensure_ascii=False)
             except Exception as e:
-                print(f"ERROR: Failed to write {match_info_path}: {e}")
+                logger.error("Failed to write %s: %s", match_info_path, e)
 
-        print(
-            f"SUCCESS: Created {len(ambiguous_cases)} folders in {self.needs_matching_dir}"
+        logger.info(
+            "Created %d folders in %s", len(ambiguous_cases), self.needs_matching_dir
         )
 
     def save_metadata(self, metadata: Dict) -> None:
@@ -1127,51 +1156,43 @@ class SnapchatPreprocessor:
             logger.info(f"SUCCESS: Saved metadata to {self.metadata_file}")
         except Exception as e:
             logger.error(f"Failed to save metadata: {e}")
-            sys.exit(1)
+            raise PreprocessingError(f"Failed to save metadata: {e}")
 
     def print_statistics(self) -> None:
-        """Print processing statistics"""
-        print("\n" + "=" * 60)
-        print("PREPROCESSING STATISTICS")
-        print("=" * 60)
-        print(f"Total files scanned:        {self.stats['total_files']:>6}")
-        print(f"  Media files:              {self.stats['media_files']:>6}")
-        print(f"  Overlay files:            {self.stats['overlay_files']:>6}")
-        print(f"  Matched overlays:         {self.stats.get('matched_overlays', 0):>6}")
-        print(f"  Thumbnail files (skipped):{self.stats['thumbnail_files']:>6}")
-        print(f"  System files (skipped):   {self.stats['system_files']:>6}")
-        print(f"  Banned files (skipped):   {self.stats['banned_files']:>6}")
-        print(f"  Unknown/skipped:          {self.stats['skipped_files']:>6}")
-        print()
-        print(f"Conversations:              {self.stats['conversations']:>6}")
-        print(f"Total messages:             {self.stats['messages']:>6}")
-        print(f"Media messages:             {self.stats['media_messages']:>6}")
-        print(f"Orphaned media files:       {self.stats.get('orphaned_media', 0):>6}")
-        print(f"Ambiguous cases (manual):   {self.stats.get('ambiguous_cases', 0):>6}")
-        print()
-        print(f"Duplicate media detected:   {self.stats.get('duplicate_files', 0):>6}")
-        print(f"Messages consolidated:      {self.stats.get('deduplicated_files', 0):>6}")
-        print("=" * 60)
+        """Print processing statistics as a compact table."""
+        stats = {
+            "Files scanned": self.stats["total_files"],
+            "Media files": self.stats["media_files"],
+            "Overlay files": self.stats["overlay_files"],
+            "Matched overlays": self.stats.get("matched_overlays", 0),
+            "Conversations": self.stats["conversations"],
+            "Messages": self.stats["messages"],
+            "Media messages": self.stats["media_messages"],
+            "Orphaned media": self.stats.get("orphaned_media", 0),
+            "Duplicates": self.stats.get("duplicate_files", 0),
+            "Banned skipped": self.stats["banned_files"],
+        }
+        print_preprocessing_stats("Preprocessing Stats", stats)
 
     def process(self) -> None:
         """Main processing pipeline"""
         logger.info("Starting Snapchat Export Preprocessing")
-        print(f"Export path: {self.export_path}")
-        print(f"Output path: {self.output_dir}\n")
+        logger.info("Export path: %s", self.export_path)
+        logger.info("Output path: %s", self.output_dir)
 
         # Validate export structure
         if not self.validate_export():
-            sys.exit(1)
+            raise PreprocessingError(f"Invalid export structure: {self.export_path}")
 
         # Load chat history
         chat_history = self.load_chat_history()
 
         # Build file catalog
-        print("\nScanning chat_media directory...")
+        logger.info("Scanning chat_media directory...")
         file_catalog = self.build_file_catalog()
 
         # Create cleaned metadata
-        print("\nProcessing metadata...")
+        logger.info("Processing metadata...")
         metadata, ambiguous_cases = self.create_metadata(chat_history, file_catalog)
 
         # Organize files
@@ -1243,8 +1264,14 @@ Examples:
     export_path = Path(args.export_directory)
     output_path = Path(args.output) if args.output else None
 
-    preprocessor = SnapchatPreprocessor(export_path, output_path, workers=args.workers)
-    preprocessor.process()
+    try:
+        preprocessor = SnapchatPreprocessor(
+            export_path, output_path, workers=args.workers
+        )
+        preprocessor.process()
+    except PreprocessingError as e:
+        logger.error("%s", e)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -83,7 +83,13 @@ class TestCLIDetection:
         create_google_photos_export(export_dir)
 
         result = subprocess.run(
-            [sys.executable, "memoria.py", str(export_dir), "--skip-upload"],
+            [
+                sys.executable,
+                "memoria.py",
+                str(export_dir),
+                "--skip-upload",
+                "--verbose",
+            ],
             cwd=project_root,
             capture_output=True,
             text=True,
@@ -99,7 +105,13 @@ class TestCLIDetection:
         create_snapchat_memories_export(export_dir)
 
         result = subprocess.run(
-            [sys.executable, "memoria.py", str(export_dir), "--skip-upload"],
+            [
+                sys.executable,
+                "memoria.py",
+                str(export_dir),
+                "--skip-upload",
+                "--verbose",
+            ],
             cwd=project_root,
             capture_output=True,
             text=True,
@@ -114,7 +126,13 @@ class TestCLIDetection:
         create_discord_export(export_dir)
 
         result = subprocess.run(
-            [sys.executable, "memoria.py", str(export_dir), "--skip-upload"],
+            [
+                sys.executable,
+                "memoria.py",
+                str(export_dir),
+                "--skip-upload",
+                "--verbose",
+            ],
             cwd=project_root,
             capture_output=True,
             text=True,
@@ -130,14 +148,26 @@ class TestCLIDetection:
         empty_dir.mkdir()
 
         result = subprocess.run(
-            [sys.executable, "memoria.py", str(empty_dir), "--skip-upload"],
+            [
+                sys.executable,
+                "memoria.py",
+                str(empty_dir),
+                "--skip-upload",
+                "--verbose",
+            ],
             cwd=project_root,
             capture_output=True,
             text=True,
             timeout=30,
         )
 
-        assert "No processors matched" in result.stdout or result.returncode != 0
+        # In dedup mode, empty directories are handled gracefully with "No files to process"
+        # Otherwise expect "No processors matched" or non-zero return
+        assert (
+            "No processors matched" in result.stdout
+            or "No files to process" in result.stdout
+            or result.returncode != 0
+        )
 
 
 class TestCLIOutputDirectory:
@@ -151,10 +181,13 @@ class TestCLIOutputDirectory:
 
         result = subprocess.run(
             [
-                sys.executable, "memoria.py",
+                sys.executable,
+                "memoria.py",
                 str(export_dir),
-                "-o", str(output_dir),
-                "--skip-upload"
+                "-o",
+                str(output_dir),
+                "--skip-upload",
+                "--verbose",
             ],
             cwd=project_root,
             capture_output=True,
@@ -175,7 +208,13 @@ class TestCLIFlags:
         create_google_photos_export(export_dir)
 
         result = subprocess.run(
-            [sys.executable, "memoria.py", str(export_dir), "--verbose", "--skip-upload"],
+            [
+                sys.executable,
+                "memoria.py",
+                str(export_dir),
+                "--verbose",
+                "--skip-upload",
+            ],
             cwd=project_root,
             capture_output=True,
             text=True,
@@ -184,7 +223,10 @@ class TestCLIFlags:
 
         # Should not error on verbose flag
         # May still fail for other reasons, but flag should be accepted
-        assert "--verbose" not in result.stderr or "unrecognized" not in result.stderr.lower()
+        assert (
+            "--verbose" not in result.stderr
+            or "unrecognized" not in result.stderr.lower()
+        )
 
     def test_workers_flag(self, project_root, tmp_path):
         """Should accept workers flag."""
@@ -192,7 +234,14 @@ class TestCLIFlags:
         create_google_photos_export(export_dir)
 
         result = subprocess.run(
-            [sys.executable, "memoria.py", str(export_dir), "--workers", "2", "--skip-upload"],
+            [
+                sys.executable,
+                "memoria.py",
+                str(export_dir),
+                "--workers",
+                "2",
+                "--skip-upload",
+            ],
             cwd=project_root,
             capture_output=True,
             text=True,
@@ -200,7 +249,10 @@ class TestCLIFlags:
         )
 
         # Should not error on workers flag
-        assert "--workers" not in result.stderr or "unrecognized" not in result.stderr.lower()
+        assert (
+            "--workers" not in result.stderr
+            or "unrecognized" not in result.stderr.lower()
+        )
 
     def test_skip_upload_flag(self, project_root, tmp_path):
         """Should accept skip-upload flag."""
@@ -216,7 +268,10 @@ class TestCLIFlags:
         )
 
         # Should not error on skip-upload flag
-        assert "--skip-upload" not in result.stderr or "unrecognized" not in result.stderr.lower()
+        assert (
+            "--skip-upload" not in result.stderr
+            or "unrecognized" not in result.stderr.lower()
+        )
 
 
 class TestCLIProcessorFilter:
@@ -229,10 +284,12 @@ class TestCLIProcessorFilter:
 
         result = subprocess.run(
             [
-                sys.executable, "memoria.py",
+                sys.executable,
+                "memoria.py",
                 str(export_dir),
-                "--processor", "Google Photos",
-                "--skip-upload"
+                "--processor",
+                "Google Photos",
+                "--skip-upload",
             ],
             cwd=project_root,
             capture_output=True,
@@ -250,10 +307,12 @@ class TestCLIProcessorFilter:
 
         result = subprocess.run(
             [
-                sys.executable, "memoria.py",
+                sys.executable,
+                "memoria.py",
                 str(export_dir),
-                "--processor", "NonExistentProcessor",
-                "--skip-upload"
+                "--processor",
+                "NonExistentProcessor",
+                "--skip-upload",
             ],
             cwd=project_root,
             capture_output=True,
@@ -262,4 +321,3 @@ class TestCLIProcessorFilter:
         )
 
         assert result.returncode != 0 or "Unknown processor" in result.stdout
-

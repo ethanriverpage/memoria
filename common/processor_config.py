@@ -41,14 +41,14 @@ def get_effective_output_dir(
     processor_name: str, base_output_dir: Optional[str]
 ) -> str:
     """Get the effective output directory for a processor
-    
+
     Args:
         processor_name: Name of the processor
         base_output_dir: Base output directory (from args.output), or None
-        
+
     Returns:
         Full effective output directory path as string
-        
+
     Examples:
         >>> get_effective_output_dir("Google Photos", "/out")
         '/out/Google Photos'
@@ -60,7 +60,7 @@ def get_effective_output_dir(
     if base_output_dir:
         # Get the subdirectory for this processor (may be None)
         subdir = PROCESSOR_SUBDIRS.get(processor_name)
-        
+
         if subdir:
             return str(Path(base_output_dir) / subdir)
         else:
@@ -69,4 +69,3 @@ def get_effective_output_dir(
     else:
         # Use processor-specific default
         return PROCESSOR_DEFAULTS.get(processor_name, "")
-

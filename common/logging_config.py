@@ -22,6 +22,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+from rich.logging import RichHandler
+
+from common.console import console
+
 # =============================================================================
 # Format Constants - Single source of truth for log formats
 # =============================================================================
@@ -49,37 +53,60 @@ SUPPRESSED_LOGGERS: List[str] = [
 
 
 # =============================================================================
+# Custom Handlers
+# =============================================================================
+
+
+class StreamingFileHandler(logging.FileHandler):
+    """FileHandler that flushes after every log entry for real-time streaming.
+
+    By default, Python's FileHandler uses buffered I/O, meaning log entries
+    may not appear in the file until the buffer fills or the handler is closed.
+    This handler flushes after each emit, ensuring logs are written immediately.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Emit a record and immediately flush to disk."""
+        super().emit(record)
+        self.flush()
+
+
+# =============================================================================
 # Main Logging Setup Functions
 # =============================================================================
 
 
 def setup_logging(
-    verbose: bool = False, log_file: Optional[str] = None
+    verbosity: int = 0, log_file: Optional[str] = None, verbose: bool = False
 ) -> logging.Logger:
-    """Configure logging for media processing.
+    """Configure logging for media processing with tiered verbosity.
 
     Sets up console logging with appropriate level and optional file logging.
 
-    In info mode (verbose=False):
-    - Console shows only ERROR messages (clean output with progress bars)
-    - Third-party libraries are suppressed to WARNING level
+    Verbosity levels:
+    - 0 (default): Console shows only ERROR messages (clean output with progress bars)
+    - 1 (-v): Console shows INFO level (phase summaries, per-export totals)
+    - 2+ (-vv): Console shows DEBUG level (file-level operations, matching details)
 
-    In verbose mode (verbose=True):
-    - Console shows INFO level messages
-    - File captures all DEBUG logs
-    - Third-party libraries still suppressed to WARNING
+    Third-party libraries are always suppressed to WARNING level.
+    File logging (when enabled) always captures DEBUG level.
 
     Args:
-        verbose: If True, enable verbose console output and file logging
+        verbosity: Verbosity level (0=errors only, 1=info, 2+=debug)
         log_file: Optional path to log file for persistent logging
+        verbose: Deprecated. If True, treated as verbosity=1 for backwards compatibility.
 
     Returns:
         Configured root logger
 
     Example:
-        >>> logger = setup_logging(verbose=True, log_file="processing.log")
+        >>> logger = setup_logging(verbosity=1, log_file="processing.log")
         >>> logger.info("Processing started")
     """
+    # Backwards compatibility: treat verbose=True as verbosity=1
+    if verbose and verbosity == 0:
+        verbosity = 1
+
     # Configure root logger to capture everything
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
@@ -87,24 +114,28 @@ def setup_logging(
     # Clear any existing handlers to avoid duplicates
     root_logger.handlers.clear()
 
-    # Create console handler
-    # In info mode: only show errors (clean console with progress bars)
-    # In verbose mode: show info and above
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO if verbose else logging.ERROR)
-
-    # Create formatter based on verbosity
-    if verbose:
-        formatter = logging.Formatter(LOG_FORMAT_DETAILED, datefmt=LOG_DATE_FORMAT)
+    # Determine console log level based on verbosity
+    if verbosity >= 2:
+        console_level = logging.DEBUG
+    elif verbosity == 1:
+        console_level = logging.INFO
     else:
-        formatter = logging.Formatter(LOG_FORMAT_SIMPLE)
+        console_level = logging.ERROR
 
-    console_handler.setFormatter(formatter)
+    # Create Rich console handler for colorized output
+    console_handler = RichHandler(
+        console=console,
+        show_time=verbosity >= 1,
+        show_path=False,  # Reduced noise: don't show file:line in console
+        rich_tracebacks=True,
+        markup=True,
+    )
+    console_handler.setLevel(console_level)
     root_logger.addHandler(console_handler)
 
     # Add file handler if log_file specified
     if log_file:
-        file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
+        file_handler = StreamingFileHandler(log_file, mode="a", encoding="utf-8")
         file_handler.setLevel(logging.DEBUG)  # Always log everything to file
         file_formatter = logging.Formatter(LOG_FORMAT_DETAILED, datefmt=LOG_DATE_FORMAT)
         file_handler.setFormatter(file_formatter)
@@ -151,7 +182,7 @@ def add_export_log_handler(
     log_file = logs_dir / f"log-{export_name}-{timestamp}.log"
 
     # Create file handler for this export
-    file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
+    file_handler = StreamingFileHandler(log_file, mode="a", encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)  # Log everything to file
 
     # Use detailed format for file logging
@@ -235,7 +266,7 @@ def init_worker_logging(
         root_logger.setLevel(logging.INFO)
 
         # Add file handler
-        file_handler = logging.FileHandler(log_filename)
+        file_handler = StreamingFileHandler(log_filename)
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
@@ -272,4 +303,3 @@ def get_logger(name: str) -> logging.Logger:
         >>> logger.info("Processing started")
     """
     return logging.getLogger(name)
-

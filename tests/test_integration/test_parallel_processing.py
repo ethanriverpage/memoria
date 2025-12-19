@@ -25,12 +25,12 @@ FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
 skip_no_exiftool = pytest.mark.skipif(
     not EXIFTOOL_AVAILABLE, reason="exiftool not installed"
 )
-skip_no_ffmpeg = pytest.mark.skipif(
-    not FFMPEG_AVAILABLE, reason="ffmpeg not installed"
-)
+skip_no_ffmpeg = pytest.mark.skipif(not FFMPEG_AVAILABLE, reason="ffmpeg not installed")
 
 
-def create_large_google_photos_export(base_path: Path, num_albums: int = 10, files_per_album: int = 5) -> Path:
+def create_large_google_photos_export(
+    base_path: Path, num_albums: int = 10, files_per_album: int = 5
+) -> Path:
     """Create a larger Google Photos export for parallel processing tests.
 
     Args:
@@ -77,11 +77,7 @@ def get_file_names(directory: Path) -> Set[str]:
     Returns:
         Set of relative file paths
     """
-    return {
-        str(f.relative_to(directory))
-        for f in directory.rglob("*")
-        if f.is_file()
-    }
+    return {str(f.relative_to(directory)) for f in directory.rglob("*") if f.is_file()}
 
 
 def count_files(directory: Path) -> int:
@@ -216,7 +212,9 @@ class TestOutputConsistency:
         files2 = get_file_names(output2)
 
         # Same file names should be produced
-        assert files1 == files2, f"File sets differ: {files1.symmetric_difference(files2)}"
+        assert (
+            files1 == files2
+        ), f"File sets differ: {files1.symmetric_difference(files2)}"
 
 
 @pytest.mark.integration
@@ -243,7 +241,9 @@ class TestRaceConditions:
         # (though same name in different dirs is OK)
         for dir_path in [d for d in output_dir.rglob("*") if d.is_dir()]:
             dir_files = [f.name for f in dir_path.iterdir() if f.is_file()]
-            assert len(dir_files) == len(set(dir_files)), "Duplicate files in same directory"
+            assert len(dir_files) == len(
+                set(dir_files)
+            ), "Duplicate files in same directory"
 
     @skip_no_exiftool
     def test_no_missing_files(self, tmp_path):
@@ -269,7 +269,11 @@ class TestRaceConditions:
 
         # Should have processed all input files
         output_files = list(output_dir.rglob("*"))
-        output_media = [f for f in output_files if f.is_file() and f.suffix.lower() in [".jpg", ".png"]]
+        output_media = [
+            f
+            for f in output_files
+            if f.is_file() and f.suffix.lower() in [".jpg", ".png"]
+        ]
 
         # At minimum, should have some output
         assert len(output_media) > 0, "No output files produced"
@@ -306,7 +310,9 @@ class TestResourceCleanup:
             # Some temp dirs might remain but should be mostly empty
             temp_file_count = len([f for f in temp_files if f.is_file()])
             # Allow for some log files but no media files
-            assert temp_file_count < 10, f"Too many temp files remaining: {temp_file_count}"
+            assert (
+                temp_file_count < 10
+            ), f"Too many temp files remaining: {temp_file_count}"
 
     @skip_no_exiftool
     def test_multiple_runs_dont_accumulate_temp(self, tmp_path):
@@ -332,7 +338,9 @@ class TestResourceCleanup:
         # Temp should not have accumulated files
         if temp_dir.exists():
             temp_files = [f for f in temp_dir.rglob("*") if f.is_file()]
-            assert len(temp_files) < 20, f"Accumulated too many temp files: {len(temp_files)}"
+            assert (
+                len(temp_files) < 20
+            ), f"Accumulated too many temp files: {len(temp_files)}"
 
 
 @pytest.mark.integration
@@ -383,5 +391,6 @@ class TestLargeExportProcessing:
         seq_count = count_files(output_seq)
         par_count = count_files(output_par)
 
-        assert seq_count == par_count, f"Counts differ: seq={seq_count}, par={par_count}"
-
+        assert (
+            seq_count == par_count
+        ), f"Counts differ: seq={seq_count}, par={par_count}"

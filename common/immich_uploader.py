@@ -74,7 +74,7 @@ def upload(
     env_skip_hash = os.environ.get("IMMICH_SKIP_HASH")
     if env_skip_hash is not None:
         skip_hash = parse_bool_env(env_skip_hash)
-    
+
     # Default ignore patterns from environment or use provided patterns
     if ignore_patterns is None:
         env_ignore = os.environ.get("IMMICH_IGNORE_PATTERNS")
@@ -84,7 +84,7 @@ def upload(
             # Default patterns to exclude problematic folders
             # Note: needs_matching requires **/*matching/** pattern due to underscore handling
             ignore_patterns = ["issues/**", "**/*matching/**"]
-    
+
     cmd = [
         "immich",
         "upload",
@@ -99,11 +99,11 @@ def upload(
         cmd.append("--include-hidden")
     if recursive:
         cmd.append("--recursive")
-    
+
     # Add ignore patterns
     for pattern in ignore_patterns:
         cmd.extend(["--ignore", pattern])
-    
+
     cmd.append(path)
 
     # Ensure album string is not empty and path exists
@@ -121,5 +121,3 @@ def upload(
         stdin=subprocess.DEVNULL,
     )
     return proc.returncode
-
-

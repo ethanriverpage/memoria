@@ -6,9 +6,13 @@ Manages registration and discovery of all media processors.
 Supports detection of multiple processors per input directory.
 """
 
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 from processors.base import ProcessorBase
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 
 class ProcessorRegistry:
@@ -62,7 +66,7 @@ class ProcessorRegistry:
                     matches.append(processor)
             except Exception as e:
                 # Log but don't fail if one detector has issues
-                print(f"Warning: Detector for {processor.get_name()} failed: {e}")
+                logger.warning("Detector for %s failed: %s", processor.get_name(), e)
                 continue
 
         # Sort by priority (highest first) for consistent ordering

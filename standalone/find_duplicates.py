@@ -17,8 +17,8 @@ from multiprocessing import cpu_count
 import xxhash
 
 # Import utilities from common module
-sys.path.insert(0, str(Path(__file__).parent))
-from common.utils import is_supported_media
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from common.file_scanner import collect_media_files as _collect_media_files
 from common.filter_banned_files import BannedFilesFilter
 
 
@@ -61,7 +61,7 @@ def calculate_file_hash_wrapper(filepath_str: str) -> Tuple[Optional[str], str]:
     return (file_hash, filepath_str)
 
 
-# File validation uses common.utils.is_supported_media and common.filter_banned_files
+# File validation uses common.file_scanner module
 
 
 def collect_media_files(
@@ -69,8 +69,7 @@ def collect_media_files(
 ) -> List[Path]:
     """
     Collect all media files from multiple export directories.
-    Uses common utilities to filter valid media types and skip banned files.
-    Also skips files with 'overlay' or 'thumbnail' in their filenames.
+    Uses common.file_scanner for unified filtering logic.
 
     Args:
         base_paths: List of root paths to scan
@@ -80,67 +79,25 @@ def collect_media_files(
         List of all valid media file paths
     """
     print("Scanning directories for media files...")
-    media_files = []
-    skipped_banned = 0
-    skipped_unsupported = 0
-    skipped_overlay_thumbnail = 0
 
     for base_path in base_paths:
         if not base_path.exists():
             print(f"Warning: Path does not exist: {base_path}")
-            continue
-
-        if base_path.is_file():
-            # Single file specified
+        elif base_path.is_file():
             print(f"\nProcessing file: {base_path.name}")
-            if banned_filter.is_banned(base_path):
-                skipped_banned += 1
-            elif (
-                "overlay" in base_path.name.lower()
-                or "thumbnail" in base_path.name.lower()
-            ):
-                skipped_overlay_thumbnail += 1
-            elif is_supported_media(base_path):
-                media_files.append(base_path)
-            else:
-                skipped_unsupported += 1
         else:
-            # Directory specified
             print(f"\nScanning directory: {base_path}")
 
-            # Walk through all files in the directory tree
-            for root, dirs, files in os.walk(base_path):
-                root_path = Path(root)
-
-                # Filter out banned directories in-place to skip walking into them
-                dirs[:] = [
-                    d for d in dirs if not banned_filter.is_banned(root_path / d)
-                ]
-
-                for filename in files:
-                    filepath = root_path / filename
-
-                    # Skip banned files
-                    if banned_filter.is_banned(filepath):
-                        skipped_banned += 1
-                        continue
-
-                    # Skip overlay and thumbnail files
-                    if "overlay" in filename.lower() or "thumbnail" in filename.lower():
-                        skipped_overlay_thumbnail += 1
-                        continue
-
-                    # Only collect supported media files (images and videos)
-                    if is_supported_media(filepath):
-                        media_files.append(filepath)
-                    else:
-                        skipped_unsupported += 1
+    media_files = _collect_media_files(
+        base_paths,
+        banned_filter=banned_filter,
+        skip_overlays=True,
+        skip_thumbnails=True,
+        recursive=True,
+    )
 
     print("\nScan complete:")
     print(f"  Media files found: {len(media_files):,}")
-    print(f"  Banned files skipped: {skipped_banned:,}")
-    print(f"  Overlay/thumbnail files skipped: {skipped_overlay_thumbnail:,}")
-    print(f"  Unsupported files skipped: {skipped_unsupported:,}")
     return media_files
 
 

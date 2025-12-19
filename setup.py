@@ -13,7 +13,9 @@ from setuptools import setup, find_packages
 
 # Read the README for long description
 readme_file = Path(__file__).parent / "README.md"
-long_description = readme_file.read_text(encoding="utf-8") if readme_file.exists() else ""
+long_description = (
+    readme_file.read_text(encoding="utf-8") if readme_file.exists() else ""
+)
 
 # Read requirements from requirements.txt
 requirements_file = Path(__file__).parent / "requirements.txt"
@@ -32,9 +34,11 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="your_username",
-    author_email="ethan@ethanriver.page",  
-    url="https://github.com/your_username/memoria",  
-    packages=find_packages(include=["common", "common.*", "processors", "processors.*"]),
+    author_email="ethan@ethanriver.page",
+    url="https://github.com/your_username/memoria",
+    packages=find_packages(
+        include=["common", "common.*", "processors", "processors.*"]
+    ),
     python_requires=">=3.7",
     install_requires=requirements,
     entry_points={

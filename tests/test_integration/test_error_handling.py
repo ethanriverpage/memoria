@@ -29,9 +29,7 @@ FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
 skip_no_exiftool = pytest.mark.skipif(
     not EXIFTOOL_AVAILABLE, reason="exiftool not installed"
 )
-skip_no_ffmpeg = pytest.mark.skipif(
-    not FFMPEG_AVAILABLE, reason="ffmpeg not installed"
-)
+skip_no_ffmpeg = pytest.mark.skipif(not FFMPEG_AVAILABLE, reason="ffmpeg not installed")
 
 
 @pytest.mark.integration
@@ -426,4 +424,3 @@ class TestSpecialCharacterPaths:
             assert isinstance(result, bool)
         except Exception:
             pass
-

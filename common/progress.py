@@ -3,20 +3,67 @@
 Unified progress bar utilities for consistent UX across all processors.
 
 Provides standardized progress bar formatting with phase prefixes to clearly
-indicate which stage of processing is active.
+indicate which stage of processing is active. Uses Rich for styled terminal output.
 """
 
-from concurrent.futures import as_completed
-from typing import Dict, Iterable, List, Optional, TypeVar
+import os
+from concurrent.futures import as_completed, Future
+from typing import Any, Dict, Generator, Iterable, List, Optional, TypeVar
 
-from tqdm import tqdm
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
+
+from common.console import console
 
 # Phase constants for consistent naming
 PHASE_PREPROCESS = "Preprocess"
 PHASE_PROCESS = "Process"
 PHASE_EXIF = "EXIF"
+PHASE_CATALOG = "Catalog"
+PHASE_DEDUP = "Dedup"
 
 T = TypeVar("T")
+
+
+def _is_subprocess() -> bool:
+    """Check if we're running in a subprocess worker.
+
+    Subprocess workers set _MEMORIA_SUBPROCESS=1 to signal that progress bars
+    should be disabled to prevent interleaved output.
+
+    Returns:
+        True if running in a subprocess worker, False otherwise.
+    """
+    return os.environ.get("_MEMORIA_SUBPROCESS") == "1"
+
+
+def _create_progress() -> Progress:
+    """Create a Progress instance with standard columns.
+
+    Returns:
+        Configured Progress instance with spinner, description, bar, and timing.
+        In subprocess workers, returns a disabled Progress to prevent interleaving.
+    """
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("[dim]|[/]"),
+        TimeElapsedColumn(),
+        TextColumn("[dim]<[/]"),
+        TimeRemainingColumn(),
+        console=console,
+        transient=False,
+        disable=_is_subprocess(),
+    )
 
 
 def progress_bar(
@@ -25,7 +72,7 @@ def progress_bar(
     action: str,
     total: Optional[int] = None,
     unit: str = "file",
-) -> tqdm:
+) -> Generator[T, None, None]:
     """Wrap iterable with standardized progress bar.
 
     Args:
@@ -33,37 +80,52 @@ def progress_bar(
         phase: Phase name (use PHASE_* constants)
         action: Action description (e.g., "Creating files")
         total: Total count if known
-        unit: Unit name for display
+        unit: Unit name for display (currently unused with Rich, kept for API compatibility)
 
-    Returns:
-        tqdm progress bar wrapping the iterable
+    Yields:
+        Items from the iterable with progress updates
     """
-    return tqdm(iterable, desc=f"[{phase}] {action}", total=total, unit=unit)
+    description = f"[{phase}] {action}"
+
+    # Convert to list if we need to count and no total provided
+    if total is None:
+        items = list(iterable)
+        total = len(items)
+    else:
+        items = iterable
+
+    with _create_progress() as progress:
+        task = progress.add_task(description, total=total)
+        for item in items:
+            yield item
+            progress.advance(task)
 
 
 def futures_progress(
-    futures_dict: Dict,
+    futures_dict: Dict[Future, Any],
     phase: str,
     action: str,
     unit: str = "item",
-) -> tqdm:
+) -> Generator[Future, None, None]:
     """Progress bar for concurrent.futures.as_completed pattern.
 
     Args:
         futures_dict: Dictionary mapping futures to identifiers
         phase: Phase name (use PHASE_* constants)
         action: Action description (e.g., "Parsing albums")
-        unit: Unit name for display
+        unit: Unit name for display (currently unused with Rich, kept for API compatibility)
 
-    Returns:
-        tqdm progress bar wrapping as_completed iterator
+    Yields:
+        Completed futures with progress updates
     """
-    return tqdm(
-        as_completed(futures_dict),
-        total=len(futures_dict),
-        desc=f"[{phase}] {action}",
-        unit=unit,
-    )
+    description = f"[{phase}] {action}"
+    total = len(futures_dict)
+
+    with _create_progress() as progress:
+        task = progress.add_task(description, total=total)
+        for future in as_completed(futures_dict):
+            yield future
+            progress.advance(task)
 
 
 def chunked_progress(
@@ -72,7 +134,7 @@ def chunked_progress(
     phase: str,
     action: str,
     unit: str = "batch",
-) -> Iterable[List[T]]:
+) -> Generator[List[T], None, None]:
     """Yield chunks with progress bar for batch processing.
 
     Args:
@@ -80,10 +142,16 @@ def chunked_progress(
         chunk_size: Size of each chunk
         phase: Phase name (use PHASE_* constants)
         action: Action description (e.g., "Writing metadata")
-        unit: Unit name for display
+        unit: Unit name for display (currently unused with Rich, kept for API compatibility)
 
     Yields:
-        Chunks of items with progress bar
+        Chunks of items with progress bar updates
     """
     chunks = [items[i : i + chunk_size] for i in range(0, len(items), chunk_size)]
-    yield from tqdm(chunks, desc=f"[{phase}] {action}", unit=unit)
+    description = f"[{phase}] {action}"
+
+    with _create_progress() as progress:
+        task = progress.add_task(description, total=len(chunks))
+        for chunk in chunks:
+            yield chunk
+            progress.advance(task)

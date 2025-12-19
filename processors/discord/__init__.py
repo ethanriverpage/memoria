@@ -9,4 +9,3 @@ and embedding metadata.
 from processors.discord.processor import DiscordProcessor, get_processor
 
 __all__ = ["DiscordProcessor", "get_processor"]
-

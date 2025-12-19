@@ -36,9 +36,7 @@ FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
 skip_no_exiftool = pytest.mark.skipif(
     not EXIFTOOL_AVAILABLE, reason="exiftool not installed"
 )
-skip_no_ffmpeg = pytest.mark.skipif(
-    not FFMPEG_AVAILABLE, reason="ffmpeg not installed"
-)
+skip_no_ffmpeg = pytest.mark.skipif(not FFMPEG_AVAILABLE, reason="ffmpeg not installed")
 
 
 @pytest.mark.integration
@@ -172,9 +170,7 @@ class TestGoogleVoiceProcessing:
                     "contact": "+1234567890",
                     "type": "Text",
                     "timestamp": "2021-01-01T12_00_00Z",
-                    "messages": [
-                        {"sender": "Me", "text": "Hello", "time": "12:00 PM"}
-                    ],
+                    "messages": [{"sender": "Me", "text": "Hello", "time": "12:00 PM"}],
                     "media": ["photo.jpg"],
                 }
             ],
@@ -360,7 +356,9 @@ class TestInstagramPublicProcessing:
             )
             assert result is True
         except SystemExit:
-            pytest.skip("Instagram Public Media processor requires complete export format")
+            pytest.skip(
+                "Instagram Public Media processor requires complete export format"
+            )
 
 
 @pytest.mark.integration
@@ -493,4 +491,3 @@ class TestOutputStructure:
         DiscordProcessor.process(str(export_dir), str(output_dir), verbose=False)
 
         assert output_dir.exists()
-

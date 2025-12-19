@@ -36,6 +36,15 @@ Every processor must provide:
 - **Priority**: Execution order when multiple processors match
 - **Processing logic**: Extract metadata, copy files, embed EXIF data
 
+#### Optional: Cross-Processor Deduplication
+
+To participate in cross-processor deduplication, implement:
+
+- **`supports_dedup()`**: Return `True` to enable deduplication support
+- **`build_catalog()`**: Build file catalog with hashes (without copying files)
+
+See [Global Deduplication](Global-Deduplication) for details on cross-processor deduplication.
+
 ### Example Structure
 
 Look at existing processors as references:
@@ -73,6 +82,115 @@ For detailed implementation guidance:
 - **Thread safety**: Processing may be multi-threaded
 - **EXIF standards**: Use standard EXIF tags that work across photo management systems
 - **Documentation**: Document the expected export structure in your processor
+
+## Cross-Processor Deduplication Support
+
+Processors that handle media files (photos, videos) should implement cross-processor deduplication support. This allows Memoria to identify duplicate files across different platform exports.
+
+### Implementation
+
+Add these methods to your processor class:
+
+```python
+@staticmethod
+def supports_dedup() -> bool:
+    """Return True to enable cross-processor deduplication."""
+    return True
+
+@staticmethod
+def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
+    """Build catalog of files with hashes and metadata.
+    
+    This method is called during Phase 1 (CATALOG) of deduplication.
+    It should scan all media files, compute hashes, and return a
+    catalog WITHOUT copying any files.
+    
+    Args:
+        input_dir: Path to input directory
+        **kwargs: Additional arguments (verbose, workers)
+    
+    Returns:
+        Catalog dictionary with structure:
+        {
+            "processor": str,           # Processor name
+            "input_dir": str,           # Input directory path
+            "files": [                  # List of file entries
+                {
+                    "source_path": str,           # Full path to source
+                    "relative_path": str,         # Path relative to input_dir
+                    "content_hash": str,          # xxHash64 hex digest
+                    "perceptual_hash": str|None,  # dhash hex or None
+                    "file_size": int,             # Size in bytes
+                    "dimensions": tuple|None,     # (width, height) or None
+                    "timestamp": str|None,        # ISO timestamp or None
+                    "metadata": dict,             # Processor-specific metadata
+                },
+            ]
+        }
+    """
+    # Implementation here
+```
+
+### Processing with Dedup Manifest
+
+Update your `process()` method to accept and use the dedup manifest:
+
+```python
+@staticmethod
+def process(
+    input_dir: str,
+    output_dir: Optional[str] = None,
+    dedup_manifest: Optional[Dict[str, Any]] = None,  # New parameter
+    **kwargs
+) -> bool:
+    """Process the export, respecting dedup manifest if provided.
+    
+    When dedup_manifest is provided, skip files marked as secondary
+    (they will be handled by their primary processor).
+    """
+    # Check if file should be skipped using hash-based lookup
+    from common.dedup_service import is_file_primary_by_hash
+    from common.perceptual_hash import compute_content_hash
+    
+    for file_path in media_files:
+        if dedup_manifest:
+            content_hash = compute_content_hash(file_path)
+            if not is_file_primary_by_hash(dedup_manifest, content_hash, "YourProcessorName"):
+                continue  # Skip secondary files
+        # Process file normally
+```
+
+### Helper Functions
+
+Use these utilities from `common/`:
+
+```python
+from common.dedup_config import get_dedup_config
+from common.dedup_service import is_file_primary_by_hash
+from common.perceptual_hash import (
+    compute_content_hash,
+    compute_perceptual_hash_with_dims,
+)
+
+# Get dedup configuration
+config = get_dedup_config()
+
+# Check if perceptual hashing is enabled
+# compute_perceptual_hash_with_dims returns both hash and dimensions in one file open
+if config.use_perceptual:
+    perceptual_hash, dimensions = compute_perceptual_hash_with_dims(file_path)
+
+# Check if file is primary using hash-based lookup (works with preprocessed files)
+content_hash = compute_content_hash(file_path)
+if is_file_primary_by_hash(dedup_manifest, content_hash, "YourProcessorName"):
+    # Copy and process file
+```
+
+**Note:** The hash-based lookup (`is_file_primary_by_hash`) is preferred over path-based lookup (`is_file_primary`) because it works correctly even when files are preprocessed to temporary directories before processing.
+
+### Example Implementation
+
+See `processors/snapchat_memories/processor.py` for a complete example of deduplication support.
 
 ### Critical: Filesystem Timestamp Handling
 

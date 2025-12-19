@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""
-iMazing iMessage Processor
-
-This processor handles iMazing-format iMessage exports which use:
-- Flat file structure with filename-encoded metadata
-- CSV files for message text and metadata
-- Individual vCard files for contacts
-
-Unlike the standard iMessage processor which uses SQLite databases,
-this processor parses the filename metadata and CSV files directly.
-"""
+"""iMazing iMessage Processor - handles iMazing-format exports with filename metadata."""
 
 import json
 import logging
@@ -18,41 +8,44 @@ import uuid
 from datetime import datetime
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+from common.catalog import catalog_media_files
+from common.dedup_service import is_file_primary_by_hash, save_dedup_metadata
 from common.dependency_checker import check_exiftool, print_exiftool_error
+from common.file_utils import batch_correct_extensions
+from common.perceptual_hash import (
+    compute_content_hash,
+    is_live_photo_pair,
+    LIVE_PHOTO_IMAGE_EXTENSIONS,
+    LIVE_PHOTO_VIDEO_EXTENSIONS,
+)
 from common.exiftool_batch import (
     batch_read_existing_metadata,
     batch_rebuild_exif,
     batch_validate_exif,
-    batch_write_metadata_imessage,
+    batch_write_metadata_requests,
+    DEFAULT_PREAMBLE,
+    DescriptionWriteSpec,
+    MetadataWriteRequest,
 )
+from common.processing import print_processing_summary
 from common.progress import PHASE_PROCESS, progress_bar
-from common.utils import default_worker_count, sanitize_filename, update_file_timestamps
+from common.utils import (
+    ALL_MEDIA_EXTENSIONS,
+    default_worker_count,
+    FilenameGenerator,
+    sanitize_filename,
+    update_file_timestamps,
+)
 from processors.base import ProcessorBase
 from processors.imessage_imazing.preprocess import ImazingPreprocessor
 
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# Processor Detection and Registration
-# ============================================================================
-
-
 def detect(input_path: Path) -> bool:
-    """Check if this processor can handle the input directory.
-
-    Detection criteria for iMazing exports:
-    - Device-Info.txt exists with "iMazing" reference
-    - OR: Messages CSV files with specific pattern + media files with timestamp prefix
-
-    Args:
-        input_path: Path to the input directory
-
-    Returns:
-        True if this is an iMazing iMessage export, False otherwise
-    """
+    """Check if this is an iMazing iMessage export."""
     try:
         # Check for Device-Info.txt with iMazing reference
         device_info = input_path / "Device-Info.txt"
@@ -83,19 +76,9 @@ def detect(input_path: Path) -> bool:
             import re
 
             pattern = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2} \d{2} \d{2} - .+ - .+$")
-            media_extensions = {
-                ".jpg",
-                ".jpeg",
-                ".png",
-                ".gif",
-                ".mov",
-                ".mp4",
-                ".m4a",
-                ".heic",
-            }
 
             for f in input_path.iterdir():
-                if f.is_file() and f.suffix.lower() in media_extensions:
+                if f.is_file() and f.suffix.lower() in ALL_MEDIA_EXTENSIONS:
                     if pattern.match(f.stem + f.suffix):
                         return True
 
@@ -128,74 +111,264 @@ class ImazingProcessor(ProcessorBase):
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        """Check if this processor can handle the input."""
         return detect(input_path)
 
     @staticmethod
     def get_name() -> str:
-        """Return processor name."""
         return "iMessage-iMazing"
 
     @staticmethod
     def get_priority() -> int:
-        """Return priority (higher = run first).
-
-        Priority 85: Very high priority - requires specific iMazing file structure.
-        Higher than standard iMessage (80) to ensure iMazing exports are detected first.
-        """
         return 85
 
     @staticmethod
     def supports_consolidation() -> bool:
-        """iMazing exports are typically standalone, no consolidation needed."""
         return False
 
     @staticmethod
-    def process(input_dir: str, output_dir: Optional[str] = None, **kwargs) -> bool:
-        """Process an iMazing iMessage export.
+    def supports_dedup() -> bool:
+        return True
 
-        Args:
-            input_dir: Path to input directory
-            output_dir: Optional base output directory
-            **kwargs: Additional arguments (verbose, workers, temp_dir)
+    @staticmethod
+    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
+        """Build catalog of files with hashes and metadata."""
+        input_path = Path(input_dir)
+        workers = kwargs.get("workers", 4)
 
-        Returns:
-            True if processing succeeded, False otherwise
-        """
+        all_files = []
+        live_photo_videos = set()
+
+        # Collect from root directory
+        for file_path in input_path.iterdir():
+            if file_path.is_file() and file_path.suffix.lower() in ALL_MEDIA_EXTENSIONS:
+                all_files.append(file_path)
+
+        # Also check media/ directory if preprocessed
+        media_dir = input_path / "media"
+        if media_dir.exists():
+            for file_path in media_dir.iterdir():
+                if (
+                    file_path.is_file()
+                    and file_path.suffix.lower() in ALL_MEDIA_EXTENSIONS
+                ):
+                    all_files.append(file_path)
+
+        # Identify Live Photo pairs
+        for file_path in all_files:
+            suffix = file_path.suffix.lower()
+            if suffix in LIVE_PHOTO_IMAGE_EXTENSIONS:
+                for video_ext in LIVE_PHOTO_VIDEO_EXTENSIONS:
+                    video_path = file_path.with_suffix(video_ext)
+                    if video_path.exists() and is_live_photo_pair(
+                        file_path, video_path
+                    ):
+                        live_photo_videos.add(video_path)
+                        break
+
+        # Filter out Live Photo videos
+        media_files = [f for f in all_files if f not in live_photo_videos]
+
+        logger.info(
+            f"Found {len(media_files)} media files to catalog "
+            f"({len(live_photo_videos)} Live Photo videos grouped with images)"
+        )
+
+        def extract_live_photo_metadata(file_path: Path) -> Dict[str, Any]:
+            """Extract Live Photo metadata for a file."""
+            metadata = {}
+            suffix = file_path.suffix.lower()
+            if suffix in LIVE_PHOTO_IMAGE_EXTENSIONS:
+                for video_ext in LIVE_PHOTO_VIDEO_EXTENSIONS:
+                    video_path = file_path.with_suffix(video_ext)
+                    if video_path.exists() and is_live_photo_pair(
+                        file_path, video_path
+                    ):
+                        metadata["live_photo_video"] = str(video_path)
+                        break
+            return metadata
+
+        return catalog_media_files(
+            processor_name="iMessage-iMazing",
+            input_path=input_path,
+            media_files=media_files,
+            workers=workers,
+            metadata_extractor=extract_live_photo_metadata,
+        )
+
+    @staticmethod
+    def process(
+        input_dir: str,
+        output_dir: Optional[str] = None,
+        dedup_manifest: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> bool:
+        """Process an iMazing iMessage export."""
         return process_logic(
             input_dir=input_dir,
             output_dir=output_dir,
             temp_dir=kwargs.get("temp_dir", "../pre"),
             verbose=kwargs.get("verbose", False),
             workers=kwargs.get("workers"),
+            dedup_manifest=dedup_manifest,
         )
 
 
 def get_processor():
-    """Return processor class for auto-discovery.
-
-    This function is called by memoria.py during automatic processor discovery.
-
-    Returns:
-        ImazingProcessor class
-    """
+    """Return processor class for auto-discovery."""
     return ImazingProcessor
 
 
-# ============================================================================
-# Helper Functions
-# ============================================================================
+def _extract_device_from_source_export(source_export: str) -> str:
+    """Extract device identifier from source_export directory name."""
+    if not source_export:
+        return "unknown"
+
+    if "-messages-" in source_export:
+        return source_export.split("-messages-")[0]
+
+    return "unknown"
+
+
+def _build_description(message: dict, export_username: str) -> str:
+    """Build the description string for an iMessage."""
+    is_merged = "messages" in message and isinstance(message["messages"], list)
+
+    # Determine the correct source device identifier
+    if is_merged:
+        # For merged messages, find the oldest export by export date
+        oldest_msg = None
+        oldest_export_date = None
+        for msg in message["messages"]:
+            source_export = msg.get("source_export")
+            if source_export:
+                try:
+                    date_str = source_export.split("-messages-")[1]
+                    export_date = datetime.strptime(date_str, "%Y%m%d")
+                    if oldest_export_date is None or export_date < oldest_export_date:
+                        oldest_export_date = export_date
+                        oldest_msg = msg
+                except (ValueError, IndexError):
+                    pass
+
+        if oldest_msg and oldest_msg.get("source_export"):
+            source_device = _extract_device_from_source_export(
+                oldest_msg["source_export"]
+            )
+        else:
+            source_device = export_username
+            for msg in message["messages"]:
+                if msg.get("source_export"):
+                    source_device = _extract_device_from_source_export(
+                        msg["source_export"]
+                    )
+                    break
+    else:
+        if message.get("source_export"):
+            source_device = _extract_device_from_source_export(message["source_export"])
+        else:
+            source_device = export_username
+
+    description_parts = [f"Source: iMessage/{source_device}"]
+
+    if is_merged:
+        seen_lines: set = set()
+        for msg in message["messages"]:
+            conv_type = msg.get("conversation_type")
+            conv_title = msg.get("conversation_title")
+            conv_id = msg.get("conversation_id", "Unknown")
+            sender = msg.get("sender", "unknown")
+            content = msg.get("content", "")
+
+            if conv_type == "dm":
+                display_name = conv_title if conv_title else conv_id
+                conv_name = f"DM with {display_name}"
+            else:
+                conv_name = conv_title or "Unknown"
+
+            msg_line = f'  - {sender} in "{conv_name}"'
+            if content:
+                content = content.replace("\n", " ")
+                if len(content) > 100:
+                    content = content[:97] + "..."
+                msg_line += f': "{content}"'
+
+            if msg_line not in seen_lines:
+                seen_lines.add(msg_line)
+                description_parts.append(msg_line)
+
+        source_description = "&#xa;".join(description_parts)
+    else:
+        conv_type = message.get("conversation_type")
+        conv_title = message.get("conversation_title")
+        conv_id = message.get("conversation_id", "Unknown")
+        sender = message.get("sender", "unknown")
+        content = message.get("content", "")
+
+        if conv_type == "dm":
+            display_name = conv_title if conv_title else conv_id
+            conv_name = f"DM with {display_name}"
+        else:
+            conv_name = conv_title or "Unknown"
+
+        msg_line = f'  - {sender} in "{conv_name}"'
+        if content:
+            content = content.replace("\n", " ")
+            if len(content) > 100:
+                content = content[:97] + "..."
+            msg_line += f': "{content}"'
+
+        description_parts.append(msg_line)
+        source_description = "&#xa;".join(description_parts)
+
+    if message.get("is_live_photo_video"):
+        source_description += "&#xa;[Live Photo Video]"
+
+    return source_description
+
+
+def _build_metadata_requests(
+    file_info: List[Tuple[str, dict, str]],
+) -> List[MetadataWriteRequest]:
+    """Build MetadataWriteRequest objects for iMessage files."""
+    requests: List[MetadataWriteRequest] = []
+
+    for file_path, message, export_username in file_info:
+        is_merged = "messages" in message and isinstance(message["messages"], list)
+
+        datetime_tags: List[Tuple[str, str]] = []
+        if is_merged:
+            date_str = message.get("primary_created")
+        else:
+            date_str = message.get("created")
+
+        if date_str:
+            exif_date = date_str.replace("-", ":").replace(" UTC", "")
+            datetime_tags = [
+                ("DateTimeOriginal", exif_date),
+                ("CreateDate", exif_date),
+                ("ModifyDate", exif_date),
+            ]
+
+        default_description = _build_description(message, export_username)
+
+        requests.append(
+            MetadataWriteRequest(
+                file_path=file_path,
+                arg_preamble=DEFAULT_PREAMBLE,
+                datetime_tags=datetime_tags,
+                gps=None,
+                description=DescriptionWriteSpec(
+                    default_description=default_description,
+                ),
+                processor_name="imessage_imazing",
+            )
+        )
+
+    return requests
 
 
 def is_preprocessed(input_path: Path) -> bool:
-    """Check if input directory is already preprocessed.
-
-    Args:
-        input_path: Path to input directory
-
-    Returns:
-        True if already preprocessed, False if raw export
-    """
+    """Check if input directory is already preprocessed."""
     metadata_file = input_path / "metadata.json"
     media_dir = input_path / "media"
 
@@ -216,27 +389,13 @@ def is_preprocessed(input_path: Path) -> bool:
 
 
 def load_metadata(metadata_path: Path) -> dict:
-    """Load and parse metadata.json.
-
-    Args:
-        metadata_path: Path to metadata.json
-
-    Returns:
-        Parsed metadata dictionary
-    """
+    """Load and parse metadata.json."""
     with open(metadata_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def build_filename_index(metadata: dict) -> dict:
-    """Build index mapping media_file to message metadata.
-
-    Args:
-        metadata: Parsed metadata.json content
-
-    Returns:
-        Dict mapping media_file -> message dict
-    """
+    """Build index mapping media_file to message metadata."""
     filename_index = {}
 
     for _conv_id, conv_data in metadata.get("conversations", {}).items():
@@ -253,96 +412,34 @@ def build_filename_index(metadata: dict) -> dict:
     return filename_index
 
 
-def generate_imessage_filename(
-    message: dict, export_username: str, extension: str, used_filenames: set
-) -> str:
-    """Generate unique filename for an iMessage attachment.
-
-    Format: imessage-{contact_or_group}-{YYYYMMDD}_{seq}.{ext}
-
-    Args:
-        message: Message metadata dict
-        export_username: Username/device identifier from export (unused, kept for API compatibility)
-        extension: File extension (including dot)
-        used_filenames: Set tracking already-used filenames
-
-    Returns:
-        Generated filename
-    """
-    # Note: export_username parameter kept for API compatibility but not used in filename
-    _ = export_username
-
-    # Check if this is a merged/duplicate message
+def _build_imessage_identifier(message: dict) -> str:
+    """Build identifier for iMessage filename based on conversation type."""
     is_merged = "messages" in message and isinstance(message["messages"], list)
 
-    # Get date string
     if is_merged:
-        date_str = message.get("primary_created")
-        if not date_str and message["messages"]:
-            date_str = message["messages"][0].get("created")
+        return "merged"
+
+    conv_type = message.get("conversation_type")
+    conv_id = message.get("conversation_id", "")
+    conv_title = message.get("conversation_title")
+
+    if conv_type == "group" and conv_title:
+        conv_prefix = sanitize_filename(conv_title)
+    elif conv_id:
+        # For DMs, use the contact identifier
+        conv_prefix = sanitize_filename(conv_id)
     else:
-        date_str = message.get("created")
-
-    # Parse date
-    if date_str:
-        try:
-            # Format: "YYYY-MM-DD HH:MM:SS UTC"
-            date_obj = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S UTC")
-        except ValueError:
-            date_obj = datetime.now()
-    else:
-        date_obj = datetime.now()
-
-    date_key = date_obj.strftime("%Y%m%d")
-
-    # Determine conversation identifier
-    if is_merged:
-        # For merged messages, use simplified naming
-        conv_prefix = "merged"
-    else:
-        conv_type = message.get("conversation_type")
-        conv_id = message.get("conversation_id", "")
-        conv_title = message.get("conversation_title")
-
-        if conv_type == "group" and conv_title:
-            conv_prefix = sanitize_filename(conv_title)
-        elif conv_id:
-            # For DMs, use the contact identifier
-            conv_prefix = sanitize_filename(conv_id)
-        else:
-            conv_prefix = "unknown"
+        conv_prefix = "unknown"
 
     # Truncate if too long
     if len(conv_prefix) > 30:
         conv_prefix = conv_prefix[:30]
 
-    # Generate base filename
-    base_filename = f"imessage-{conv_prefix}-{date_key}{extension}"
-
-    # Check for collisions
-    if base_filename not in used_filenames:
-        used_filenames.add(base_filename)
-        return base_filename
-
-    # Add sequence number
-    sequence = 2
-    while True:
-        filename = f"imessage-{conv_prefix}-{date_key}_{sequence}{extension}"
-        if filename not in used_filenames:
-            used_filenames.add(filename)
-            return filename
-        sequence += 1
+    return conv_prefix
 
 
 def _extract_message_timestamp(message: dict) -> str | None:
-    """Extract timestamp string from iMazing message metadata.
-
-    Args:
-        message: Message metadata with 'created' or 'primary_created' field
-
-    Returns:
-        Timestamp string or None if not found
-    """
+    """Extract timestamp string from iMazing message metadata."""
     if "primary_created" in message:
         return message["primary_created"]
     elif "messages" in message and message["messages"]:
@@ -352,14 +449,7 @@ def _extract_message_timestamp(message: dict) -> str | None:
 
 
 def _process_file_worker(args_tuple):
-    """Worker function for processing files (Phase 1: copy and rename).
-
-    Args:
-        args_tuple: Tuple of (media_path, message, export_username, output_dir, output_filename)
-
-    Returns:
-        Tuple of (success, output_path, message, export_username)
-    """
+    """Worker function for processing files (copy and rename)."""
     media_path, message, export_username, output_dir, output_filename = args_tuple
 
     try:
@@ -379,30 +469,15 @@ def _process_file_worker(args_tuple):
         return (False, None, message, export_username)
 
 
-# ============================================================================
-# Main Processing Logic
-# ============================================================================
-
-
 def process_logic(
     input_dir: str,
     output_dir: str = None,
     temp_dir: str = "../pre",
-    verbose: bool = False,  # noqa: ARG001 - Reserved for future detailed logging
+    verbose: bool = False,  # noqa: ARG001
     workers: Optional[int] = None,
+    dedup_manifest: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Core processing logic for iMazing iMessage exports.
-
-    Args:
-        input_dir: Input directory (raw export or preprocessed)
-        output_dir: Output directory for processed files
-        temp_dir: Directory for temporary preprocessing files
-        verbose: Enable verbose logging
-        workers: Number of parallel workers
-
-    Returns:
-        True if processing succeeded, False otherwise
-    """
+    """Core processing logic for iMazing iMessage exports."""
     # Check for required tools
     if not check_exiftool():
         print_exiftool_error()
@@ -491,9 +566,29 @@ def process_logic(
         media_files = [f for f in media_files if f.is_file()]
         logger.info(f"Found {len(media_files)} files in media directory")
 
+        # Filter out secondary files based on dedup manifest (using hash-based lookup)
+        skipped_secondary_files = []
+        if dedup_manifest:
+            original_count = len(media_files)
+            filtered_files = []
+            for f in media_files:
+                content_hash = compute_content_hash(f)
+                if is_file_primary_by_hash(
+                    dedup_manifest, content_hash, "iMessage iMazing"
+                ):
+                    filtered_files.append(f)
+                else:
+                    skipped_secondary_files.append(str(f))
+            media_files = filtered_files
+            skipped_count = original_count - len(media_files)
+            if skipped_count > 0:
+                logger.info(f"Skipped {skipped_count} secondary files (dedup)")
+
         # Match files to messages and pre-generate filenames
         logger.info("Matching files and generating filenames...")
-        used_filenames = set()
+        filename_gen = FilenameGenerator(
+            "imessage", timestamp_format="%Y-%m-%d %H:%M:%S UTC"
+        )
         matched_files = []
 
         for media_file in media_files:
@@ -501,9 +596,10 @@ def process_logic(
                 message = filename_index[media_file.name]
                 file_ext = media_file.suffix.lower()
 
-                output_filename = generate_imessage_filename(
-                    message, export_username, file_ext, used_filenames
-                )
+                # Build identifier (policy) and delegate to FilenameGenerator (mechanism)
+                identifier = _build_imessage_identifier(message)
+                timestamp = _extract_message_timestamp(message)
+                output_filename = filename_gen.generate(timestamp, identifier, file_ext)
                 matched_files.append((media_file, message, output_filename))
             else:
                 logger.warning(f"No metadata for file: {media_file.name}")
@@ -555,7 +651,17 @@ def process_logic(
 
         logger.info(f"Copied {success_count} files ({failed_count} failed)")
 
-        # Phase 2: Batch EXIF processing
+        # Phase 2: Correct file extensions based on actual content
+        if file_paths:
+            corrections = batch_correct_extensions([Path(p) for p in file_paths])
+            if corrections:
+                # Update file_paths and file_info with corrected paths
+                file_paths = [corrections.get(p, p) for p in file_paths]
+                file_info = [
+                    (corrections.get(fp, fp), msg, eu) for fp, msg, eu in file_info
+                ]
+
+        # Phase 3: Batch EXIF processing
         exif_rebuilt_count = 0
         if file_paths:
             logger.info("Batch processing EXIF metadata...")
@@ -571,17 +677,27 @@ def process_logic(
 
             # Read existing metadata and write new EXIF data
             existing_metadata_map = batch_read_existing_metadata(file_paths)
-            batch_write_metadata_imessage(file_info, existing_metadata_map)
+            requests = _build_metadata_requests(file_info)
+            batch_write_metadata_requests(requests, existing_metadata_map)
             logger.info(f"EXIF metadata written for {len(file_info)} files")
 
-        # Summary
-        logger.info("")
-        logger.info("=" * 50)
-        logger.info("Processing complete!")
-        logger.info(f"  Successfully processed: {success_count}")
-        logger.info(f"  Failed: {failed_count}")
-        logger.info(f"  EXIF structures rebuilt: {exif_rebuilt_count}")
-        logger.info(f"Processed files saved to: {messages_output_dir.absolute()}")
+        # Print summary using shared utility
+        print_processing_summary(
+            success=success_count,
+            failed=failed_count,
+            total=success_count + failed_count,
+            output_dir=str(messages_output_dir),
+            extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
+        )
+
+        # Save dedup references for skipped secondary files
+        if dedup_manifest and skipped_secondary_files:
+            save_dedup_metadata(
+                manifest=dedup_manifest,
+                skipped_files=skipped_secondary_files,
+                processor_name="iMessage-iMazing",
+                output_dir=messages_output_dir,
+            )
 
         return True
 
@@ -597,4 +713,3 @@ def process_logic(
                 logger.info(
                     f"Temp cleanup disabled. Directory preserved: {temp_dir_created}"
                 )
-

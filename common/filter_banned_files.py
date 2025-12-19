@@ -23,6 +23,12 @@ class BannedFilesFilter:
         ".DS_Store",  # macOS custom attributes file
         "._",  # macOS resource fork files (AppleDouble format, prefix match)
         ".photostructure",  # PhotoStructure application directory
+        ".pluginPayloadAttachment",  # iMessage plugin payload attachment files
+    ]
+
+    # Banned file extensions (with leading dot, lowercase)
+    BANNED_EXTENSIONS = [
+        ".unknown",  # Snapchat export metadata files with unrecognized type
     ]
 
     def __init__(self, additional_patterns: Optional[List[str]] = None):
@@ -52,6 +58,11 @@ class BannedFilesFilter:
             # Exact match or prefix match (for patterns like ._ and SYNOFILE_THUMB_)
             if name == pattern or name.startswith(pattern):
                 return True
+
+        # Check banned extensions
+        ext = path.suffix.lower()
+        if ext in self.BANNED_EXTENSIONS:
+            return True
 
         return False
 

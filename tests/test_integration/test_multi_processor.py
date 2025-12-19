@@ -5,8 +5,6 @@ Tests cover scenarios where a single export directory contains
 data for multiple processors (e.g., Google export with Photos + Chat + Voice).
 """
 
-
-
 from tests.fixtures.generators import (
     create_google_photos_export,
     create_google_chat_export,
@@ -62,7 +60,9 @@ class TestGoogleMultiProcessor:
 class TestSnapchatMultiProcessor:
     """Tests for Snapchat multi-processor detection."""
 
-    def test_detect_memories_and_messages_consolidated(self, processor_registry, temp_export_dir):
+    def test_detect_memories_and_messages_consolidated(
+        self, processor_registry, temp_export_dir
+    ):
         """Should detect both Memories and Messages in consolidated export."""
         # Create consolidated structure with memories/ and messages/ subdirs
         memories_dir = temp_export_dir / "memories"
@@ -199,4 +199,3 @@ class TestProcessorCount:
             priority = processor.get_priority()
             assert isinstance(priority, int)
             assert 1 <= priority <= 100
-

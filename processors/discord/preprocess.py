@@ -21,23 +21,39 @@ from pathlib import Path
 from threading import Lock
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse, unquote
-import multiprocessing
 
 import requests
-import xxhash
 
 from common.filter_banned_files import BannedFilesFilter
+from common.perceptual_hash import compute_content_hash
+from common.utils import default_worker_count, extract_username_from_export_dir
 from common.failure_tracker import FailureTracker
+from common.processing import print_preprocessing_stats
 from common.progress import PHASE_PREPROCESS, futures_progress
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
+
+# Custom exception so callers can handle failures without killing the process
+class PreprocessingError(Exception):
+    """Raised when Discord preprocessing fails."""
+
+
 # Supported media extensions for Discord attachments
 MEDIA_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".gif", ".webp",  # Images
-    ".mp4", ".webm", ".mov",  # Videos
-    ".mp3", ".wav", ".ogg", ".flac",  # Audio
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",  # Images
+    ".mp4",
+    ".webm",
+    ".mov",  # Videos
+    ".mp3",
+    ".wav",
+    ".ogg",
+    ".flac",  # Audio
 }
 
 
@@ -86,25 +102,6 @@ def parse_discord_timestamp(timestamp: str) -> datetime:
         datetime object (UTC)
     """
     return datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
-
-
-def extract_username_from_directory(dir_path: Path) -> str:
-    """Extract username from Discord export directory name.
-
-    Directory format: discord-username-YYYYMMDD
-
-    Args:
-        dir_path: Path to Discord export directory
-
-    Returns:
-        Extracted username or "unknown"
-    """
-    dir_name = dir_path.name
-    # Pattern: discord-{username}-YYYYMMDD or similar variations
-    match = re.match(r"discord[-_](.+?)[-_]\d{8}", dir_name, re.IGNORECASE)
-    if match:
-        return match.group(1)
-    return "unknown"
 
 
 class DiscordPreprocessor:
@@ -157,11 +154,7 @@ class DiscordPreprocessor:
         )
 
         # Threading configuration
-        if workers is None:
-            # Default to CPU count - 1, minimum 1
-            self.workers = max(1, multiprocessing.cpu_count() - 1)
-        else:
-            self.workers = max(1, workers)
+        self.workers = workers if workers is not None else default_worker_count()
 
         # Thread-safe locks for shared data structures
         self.stats_lock = Lock()
@@ -232,9 +225,9 @@ class DiscordPreprocessor:
 
                 f.write(f"\nTotal logged issues: {len(self.log_entries)}\n")
 
-            print(f"SUCCESS: Saved preprocessing log to {self.log_file}")
+            logger.info("Saved preprocessing log to %s", self.log_file)
         except Exception as e:
-            print(f"WARNING: Failed to save log file: {e}")
+            logger.warning("Failed to save log file: %s", e)
 
     def validate_export(self) -> bool:
         """Validate that export directory has required Discord structure.
@@ -243,24 +236,25 @@ class DiscordPreprocessor:
             True if valid Discord export, False otherwise
         """
         if not self.export_path.exists():
-            print(f"ERROR: Export path does not exist: {self.export_path}")
+            logger.error("Export path does not exist: %s", self.export_path)
             return False
 
         if not self.messages_dir.exists():
-            print(f"ERROR: Messages directory not found: {self.messages_dir}")
+            logger.error("Messages directory not found: %s", self.messages_dir)
             return False
 
         if not self.index_file.exists():
-            print(f"ERROR: Messages index.json not found: {self.index_file}")
+            logger.error("Messages index.json not found: %s", self.index_file)
             return False
 
         # Check for at least one channel folder
         channel_folders = [
-            d for d in self.messages_dir.iterdir()
+            d
+            for d in self.messages_dir.iterdir()
             if d.is_dir() and d.name.startswith("c")
         ]
         if not channel_folders:
-            print(f"ERROR: No channel folders found in {self.messages_dir}")
+            logger.error("No channel folders found in %s", self.messages_dir)
             return False
 
         return True
@@ -316,16 +310,16 @@ class DiscordPreprocessor:
             with open(channel_file, "r", encoding="utf-8") as f:
                 channel_data = json.load(f)
 
-            channel_id = channel_data.get("id", channel_dir.name[1:])  # Strip 'c' prefix
+            channel_id = channel_data.get(
+                "id", channel_dir.name[1:]
+            )  # Strip 'c' prefix
             channel_type = channel_data.get("type", "UNKNOWN")
 
             # Determine conversation type and title
             if channel_type == "DM":
                 conv_type = "dm"
                 # Try to get title from index
-                title = self.channel_index.get(
-                    channel_id, "Direct Message"
-                )
+                title = self.channel_index.get(channel_id, "Direct Message")
                 guild_name = None
             elif channel_type == "GROUP_DM":
                 conv_type = "group_dm"
@@ -435,6 +429,7 @@ class DiscordPreprocessor:
         Returns:
             Tuple of (success, error_message)
         """
+        error_msg = "Max retries exceeded"
         for attempt in range(self.MAX_RETRIES):
             try:
                 response = requests.get(
@@ -474,7 +469,7 @@ class DiscordPreprocessor:
 
             # Retry with exponential backoff
             if attempt < self.MAX_RETRIES - 1:
-                sleep_time = self.RETRY_BACKOFF ** attempt
+                sleep_time = self.RETRY_BACKOFF**attempt
                 time.sleep(sleep_time)
 
         return False, error_msg
@@ -488,15 +483,9 @@ class DiscordPreprocessor:
         Returns:
             Hexadecimal hash digest
         """
-        hasher = xxhash.xxh64()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(65536), b""):
-                hasher.update(chunk)
-        return hasher.hexdigest()
+        return compute_content_hash(file_path)
 
-    def _download_single_attachment(
-        self, args: Tuple[str, str, int, str, str]
-    ) -> Dict:
+    def _download_single_attachment(self, args: Tuple[str, str, int, str, str]) -> Dict:
         """Worker function to download a single attachment.
 
         Downloads the file, computes its hash for deduplication, and either
@@ -607,7 +596,9 @@ class DiscordPreprocessor:
                 try:
                     os.remove(output_path)
                 except Exception as e:
-                    logger.warning(f"Failed to remove duplicate file {output_path}: {e}")
+                    logger.warning(
+                        f"Failed to remove duplicate file {output_path}: {e}"
+                    )
 
                 with self.stats_lock:
                     self.stats["downloads_successful"] += 1
@@ -684,7 +675,7 @@ class DiscordPreprocessor:
         metadata = {
             "export_info": {
                 "export_path": str(self.export_path),
-                "export_username": extract_username_from_directory(self.export_path),
+                "export_username": extract_username_from_export_dir(str(self.export_path), "discord"),
                 "processed_date": datetime.now().isoformat(),
             },
             "conversations": {},
@@ -746,13 +737,15 @@ class DiscordPreprocessor:
                     download_tasks.append((url, channel_id, msg_id, timestamp, content))
 
                 # Create message entry (will be populated with filenames after download)
-                channel_messages.append({
-                    "id": msg_id,
-                    "timestamp": f"{timestamp} UTC" if timestamp else "",
-                    "content": content,
-                    "original_urls": attachment_urls,
-                    "media_files": [],  # Populated after download
-                })
+                channel_messages.append(
+                    {
+                        "id": msg_id,
+                        "timestamp": f"{timestamp} UTC" if timestamp else "",
+                        "content": content,
+                        "original_urls": attachment_urls,
+                        "media_files": [],  # Populated after download
+                    }
+                )
 
             # Only add channel if it has messages with attachments
             if channel_messages:
@@ -783,7 +776,7 @@ class DiscordPreprocessor:
         # Create media output directory
         self.media_output_dir.mkdir(parents=True, exist_ok=True)
 
-        print(f"\nDownloading {len(download_tasks)} attachments...")
+        logger.info("Downloading %d attachments...", len(download_tasks))
 
         # Map to track downloaded files per message
         message_files: Dict[Tuple[str, int], List[str]] = {}
@@ -839,8 +832,7 @@ class DiscordPreprocessor:
         for channel_id in list(metadata["conversations"].keys()):
             conv_data = metadata["conversations"][channel_id]
             conv_data["messages"] = [
-                msg for msg in conv_data["messages"]
-                if msg["media_files"]
+                msg for msg in conv_data["messages"] if msg["media_files"]
             ]
             conv_data["message_count"] = len(conv_data["messages"])
 
@@ -860,8 +852,12 @@ class DiscordPreprocessor:
             # Add final statistics to export_info
             metadata["export_info"]["export_name"] = self.export_path.name
             metadata["export_info"]["total_channels"] = self.stats["total_channels"]
-            metadata["export_info"]["total_attachments"] = self.stats["total_attachments"]
-            metadata["export_info"]["downloads_successful"] = self.stats["downloads_successful"]
+            metadata["export_info"]["total_attachments"] = self.stats[
+                "total_attachments"
+            ]
+            metadata["export_info"]["downloads_successful"] = self.stats[
+                "downloads_successful"
+            ]
             metadata["export_info"]["downloads_failed"] = self.stats["downloads_failed"]
             metadata["export_info"]["unique_files"] = self.stats["unique_files"]
             metadata["export_info"]["duplicate_files"] = self.stats["duplicate_files"]
@@ -869,54 +865,48 @@ class DiscordPreprocessor:
             with open(self.metadata_file, "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-            print(f"\nSUCCESS: Saved metadata to {self.metadata_file}")
+            logger.info("Saved metadata to %s", self.metadata_file)
         except Exception as e:
             logger.error(f"Failed to save metadata: {e}")
-            sys.exit(1)
+            raise PreprocessingError(f"Failed to save metadata: {e}")
 
     def print_statistics(self) -> None:
-        """Print processing statistics."""
-        print("\n" + "=" * 70)
-        print("PREPROCESSING STATISTICS")
-        print("=" * 70)
-        print(f"Total channels processed:         {self.stats['total_channels']:>6}")
-        print(f"Total messages scanned:           {self.stats['total_messages']:>6}")
-        print(f"Messages with attachments:        {self.stats['messages_with_attachments']:>6}")
-        print(f"Total attachments found:          {self.stats['total_attachments']:>6}")
-        print(f"Downloads successful:             {self.stats['downloads_successful']:>6}")
-        print(f"Downloads failed:                 {self.stats['downloads_failed']:>6}")
-        print(f"Downloads skipped (non-media):    {self.stats['downloads_skipped']:>6}")
-        print(f"Banned files skipped:             {self.stats['banned_files_skipped']:>6}")
-        print("=" * 70)
-
-        # Deduplication summary
-        if self.stats["unique_files"] > 0 or self.stats["duplicate_files"] > 0:
-            print("\nDEDUPLICATION SUMMARY:")
-            print(f"  Unique media files:             {self.stats['unique_files']:>6}")
-            print(f"  Duplicate instances avoided:    {self.stats['duplicate_files']:>6}")
-            print("=" * 70)
+        """Print processing statistics as a compact table."""
+        stats = {
+            "Channels processed": self.stats["total_channels"],
+            "Messages scanned": self.stats["total_messages"],
+            "With attachments": self.stats["messages_with_attachments"],
+            "Attachments found": self.stats["total_attachments"],
+            "Downloads OK": self.stats["downloads_successful"],
+            "Downloads failed": self.stats["downloads_failed"],
+            "Skipped (non-media)": self.stats["downloads_skipped"],
+            "Unique files": self.stats["unique_files"],
+            "Duplicates avoided": self.stats["duplicate_files"],
+            "Banned skipped": self.stats["banned_files_skipped"],
+        }
+        print_preprocessing_stats("Preprocessing Stats", stats)
 
     def process(self) -> None:
         """Main processing pipeline."""
         logger.info("Starting Discord Export Preprocessing")
-        print(f"Export path: {self.export_path}")
-        print(f"Output path: {self.output_dir}\n")
+        logger.info("Export path: %s", self.export_path)
+        logger.info("Output path: %s", self.output_dir)
 
         # Validate export structure
         if not self.validate_export():
-            sys.exit(1)
+            raise PreprocessingError(f"Invalid export structure: {self.export_path}")
 
         # Load indexes
         self.load_channel_index()
         self.load_server_index()
 
         # Scan channel directories
-        print("\nScanning channel directories...")
+        logger.info("Scanning channel directories...")
         channel_dirs = self.scan_channels()
-        print(f"Found {len(channel_dirs)} channels with messages")
+        logger.info("Found %d channels with messages", len(channel_dirs))
 
         # Build metadata and collect download tasks
-        print("\nParsing messages...")
+        logger.info("Parsing messages...")
         metadata, download_tasks = self.build_metadata(channel_dirs)
 
         # Download attachments
@@ -987,10 +977,15 @@ Examples:
     export_path = Path(args.export_directory)
     output_path = Path(args.output) if args.output else None
 
-    preprocessor = DiscordPreprocessor(export_path, output_path, workers=args.workers)
-    preprocessor.process()
+    try:
+        preprocessor = DiscordPreprocessor(
+            export_path, output_path, workers=args.workers
+        )
+        preprocessor.process()
+    except PreprocessingError as e:
+        logger.error("%s", e)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
     main()
-

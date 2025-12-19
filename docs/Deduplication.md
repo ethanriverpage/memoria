@@ -4,6 +4,19 @@
 
 Several processors implement content-based deduplication to eliminate duplicate files when the same media is shared across multiple conversations, albums, or exports. Instead of copying the same file multiple times, each unique file is copied once and all references point to it.
 
+## Deduplication Modes
+
+Memoria supports two levels of deduplication:
+
+| Mode | Scope | Configuration |
+|------|-------|---------------|
+| **Within-Processor** | Duplicates within a single platform | Always enabled |
+| **Cross-Processor** | Duplicates across all platforms | `CROSS_PROCESSOR_DEDUP=true` |
+
+**Within-processor deduplication** (documented below) handles duplicates within a single export - for example, the same photo appearing in multiple Google Photos albums or shared in multiple iMessage conversations.
+
+**Cross-processor deduplication** identifies duplicates across different platforms - for example, a photo that exists in both your Google Photos and Instagram. See [Global Deduplication](Global-Deduplication) for details.
+
 ## Supported Processors
 
 - **Google Photos**: Deduplicates photos across albums
@@ -25,7 +38,6 @@ The preprocessor computes an xxHash64 for each media file:
 
 - **xxHash64**: ~10GB/s hashing speed (20x faster than SHA256)
 - **Collision probability**: Negligible for this use case
-- **Fallback**: Uses SHA256 if xxhash is not installed
 
 ### Deduplication Process
 
@@ -267,6 +279,7 @@ Both conversations reference the same file because the content is identical.
 
 ## Related Documentation
 
+- [Global Deduplication](Global-Deduplication) - Cross-processor deduplication guide
 - [Google Export](Google-Export) - Google Photos export guide
 - [iMessage Export](iMessage-Export) - iMessage export guide
 - [Discord Export](Discord-Export) - Discord export guide

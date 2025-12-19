@@ -27,14 +27,18 @@ from tests.fixtures.media_samples import (
 class TestIMessageMacExport:
     """Tests for Mac export handling."""
 
-    def test_mac_export_basic(self, imessage_processor, temp_export_dir, temp_output_dir):
+    def test_mac_export_basic(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process basic Mac export."""
         create_imessage_mac_export(temp_export_dir)
 
         assert (temp_export_dir / "chat.db").exists()
         assert (temp_export_dir / "Attachments").is_dir()
 
-    def test_mac_export_with_attachments(self, imessage_processor, temp_export_dir, temp_output_dir):
+    def test_mac_export_with_attachments(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process Mac export with multiple attachments."""
         create_imessage_mac_export(
             temp_export_dir,
@@ -42,12 +46,24 @@ class TestIMessageMacExport:
                 {
                     "chat_identifier": "+1234567890",
                     "messages": [
-                        {"text": "Photo 1", "attachment": "00/00/image1.jpg", "date": 631152000000000000},
-                        {"text": "Photo 2", "attachment": "00/01/image2.png", "date": 631152000000000001},
-                        {"text": "Video", "attachment": "01/00/video.mp4", "date": 631152000000000002},
+                        {
+                            "text": "Photo 1",
+                            "attachment": "00/00/image1.jpg",
+                            "date": 631152000000000000,
+                        },
+                        {
+                            "text": "Photo 2",
+                            "attachment": "00/01/image2.png",
+                            "date": 631152000000000001,
+                        },
+                        {
+                            "text": "Video",
+                            "attachment": "01/00/video.mp4",
+                            "date": 631152000000000002,
+                        },
                     ],
                 },
-            ]
+            ],
         )
 
         attachments_dir = temp_export_dir / "Attachments"
@@ -59,14 +75,18 @@ class TestIMessageMacExport:
 class TestIMessageIPhoneExport:
     """Tests for iPhone export handling."""
 
-    def test_iphone_export_basic(self, imessage_processor, temp_export_dir, temp_output_dir):
+    def test_iphone_export_basic(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process basic iPhone export."""
         create_imessage_iphone_export(temp_export_dir)
 
         assert (temp_export_dir / "SMS" / "sms.db").exists()
         assert (temp_export_dir / "SMS" / "Attachments").is_dir()
 
-    def test_iphone_export_with_attachments(self, imessage_processor, temp_export_dir, temp_output_dir):
+    def test_iphone_export_with_attachments(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process iPhone export with attachments."""
         create_imessage_iphone_export(
             temp_export_dir,
@@ -74,10 +94,14 @@ class TestIMessageIPhoneExport:
                 {
                     "chat_identifier": "+1234567890",
                     "messages": [
-                        {"text": "Image", "attachment": "00/00/photo.jpg", "date": 631152000000000000},
+                        {
+                            "text": "Image",
+                            "attachment": "00/00/photo.jpg",
+                            "date": 631152000000000000,
+                        },
                     ],
                 },
-            ]
+            ],
         )
 
         attachments_dir = temp_export_dir / "SMS" / "Attachments"
@@ -87,7 +111,9 @@ class TestIMessageIPhoneExport:
 class TestIMessageConversationTypes:
     """Tests for different conversation types."""
 
-    def test_dm_conversation(self, imessage_processor, temp_export_dir, temp_output_dir):
+    def test_dm_conversation(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process direct message conversations."""
         create_imessage_mac_export(
             temp_export_dir,
@@ -97,10 +123,14 @@ class TestIMessageConversationTypes:
                     "display_name": None,  # DMs typically don't have display names
                     "messages": [
                         {"text": "Hello!", "is_from_me": 0, "date": 631152000000000000},
-                        {"text": "Hi there!", "is_from_me": 1, "date": 631152000000000001},
+                        {
+                            "text": "Hi there!",
+                            "is_from_me": 1,
+                            "date": 631152000000000001,
+                        },
                     ],
                 },
-            ]
+            ],
         )
 
         # Verify database has the conversation
@@ -113,7 +143,9 @@ class TestIMessageConversationTypes:
         assert len(chats) == 1
         assert chats[0][0] == "+1234567890"
 
-    def test_group_conversation(self, imessage_processor, temp_export_dir, temp_output_dir):
+    def test_group_conversation(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process group conversations."""
         create_imessage_mac_export(
             temp_export_dir,
@@ -122,15 +154,21 @@ class TestIMessageConversationTypes:
                     "chat_identifier": "chat123456",
                     "display_name": "Family Group",
                     "messages": [
-                        {"text": "Hey family!", "is_from_me": 1, "date": 631152000000000000},
+                        {
+                            "text": "Hey family!",
+                            "is_from_me": 1,
+                            "date": 631152000000000000,
+                        },
                     ],
                 },
-            ]
+            ],
         )
 
         conn = sqlite3.connect(temp_export_dir / "chat.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT display_name FROM chat WHERE chat_identifier = ?", ("chat123456",))
+        cursor.execute(
+            "SELECT display_name FROM chat WHERE chat_identifier = ?", ("chat123456",)
+        )
         result = cursor.fetchone()
         conn.close()
 
@@ -140,13 +178,17 @@ class TestIMessageConversationTypes:
 class TestIMessageLivePhotos:
     """Tests for Live Photo handling."""
 
-    def test_live_photo_pair(self, imessage_processor, temp_export_dir, temp_output_dir):
+    def test_live_photo_pair(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle Live Photo pairs (HEIC + MOV)."""
         attachments_dir = temp_export_dir / "Attachments" / "00" / "00"
         attachments_dir.mkdir(parents=True)
 
         # Create Live Photo pair
-        write_media_file(attachments_dir / "IMG_1234.HEIC", "jpeg")  # HEIC uses JPEG bytes for test
+        write_media_file(
+            attachments_dir / "IMG_1234.HEIC", "jpeg"
+        )  # HEIC uses JPEG bytes for test
         write_media_file(attachments_dir / "IMG_1234.MOV", "mov")
 
         create_imessage_chat_db(temp_export_dir / "chat.db")
@@ -154,7 +196,9 @@ class TestIMessageLivePhotos:
         assert (attachments_dir / "IMG_1234.HEIC").exists()
         assert (attachments_dir / "IMG_1234.MOV").exists()
 
-    def test_live_photo_jpg_mov_pair(self, imessage_processor, temp_export_dir, temp_output_dir):
+    def test_live_photo_jpg_mov_pair(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle Live Photo pairs (JPG + MOV)."""
         attachments_dir = temp_export_dir / "Attachments" / "00" / "00"
         attachments_dir.mkdir(parents=True)
@@ -175,7 +219,9 @@ class TestIMessageDeduplication:
         """Should support consolidation mode."""
         assert imessage_processor.supports_consolidation() is True
 
-    def test_multiple_exports_same_conversation(self, imessage_processor, tmp_path, temp_output_dir):
+    def test_multiple_exports_same_conversation(
+        self, imessage_processor, tmp_path, temp_output_dir
+    ):
         """Should handle same conversation across multiple exports."""
         export1 = tmp_path / "export1"
         export2 = tmp_path / "export2"
@@ -190,7 +236,7 @@ class TestIMessageDeduplication:
                         {"text": "Message 1", "date": 631152000000000000},
                     ],
                 },
-            ]
+            ],
         )
 
         create_imessage_mac_export(
@@ -202,14 +248,16 @@ class TestIMessageDeduplication:
                         {"text": "Message 2", "date": 631152000000000001},
                     ],
                 },
-            ]
+            ],
         )
 
         # Both exports should exist
         assert (export1 / "chat.db").exists()
         assert (export2 / "chat.db").exists()
 
-    def test_duplicate_attachments_across_exports(self, imessage_processor, tmp_path, temp_output_dir):
+    def test_duplicate_attachments_across_exports(
+        self, imessage_processor, tmp_path, temp_output_dir
+    ):
         """Should handle duplicate attachments across exports."""
         export1 = tmp_path / "export1"
         export2 = tmp_path / "export2"
@@ -221,10 +269,14 @@ class TestIMessageDeduplication:
                 {
                     "chat_identifier": "+1234567890",
                     "messages": [
-                        {"text": "Photo", "attachment": "00/00/same_photo.jpg", "date": 631152000000000000},
+                        {
+                            "text": "Photo",
+                            "attachment": "00/00/same_photo.jpg",
+                            "date": 631152000000000000,
+                        },
                     ],
                 },
-            ]
+            ],
         )
 
         create_imessage_mac_export(
@@ -233,10 +285,14 @@ class TestIMessageDeduplication:
                 {
                     "chat_identifier": "+1234567890",
                     "messages": [
-                        {"text": "Photo", "attachment": "00/00/same_photo.jpg", "date": 631152000000000000},
+                        {
+                            "text": "Photo",
+                            "attachment": "00/00/same_photo.jpg",
+                            "date": 631152000000000000,
+                        },
                     ],
                 },
-            ]
+            ],
         )
 
         # Both should have the attachment
@@ -247,7 +303,9 @@ class TestIMessageDeduplication:
 class TestIMessageDatabase:
     """Tests for database schema and queries."""
 
-    def test_database_schema(self, imessage_processor, temp_export_dir, temp_output_dir):
+    def test_database_schema(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
         """Should create database with correct schema."""
         create_imessage_mac_export(temp_export_dir)
 
@@ -267,7 +325,9 @@ class TestIMessageDatabase:
 
         conn.close()
 
-    def test_message_handle_relationship(self, imessage_processor, temp_export_dir, temp_output_dir):
+    def test_message_handle_relationship(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
         """Should properly link messages to handles."""
         create_imessage_mac_export(
             temp_export_dir,
@@ -278,18 +338,20 @@ class TestIMessageDatabase:
                         {"text": "Hello", "is_from_me": 0, "date": 631152000000000000},
                     ],
                 },
-            ]
+            ],
         )
 
         conn = sqlite3.connect(temp_export_dir / "chat.db")
         cursor = conn.cursor()
 
         # Check message is linked to handle
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT m.text, h.id
             FROM message m
             JOIN handle h ON m.handle_id = h.ROWID
-        """)
+        """
+        )
         result = cursor.fetchone()
         conn.close()
 
@@ -300,7 +362,9 @@ class TestIMessageDatabase:
 class TestIMessageMixedExports:
     """Tests for mixed Mac and iPhone exports."""
 
-    def test_mac_and_iphone_same_conversation(self, imessage_processor, tmp_path, temp_output_dir):
+    def test_mac_and_iphone_same_conversation(
+        self, imessage_processor, tmp_path, temp_output_dir
+    ):
         """Should handle same conversation from Mac and iPhone exports."""
         mac_export = tmp_path / "mac"
         iphone_export = tmp_path / "iphone"
@@ -314,7 +378,7 @@ class TestIMessageMixedExports:
                         {"text": "From Mac", "date": 631152000000000000},
                     ],
                 },
-            ]
+            ],
         )
 
         create_imessage_iphone_export(
@@ -326,9 +390,8 @@ class TestIMessageMixedExports:
                         {"text": "From iPhone", "date": 631152000000000001},
                     ],
                 },
-            ]
+            ],
         )
 
         assert (mac_export / "chat.db").exists()
         assert (iphone_export / "SMS" / "sms.db").exists()
-

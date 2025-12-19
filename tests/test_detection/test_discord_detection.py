@@ -29,10 +29,15 @@ class TestDiscordDetection:
                     "type": "server",
                     "guild_name": "Test Server",
                     "messages": [
-                        {"ID": "msg001", "Timestamp": "2021-01-01 12:00:00", "Contents": "Hello!", "Attachments": ""},
+                        {
+                            "ID": "msg001",
+                            "Timestamp": "2021-01-01 12:00:00",
+                            "Contents": "Hello!",
+                            "Attachments": "",
+                        },
                     ],
                 },
-            }
+            },
         )
         assert discord_processor.detect(temp_export_dir) is True
 
@@ -45,10 +50,15 @@ class TestDiscordDetection:
                     "name": "DM with User",
                     "type": "dm",
                     "messages": [
-                        {"ID": "msg001", "Timestamp": "2021-01-01 12:00:00", "Contents": "Hi!", "Attachments": ""},
+                        {
+                            "ID": "msg001",
+                            "Timestamp": "2021-01-01 12:00:00",
+                            "Contents": "Hi!",
+                            "Attachments": "",
+                        },
                     ],
                 },
-            }
+            },
         )
         assert discord_processor.detect(temp_export_dir) is True
 
@@ -57,11 +67,21 @@ class TestDiscordDetection:
         create_discord_export(
             temp_export_dir,
             channels={
-                "c111111111": {"name": "general", "type": "server", "guild_name": "Server 1", "messages": []},
-                "c222222222": {"name": "random", "type": "server", "guild_name": "Server 1", "messages": []},
+                "c111111111": {
+                    "name": "general",
+                    "type": "server",
+                    "guild_name": "Server 1",
+                    "messages": [],
+                },
+                "c222222222": {
+                    "name": "random",
+                    "type": "server",
+                    "guild_name": "Server 1",
+                    "messages": [],
+                },
                 "c333333333": {"name": "DM with Alice", "type": "dm", "messages": []},
                 "c444444444": {"name": "DM with Bob", "type": "dm", "messages": []},
-            }
+            },
         )
         assert discord_processor.detect(temp_export_dir) is True
 
@@ -90,7 +110,9 @@ class TestDiscordDetection:
         (messages_dir / "index.json").write_text('{"c123": "general"}')
         assert discord_processor.detect(temp_export_dir) is False
 
-    def test_reject_channel_folder_wrong_prefix(self, discord_processor, temp_export_dir):
+    def test_reject_channel_folder_wrong_prefix(
+        self, discord_processor, temp_export_dir
+    ):
         """Should reject channel folders that don't start with 'c'."""
         messages_dir = temp_export_dir / "Messages"
         messages_dir.mkdir(parents=True)
@@ -127,7 +149,9 @@ class TestDiscordPreprocessedDetection:
 
         assert discord_processor.detect(temp_export_dir) is True
 
-    def test_reject_preprocessed_without_discord_markers(self, discord_processor, temp_export_dir):
+    def test_reject_preprocessed_without_discord_markers(
+        self, discord_processor, temp_export_dir
+    ):
         """Should reject preprocessed export without Discord-specific markers."""
         media_dir = temp_export_dir / "media"
         media_dir.mkdir(parents=True)
@@ -144,4 +168,3 @@ class TestDiscordPreprocessedDetection:
         (temp_export_dir / "metadata.json").write_text(json.dumps(metadata))
 
         assert discord_processor.detect(temp_export_dir) is False
-

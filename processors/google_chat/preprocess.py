@@ -20,12 +20,11 @@ import argparse
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
-import multiprocessing
 
+from common.processing import print_preprocessing_stats
 from common.progress import PHASE_PREPROCESS, futures_progress
 
-from common.file_utils import detect_and_correct_extension
-from common.utils import ALL_MEDIA_EXTENSIONS
+from common.utils import ALL_MEDIA_EXTENSIONS, default_worker_count
 from common.filter_banned_files import BannedFilesFilter
 from common.failure_tracker import FailureTracker
 
@@ -43,7 +42,7 @@ class GoogleChatPreprocessor:
         workers: Optional[int] = None,
         final_output_dir: Optional[Path] = None,
     ):
-        
+
         self.export_path = Path(export_path)
         self.chat_dir = self.export_path / "Google Chat"
         self.groups_dir = self.chat_dir / "Groups"
@@ -57,7 +56,9 @@ class GoogleChatPreprocessor:
         self.log_file = output_base / "preprocessing.log"
 
         # Final output directory for processor (for failure tracking)
-        self.final_output_dir = Path(final_output_dir) if final_output_dir else output_base
+        self.final_output_dir = (
+            Path(final_output_dir) if final_output_dir else output_base
+        )
 
         # Export username (detected from user_info.json)
         self.export_username = None
@@ -73,12 +74,8 @@ class GoogleChatPreprocessor:
         )
 
         # Threading configuration
-        if workers is None:
-            # Default to CPU count - 1, minimum 1
-            self.workers = max(1, multiprocessing.cpu_count() - 1)
-        else:
-            self.workers = max(1, workers)
-        
+        self.workers = workers if workers is not None else default_worker_count()
+
         # Thread-safe locks for shared data structures
         self.stats_lock = Lock()
         self.log_lock = Lock()
@@ -92,7 +89,6 @@ class GoogleChatPreprocessor:
             "media_copied": 0,
             "missing_files": 0,
             "fuzzy_matches": 0,
-            "extensions_corrected": 0,
             "banned_files_skipped": 0,
         }
 
@@ -132,28 +128,28 @@ class GoogleChatPreprocessor:
 
                 f.write(f"\nTotal logged issues: {len(self.log_entries)}\n")
 
-            print(f"SUCCESS: Saved preprocessing log to {self.log_file}")
+            logger.info("Saved preprocessing log to %s", self.log_file)
         except Exception as e:
-            print(f"WARNING: Failed to save log file: {e}")
+            logger.warning("Failed to save log file: %s", e)
 
     def validate_export(self) -> bool:
         """Validate that export directory has required structure"""
         if not self.export_path.exists():
-            print(f"ERROR: Export path does not exist: {self.export_path}")
+            logger.error("Export path does not exist: %s", self.export_path)
             return False
 
         if not self.chat_dir.exists():
-            print(f"ERROR: Google Chat directory not found: {self.chat_dir}")
+            logger.error("Google Chat directory not found: %s", self.chat_dir)
             return False
 
         if not self.groups_dir.exists():
-            print(f"ERROR: Groups directory not found: {self.groups_dir}")
+            logger.error("Groups directory not found: %s", self.groups_dir)
             return False
 
         # Check if at least one conversation folder exists
         conversation_folders = [d for d in self.groups_dir.iterdir() if d.is_dir()]
         if not conversation_folders:
-            print(f"ERROR: No conversation folders found in {self.groups_dir}")
+            logger.error("No conversation folders found in %s", self.groups_dir)
             return False
 
         return True
@@ -203,7 +199,7 @@ class GoogleChatPreprocessor:
             # Strip @gmail.com to get username
             self.export_username = email.replace("@gmail.com", "")
 
-            print(f"   Detected export user: {self.export_username}")
+            logger.info("Detected export user: %s", self.export_username)
             return True
 
         except Exception as e:
@@ -430,6 +426,7 @@ class GoogleChatPreprocessor:
 
         try:
             import os
+
             with os.scandir(self.groups_dir) as entries:
                 for entry in sorted(entries, key=lambda e: e.name):
                     if not entry.is_dir():
@@ -498,6 +495,7 @@ class GoogleChatPreprocessor:
 
         # Look for media files directly in the conversation folder
         import os
+
         with os.scandir(conv_folder) as entries:
             for entry in entries:
                 if entry.is_file():
@@ -535,6 +533,7 @@ class GoogleChatPreprocessor:
 
         # Scan all conversation folders
         import os
+
         with os.scandir(self.groups_dir) as conv_entries:
             for conv_entry in conv_entries:
                 if not conv_entry.is_dir():
@@ -612,22 +611,24 @@ class GoogleChatPreprocessor:
                 f"Failed to parse {messages_path.name}",
                 str(e),
             )
-            print(f"ERROR: Failed to parse {messages_path}: {e}")
+            logger.error("Failed to parse %s: %s", messages_path, e)
 
         return messages
 
-    def _process_single_conversation(self, conversation_tuple: Tuple[str, str, Path]) -> Optional[Dict]:
+    def _process_single_conversation(
+        self, conversation_tuple: Tuple[str, str, Path]
+    ) -> Optional[Dict]:
         """
         Process a single conversation (used by multithreaded processing)
-        
+
         Args:
             conversation_tuple: Tuple of (conversation_type, conversation_id, conv_dir)
-            
+
         Returns:
             Conversation data dict or None if conversation has no media messages
         """
         conversation_type, conversation_id, conv_dir = conversation_tuple
-        
+
         # Read group info
         group_info_path = conv_dir / "group_info.json"
         try:
@@ -654,7 +655,7 @@ class GoogleChatPreprocessor:
         if messages:
             with self.stats_lock:
                 self.stats["total_messages_with_media"] += len(messages)
-            
+
             conversation_data = {
                 "conversation_id": conversation_id,
                 "conversation_type": conversation_type,
@@ -662,7 +663,7 @@ class GoogleChatPreprocessor:
                 "messages": messages,
             }
             return conversation_data
-        
+
         return None
 
     def create_metadata(self) -> List[Dict]:
@@ -672,24 +673,35 @@ class GoogleChatPreprocessor:
         """
         all_conversations = []
 
-        print("\nProcessing conversation files...")
+        logger.info("Processing conversation files...")
 
         # Scan all conversation folders
         conversation_list = self.scan_conversations()
         logger.info(f"   Found {len(conversation_list)} conversations")
 
-        print(f"Processing {len(conversation_list)} conversations (using {self.workers} workers)...")
+        logger.info(
+            "Processing %d conversations (using %d workers)...",
+            len(conversation_list),
+            self.workers,
+        )
 
         # Process conversations in parallel
         with ThreadPoolExecutor(max_workers=self.workers) as executor:
             # Submit all conversation processing tasks
             future_to_conversation = {
-                executor.submit(self._process_single_conversation, conv_tuple): conv_tuple[1]
+                executor.submit(
+                    self._process_single_conversation, conv_tuple
+                ): conv_tuple[1]
                 for conv_tuple in conversation_list
             }
-            
+
             # Collect results as they complete
-            for future in futures_progress(future_to_conversation, PHASE_PREPROCESS, "Parsing conversations", unit="conv"):
+            for future in futures_progress(
+                future_to_conversation,
+                PHASE_PREPROCESS,
+                "Parsing conversations",
+                unit="conv",
+            ):
                 conversation_id = future_to_conversation[future]
                 try:
                     conversation_data = future.result()
@@ -701,15 +713,21 @@ class GoogleChatPreprocessor:
                         f"Failed to process conversation {conversation_id}",
                         str(e),
                     )
-                    logger.error(f"Failed to process conversation {conversation_id}: {e}")
+                    logger.error(
+                        f"Failed to process conversation {conversation_id}: {e}"
+                    )
 
         with self.stats_lock:
             self.stats["total_conversations"] = len(all_conversations)
 
-        print(
-            f"   Processed {self.stats['total_conversations']} conversations with media"
+        logger.info(
+            "   Processed %d conversations with media",
+            self.stats["total_conversations"],
         )
-        logger.info(f"   Found {self.stats['total_messages_with_media']} messages with media")
+        logger.info(
+            "   Found %d messages with media",
+            self.stats["total_messages_with_media"],
+        )
 
         return all_conversations
 
@@ -718,7 +736,7 @@ class GoogleChatPreprocessor:
         # Create output media directory
         self.media_output_dir.mkdir(parents=True, exist_ok=True)
 
-        print("\nCopying media files...")
+        logger.info("Copying media files...")
 
         # Track destination filenames to avoid collisions
         destination_files = {}  # maps destination_filename -> source_path
@@ -744,27 +762,6 @@ class GoogleChatPreprocessor:
 
                     if result:
                         matched_filename, source_path = result
-
-                        # Detect actual file type and correct extension if needed using shared utility
-                        correct_ext = detect_and_correct_extension(
-                            source_path,
-                            matched_filename,
-                            log_callback=lambda msg, details: self.log_message("EXTENSION_CORRECTED", msg, details),
-                        )
-                        original_ext = Path(matched_filename).suffix.lower()
-
-                        if correct_ext != original_ext:
-                            # Extension mismatch detected, correct it
-                            base_name = Path(matched_filename).stem
-                            corrected_filename = base_name + correct_ext
-
-                            self.log_message(
-                                "EXTENSION_CORRECTED",
-                                f"Fixed extension: {matched_filename} -> {corrected_filename}",
-                                f"Actual format: {correct_ext}",
-                            )
-                            self.stats["extensions_corrected"] += 1
-                            matched_filename = corrected_filename
 
                         # Create destination filename, handling duplicates from other conversations
                         dest_filename = matched_filename
@@ -806,14 +803,14 @@ class GoogleChatPreprocessor:
                                 f"Failed to copy {matched_filename}",
                                 str(e),
                             )
-                            print(f"ERROR: Failed to copy {matched_filename}: {e}")
+                            logger.error("Failed to copy %s: %s", matched_filename, e)
                     else:
                         self.log_message(
                             "MISSING_FILE",
                             f"File not found in conversation {conv_id}: {export_name}",
                         )
                         self.stats["missing_files"] += 1
-                        
+
                         # Track orphaned metadata
                         self.failure_tracker.add_orphaned_metadata(
                             metadata_entry={
@@ -836,11 +833,11 @@ class GoogleChatPreprocessor:
                 del message["export_names"]
 
         logger.info(f"   Copied {self.stats['media_copied']} files")
-        print(f"   Fuzzy matches: {self.stats['fuzzy_matches']}")
-        print(f"   Missing files: {self.stats['missing_files']}")
-        
+        logger.info("   Fuzzy matches: %d", self.stats["fuzzy_matches"])
+        logger.info("   Missing files: %d", self.stats["missing_files"])
+
         # Track orphaned media (files in filesystem that were never copied)
-        print("\nScanning for orphaned media files...")
+        logger.info("Scanning for orphaned media files...")
         all_media_paths = set()
         for conversation in conversations:
             conv_id = conversation["conversation_id"]
@@ -849,7 +846,7 @@ class GoogleChatPreprocessor:
             conv_catalog = self.build_conversation_catalog(conv_folder)
             for file_path in conv_catalog.values():
                 all_media_paths.add(str(file_path))
-        
+
         orphaned_media = all_media_paths - self.copied_media_paths
         for orphaned_path in orphaned_media:
             orphaned_path_obj = Path(orphaned_path)
@@ -860,7 +857,7 @@ class GoogleChatPreprocessor:
                     "original_location": str(orphaned_path),
                 },
             )
-        
+
         if orphaned_media:
             logger.info(f"   Found {len(orphaned_media)} orphaned media files")
 
@@ -886,52 +883,42 @@ class GoogleChatPreprocessor:
             with open(self.metadata_file, "w", encoding="utf-8") as f:
                 json.dump(output, f, indent=2, ensure_ascii=False)
 
-            print(f"\nSUCCESS: Saved metadata to {self.metadata_file}")
+            logger.info("Saved metadata to %s", self.metadata_file)
         except Exception as e:
             logger.error(f"Failed to save metadata: {e}")
             sys.exit(1)
 
     def print_statistics(self) -> None:
-        """Print processing statistics"""
-        print("\n" + "=" * 70)
-        print("PREPROCESSING STATISTICS")
-        print("=" * 70)
-        print(
-            f"Total conversations processed:    {self.stats['total_conversations']:>6}"
-        )
-        print(
-            f"Total messages with media:        {self.stats['total_messages_with_media']:>6}"
-        )
-        print(f"Total media files found:          {self.stats['total_media_files']:>6}")
-        print(f"Media files copied:               {self.stats['media_copied']:>6}")
-        print(f"Fuzzy matches applied:            {self.stats['fuzzy_matches']:>6}")
-        print(
-            f"Extensions corrected:             {self.stats['extensions_corrected']:>6}"
-        )
-        print(
-            f"Banned files skipped:             {self.stats['banned_files_skipped']:>6}"
-        )
-        print(f"Missing files:                    {self.stats['missing_files']:>6}")
-        print("=" * 70)
+        """Print processing statistics as a compact table."""
+        stats = {
+            "Conversations": self.stats["total_conversations"],
+            "Messages with media": self.stats["total_messages_with_media"],
+            "Media files found": self.stats["total_media_files"],
+            "Files copied": self.stats["media_copied"],
+            "Fuzzy matches": self.stats["fuzzy_matches"],
+            "Missing files": self.stats["missing_files"],
+            "Banned skipped": self.stats["banned_files_skipped"],
+        }
+        print_preprocessing_stats("Preprocessing Stats", stats)
 
     def process(self) -> None:
         """Main processing pipeline"""
         logger.info("Starting Google Chat Messages Preprocessing")
-        print(f"Export path: {self.export_path}")
-        print(f"Output path: {self.output_dir}\n")
+        logger.info("Export path: %s", self.export_path)
+        logger.info("Output path: %s", self.output_dir)
 
         # Validate export structure
         if not self.validate_export():
             sys.exit(1)
 
         # Detect export username
-        print("\nDetecting export username...")
+        logger.info("Detecting export username...")
         if not self.detect_export_username():
-            print("ERROR: Could not detect export username")
+            logger.error("Could not detect export username")
             sys.exit(1)
 
         # Count total media files for statistics
-        print("\nScanning media directories...")
+        logger.info("Scanning media directories...")
         self.stats["total_media_files"] = self.count_total_media_files()
         logger.info(f"   Found {self.stats['total_media_files']} media files")
 
@@ -1001,7 +988,9 @@ Examples:
     export_path = Path(args.export_directory)
     output_path = Path(args.output) if args.output else None
 
-    preprocessor = GoogleChatPreprocessor(export_path, output_path, workers=args.workers)
+    preprocessor = GoogleChatPreprocessor(
+        export_path, output_path, workers=args.workers
+    )
     preprocessor.process()
 
 

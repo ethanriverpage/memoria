@@ -20,10 +20,9 @@ import argparse
 from collections import defaultdict
 from html.parser import HTMLParser
 from threading import Lock
-import multiprocessing
 
-from common.file_utils import detect_and_correct_extension
-from common.utils import ALL_MEDIA_EXTENSIONS
+from common.processing import print_preprocessing_stats
+from common.utils import ALL_MEDIA_EXTENSIONS, default_worker_count
 from common.filter_banned_files import BannedFilesFilter
 from common.failure_tracker import FailureTracker
 
@@ -157,7 +156,9 @@ class GoogleVoicePreprocessor:
         self.log_file = output_base / "preprocessing.log"
 
         # Final output directory for processor (for failure tracking)
-        self.final_output_dir = Path(final_output_dir) if final_output_dir else output_base
+        self.final_output_dir = (
+            Path(final_output_dir) if final_output_dir else output_base
+        )
 
         # Export username (detected from directory name)
         self.export_username = None
@@ -172,12 +173,8 @@ class GoogleVoicePreprocessor:
         )
 
         # Threading configuration
-        if workers is None:
-            # Default to CPU count - 1, minimum 1
-            self.workers = max(1, multiprocessing.cpu_count() - 1)
-        else:
-            self.workers = max(1, workers)
-        
+        self.workers = workers if workers is not None else default_worker_count()
+
         # Thread-safe locks for shared data structures
         self.stats_lock = Lock()
         self.log_lock = Lock()
@@ -191,7 +188,6 @@ class GoogleVoicePreprocessor:
             "media_copied": 0,
             "missing_files": 0,
             "fuzzy_matches": 0,
-            "extensions_corrected": 0,
             "banned_files_skipped": 0,
         }
 
@@ -231,24 +227,24 @@ class GoogleVoicePreprocessor:
 
                 f.write(f"\nTotal logged issues: {len(self.log_entries)}\n")
 
-            print(f"SUCCESS: Saved preprocessing log to {self.log_file}")
+            logger.info("Saved preprocessing log to %s", self.log_file)
         except Exception as e:
-            print(f"WARNING: Failed to save log file: {e}")
+            logger.warning("Failed to save log file: %s", e)
 
     def validate_export(self) -> bool:
         """Validate that export directory has required structure"""
         if not self.export_path.exists():
-            print(f"ERROR: Export path does not exist: {self.export_path}")
+            logger.error("Export path does not exist: %s", self.export_path)
             return False
 
         if not self.voice_dir.exists():
-            print(f"ERROR: Voice/Calls directory not found: {self.voice_dir}")
+            logger.error("Voice/Calls directory not found: %s", self.voice_dir)
             return False
 
         # Check if at least one HTML file exists
         html_files = list(self.voice_dir.glob("*.html"))
         if not html_files:
-            print(f"ERROR: No HTML files found in {self.voice_dir}")
+            logger.error("No HTML files found in %s", self.voice_dir)
             return False
 
         return True
@@ -267,7 +263,7 @@ class GoogleVoicePreprocessor:
             username = extract_username_from_export_dir(str(self.export_path), "google")
             if username and username != "unknown":
                 self.export_username = username
-                print(f"   Detected export user: {self.export_username}")
+                logger.info("   Detected export user: %s", self.export_username)
                 return True
         except Exception as e:
             self.log_message(
@@ -455,6 +451,7 @@ class GoogleVoicePreprocessor:
 
         # Scan Voice/Calls directory for media files
         import os
+
         with os.scandir(self.voice_dir) as entries:
             for entry in entries:
                 if entry.is_file():
@@ -560,7 +557,7 @@ class GoogleVoicePreprocessor:
         """
         conversations_dict = {}  # Key: conversation_name, Value: conversation data
 
-        print("\nScanning text conversation files...")
+        logger.info("Scanning text conversation files...")
 
         # Find all HTML files
         html_files = sorted(self.voice_dir.glob("*.html"))
@@ -595,8 +592,12 @@ class GoogleVoicePreprocessor:
 
         self.stats["total_conversations"] = len(conversations)
 
-        print(f"   Processed {self.stats['total_conversations']} unique conversations")
-        logger.info(f"   Found {self.stats['total_messages_with_media']} messages with media")
+        logger.info(
+            "   Processed %d unique conversations", self.stats["total_conversations"]
+        )
+        logger.info(
+            "   Found %d messages with media", self.stats["total_messages_with_media"]
+        )
 
         return conversations
 
@@ -605,7 +606,7 @@ class GoogleVoicePreprocessor:
         # Create output media directory
         self.media_output_dir.mkdir(parents=True, exist_ok=True)
 
-        print("\nCopying media files...")
+        logger.info("Copying media files...")
 
         # Build media catalog
         media_catalog = self.build_media_catalog()
@@ -629,27 +630,6 @@ class GoogleVoicePreprocessor:
 
                     if result:
                         matched_filename, source_path = result
-
-                        # Detect actual file type and correct extension if needed using shared utility
-                        correct_ext = detect_and_correct_extension(
-                            source_path,
-                            matched_filename,
-                            log_callback=lambda msg, details: self.log_message("EXTENSION_CORRECTED", msg, details),
-                        )
-                        original_ext = Path(matched_filename).suffix.lower()
-
-                        if correct_ext != original_ext:
-                            # Extension mismatch detected, correct it
-                            base_name = Path(matched_filename).stem
-                            corrected_filename = base_name + correct_ext
-
-                            self.log_message(
-                                "EXTENSION_CORRECTED",
-                                f"Fixed extension: {matched_filename} -> {corrected_filename}",
-                                f"Actual format: {correct_ext}",
-                            )
-                            self.stats["extensions_corrected"] += 1
-                            matched_filename = corrected_filename
 
                         # Create destination filename, handling duplicates
                         dest_filename = matched_filename
@@ -691,14 +671,14 @@ class GoogleVoicePreprocessor:
                                 f"Failed to copy {matched_filename}",
                                 str(e),
                             )
-                            print(f"ERROR: Failed to copy {matched_filename}: {e}")
+                            logger.error("Failed to copy %s: %s", matched_filename, e)
                     else:
                         self.log_message(
                             "MISSING_FILE",
                             f"File not found: {media_src}",
                         )
                         self.stats["missing_files"] += 1
-                        
+
                         # Track orphaned metadata
                         self.failure_tracker.add_orphaned_metadata(
                             metadata_entry={
@@ -718,15 +698,15 @@ class GoogleVoicePreprocessor:
                 # Remove media_src as it's no longer needed
                 del message["media_src"]
 
-        logger.info(f"   Copied {self.stats['media_copied']} files")
-        print(f"   Fuzzy matches: {self.stats['fuzzy_matches']}")
-        print(f"   Missing files: {self.stats['missing_files']}")
-        
+        logger.info("   Copied %d files", self.stats["media_copied"])
+        logger.info("   Fuzzy matches: %d", self.stats["fuzzy_matches"])
+        logger.info("   Missing files: %d", self.stats["missing_files"])
+
         # Track orphaned media (files in filesystem that were never copied)
-        print("\nScanning for orphaned media files...")
+        logger.info("Scanning for orphaned media files...")
         all_media_paths = set(str(path) for path in media_catalog.values())
         orphaned_media = all_media_paths - self.copied_media_paths
-        
+
         for orphaned_path in orphaned_media:
             orphaned_path_obj = Path(orphaned_path)
             self.failure_tracker.add_orphaned_media(
@@ -736,7 +716,7 @@ class GoogleVoicePreprocessor:
                     "original_location": str(orphaned_path),
                 },
             )
-        
+
         if orphaned_media:
             logger.info(f"   Found {len(orphaned_media)} orphaned media files")
 
@@ -763,48 +743,38 @@ class GoogleVoicePreprocessor:
             with open(self.metadata_file, "w", encoding="utf-8") as f:
                 json.dump(output, f, indent=2, ensure_ascii=False)
 
-            print(f"\nSUCCESS: Saved metadata to {self.metadata_file}")
+            logger.info("Saved metadata to %s", self.metadata_file)
         except Exception as e:
             logger.error(f"Failed to save metadata: {e}")
             sys.exit(1)
 
     def print_statistics(self) -> None:
-        """Print processing statistics"""
-        print("\n" + "=" * 70)
-        print("PREPROCESSING STATISTICS")
-        print("=" * 70)
-        print(
-            f"Total conversations processed:    {self.stats['total_conversations']:>6}"
-        )
-        print(
-            f"Total messages with media:        {self.stats['total_messages_with_media']:>6}"
-        )
-        print(f"Total media files found:          {self.stats['total_media_files']:>6}")
-        print(f"Media files copied:               {self.stats['media_copied']:>6}")
-        print(f"Fuzzy matches applied:            {self.stats['fuzzy_matches']:>6}")
-        print(
-            f"Extensions corrected:             {self.stats['extensions_corrected']:>6}"
-        )
-        print(
-            f"Banned files skipped:             {self.stats['banned_files_skipped']:>6}"
-        )
-        print(f"Missing files:                    {self.stats['missing_files']:>6}")
-        print("=" * 70)
+        """Print processing statistics as a compact table."""
+        stats = {
+            "Conversations": self.stats["total_conversations"],
+            "Messages with media": self.stats["total_messages_with_media"],
+            "Media files found": self.stats["total_media_files"],
+            "Files copied": self.stats["media_copied"],
+            "Fuzzy matches": self.stats["fuzzy_matches"],
+            "Missing files": self.stats["missing_files"],
+            "Banned skipped": self.stats["banned_files_skipped"],
+        }
+        print_preprocessing_stats("Preprocessing Stats", stats)
 
     def process(self) -> None:
         """Main processing pipeline"""
         logger.info("Starting Google Voice Messages Preprocessing")
-        print(f"Export path: {self.export_path}")
-        print(f"Output path: {self.output_dir}\n")
+        logger.info("Export path: %s", self.export_path)
+        logger.info("Output path: %s", self.output_dir)
 
         # Validate export structure
         if not self.validate_export():
             sys.exit(1)
 
         # Detect export username
-        print("\nDetecting export username...")
+        logger.info("Detecting export username...")
         if not self.detect_export_username():
-            print("ERROR: Could not detect export username")
+            logger.error("Could not detect export username")
             sys.exit(1)
 
         # Scan and parse conversations
@@ -873,7 +843,9 @@ Examples:
     export_path = Path(args.export_directory)
     output_path = Path(args.output) if args.output else None
 
-    preprocessor = GoogleVoicePreprocessor(export_path, output_path, workers=args.workers)
+    preprocessor = GoogleVoicePreprocessor(
+        export_path, output_path, workers=args.workers
+    )
     preprocessor.process()
 
 

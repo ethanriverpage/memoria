@@ -67,7 +67,7 @@ It takes the JSON metadata files, HTML conversation dumps, and scattered media f
 
 - Groups by platform and account
 - Descriptive, sortable filenames
-- Automatic deduplication
+- Automatic within-processor deduplication
 
 </td>
 <td width="50%">
@@ -75,6 +75,7 @@ It takes the JSON metadata files, HTML conversation dumps, and scattered media f
 **Batch Processing & Integration**
 
 - Process multiple platforms at once
+- Cross-processor deduplication (optional)
 - Parallel processing support
 - Optional Immich server upload
 
@@ -330,7 +331,8 @@ Before processing, export your data from the platforms:
 - **[Upload Only Mode](../../wiki/Upload-Only-Mode)** - Upload previously processed exports
 - **[Upload Queuing](../../wiki/Upload-Queuing)** - Parallel processing upload queuing
 - **[Logging](../../wiki/Logging)** - Logging configuration and verbose mode
-- **[Deduplication](../../wiki/Deduplication)** - Google Photos deduplication system
+- **[Deduplication](../../wiki/Deduplication)** - Within-processor deduplication
+- **[Global Deduplication](../../wiki/Global-Deduplication)** - Cross-processor deduplication
 - **[Standalone Tools](../../wiki/Standalone-Tools)** - Standalone utility scripts for analysis and comparison
 
 </details>
@@ -364,6 +366,7 @@ Before processing, export your data from the platforms:
 | **Export Setup** | See platform-specific guides for export preparation |
 | **Performance** | Use `--workers N` to control parallelism |
 | **Multiple Exports** | Use `--originals` to batch process everything at once |
+| **Cross-Platform Dedup** | Set `CROSS_PROCESSOR_DEDUP=true` to deduplicate across platforms |
 | **Debugging** | Enable `--verbose` for detailed logs |
 | **Immich Upload** | Configure automatic upload to your Immich server |
 | **Questions?** | Check the [FAQ](../../wiki/FAQ) for common questions |

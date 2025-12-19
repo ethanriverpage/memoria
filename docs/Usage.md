@@ -381,27 +381,47 @@ IMMICH_IGNORE_PATTERNS=**/issues/**,**/needs matching/**
 # Processing Configuration
 TEMP_DIR=../pre
 DISABLE_TEMP_CLEANUP=0
+
+# Cross-Processor Deduplication (optional)
+CROSS_PROCESSOR_DEDUP=true
+DEDUP_USE_PERCEPTUAL=true
+DEDUP_PERCEPTUAL_THRESHOLD=0.92
 ```
 
 ### Available Variables
 
-**`IMMICH_INSTANCE_URL`**
-Your Immich server URL.
+**Immich Configuration**
 
-**`IMMICH_API_KEY`**
-Your Immich API key.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `IMMICH_INSTANCE_URL` | - | Your Immich server URL |
+| `IMMICH_API_KEY` | - | Your Immich API key |
+| `IMMICH_UPLOAD_CONCURRENCY` | `4` | Number of concurrent uploads |
+| `IMMICH_IGNORE_PATTERNS` | `**/issues/**` | Comma-separated glob patterns to exclude |
 
-**`IMMICH_UPLOAD_CONCURRENCY`**
-Number of concurrent uploads (default: 4).
+**Processing Configuration**
 
-**`IMMICH_IGNORE_PATTERNS`**
-Comma-separated glob patterns to exclude from upload.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TEMP_DIR` | `../pre` | Directory for temporary preprocessing files |
+| `DISABLE_TEMP_CLEANUP` | `false` | Set to `true` to preserve temp files |
 
-**`TEMP_DIR`**
-Directory for temporary preprocessing files (default: `../pre`).
+**Cross-Processor Deduplication**
 
-**`DISABLE_TEMP_CLEANUP`**
-Set to `1`, `true`, or `yes` to preserve temporary files after processing (useful for debugging).
+Enable deduplication across different platform exports. See [Global Deduplication](Global-Deduplication) for details.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CROSS_PROCESSOR_DEDUP` | `false` | Enable cross-processor deduplication |
+| `DEDUP_USE_PERCEPTUAL` | `true` | Enable perceptual hashing for fuzzy matching |
+| `DEDUP_PERCEPTUAL_THRESHOLD` | `0.92` | Similarity threshold (0.0-1.0) |
+| `DEDUP_DATABASE_PATH` | `~/.memoria/dedup.db` | SQLite database path |
+| `DEDUP_DESC_MAX_PER_SOURCE` | `250` | Max chars per source in ImageDescription |
+| `DEDUP_DESC_MAX_TOTAL` | `1500` | Max total chars for ImageDescription |
+| `DEDUP_MSG_TRUNCATE` | `200` | Message content truncation length |
+| `DEDUP_GPS_DISTANCE` | `500` | Max GPS distance (meters) for validation |
+| `DEDUP_TIMESTAMP_DELTA` | `3600` | Max timestamp difference (seconds) |
+| `DEDUP_ASPECT_RATIO` | `0.10` | Max aspect ratio difference |
 
 ## Advanced Usage
 
@@ -524,6 +544,8 @@ cat logs/memoria_*.log
 - [Upload Only Mode](Upload-Only-Mode) - Upload-only mode details
 - [Upload Queuing](Upload-Queuing) - Upload queuing for parallel processing
 - [Immich Upload](Immich-Upload) - Immich upload configuration
+- [Deduplication](Deduplication) - Within-processor deduplication
+- [Global Deduplication](Global-Deduplication) - Cross-processor deduplication
 - [Google Export](Google-Export) - Google-specific guide
 - [iMessage Export](iMessage-Export) - iMessage-specific guide
 - [Discord Export](Discord-Export) - Discord-specific guide

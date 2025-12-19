@@ -30,13 +30,30 @@ MINIMAL_PNG = base64.b64decode(
 
 # Minimal valid MP4 container (smallest possible valid MP4)
 # This is a minimal ftyp box only - enough for file type detection
-MINIMAL_MP4 = bytes([
-    0x00, 0x00, 0x00, 0x14,  # Box size: 20 bytes
-    0x66, 0x74, 0x79, 0x70,  # Box type: 'ftyp'
-    0x69, 0x73, 0x6F, 0x6D,  # Major brand: 'isom'
-    0x00, 0x00, 0x00, 0x01,  # Minor version
-    0x69, 0x73, 0x6F, 0x6D,  # Compatible brand: 'isom'
-])
+MINIMAL_MP4 = bytes(
+    [
+        0x00,
+        0x00,
+        0x00,
+        0x14,  # Box size: 20 bytes
+        0x66,
+        0x74,
+        0x79,
+        0x70,  # Box type: 'ftyp'
+        0x69,
+        0x73,
+        0x6F,
+        0x6D,  # Major brand: 'isom'
+        0x00,
+        0x00,
+        0x00,
+        0x01,  # Minor version
+        0x69,
+        0x73,
+        0x6F,
+        0x6D,  # Compatible brand: 'isom'
+    ]
+)
 
 # Minimal valid WebP (1x1 red pixel)
 MINIMAL_WEBP = base64.b64decode(
@@ -47,9 +64,7 @@ MINIMAL_WEBP = base64.b64decode(
 
 
 def create_minimal_sqlite_db(
-    db_path: Path,
-    schema: Optional[str] = None,
-    data: Optional[list] = None
+    db_path: Path, schema: Optional[str] = None, data: Optional[list] = None
 ) -> Path:
     """Create a minimal valid SQLite database.
 
@@ -165,4 +180,3 @@ def write_media_file(path: Path, media_type: str = "jpeg") -> Path:
     content = media_bytes.get(media_type.lower(), MINIMAL_JPEG)
     path.write_bytes(content)
     return path
-

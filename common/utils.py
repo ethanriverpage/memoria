@@ -7,40 +7,52 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Optional
+from datetime import datetime
+from typing import Optional, Set
 
 # Re-export logging functions from centralized logging module for backwards compatibility
 
 
 # ============================================================================
-# Media Type Detection
+# Media Type Detection - Single Source of Truth for Extensions
 # ============================================================================
 
-# Supported media extensions
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".tiff", ".tif", ".dng", ".avif"}
+# Supported image extensions (used across all processors)
+# Note: Other modules (file_utils, perceptual_hash) import from here
+IMAGE_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".heic",
+    ".heif",
+    ".tiff",
+    ".tif",
+    ".dng",
+    ".avif",
+    ".bmp",
+}
+
+# Supported video extensions
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm", ".mkv", ".m4v"}
+
+# Supported audio extensions (for messaging processors)
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a"}
+
+# Combined extension sets for convenience
 ALL_MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
+ALL_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
+
+# Live Photo file extensions (for Apple Live Photos detection)
+LIVE_PHOTO_IMAGE_EXTENSIONS = {".heic", ".heif", ".jpg", ".jpeg"}
+LIVE_PHOTO_VIDEO_EXTENSIONS = {".mov"}
 
 
 def get_media_type(file_path) -> Optional[str]:
-    """Determine media type from file extension
-    
-    Args:
-        file_path: Path to the file (string or Path object)
-        
-    Returns:
-        "image" if image file, "video" if video file, None if unsupported
-        
-    Example:
-        >>> get_media_type("photo.jpg")
-        'image'
-        >>> get_media_type("video.mp4")
-        'video'
-        >>> get_media_type("document.pdf")
-        None
-    """
+    """Return "image", "video", or None based on file extension."""
     ext = os.path.splitext(str(file_path))[1].lower()
-    
+
     if ext in IMAGE_EXTENSIONS:
         return "image"
     elif ext in VIDEO_EXTENSIONS:
@@ -50,43 +62,13 @@ def get_media_type(file_path) -> Optional[str]:
 
 
 def is_supported_media(file_path) -> bool:
-    """Check if file is a supported media type
-    
-    Args:
-        file_path: Path to the file (string or Path object)
-        
-    Returns:
-        True if file is a supported image or video, False otherwise
-        
-    Example:
-        >>> is_supported_media("photo.jpg")
-        True
-        >>> is_supported_media("document.pdf")
-        False
-    """
+    """Check if file is a supported media type."""
     ext = os.path.splitext(str(file_path))[1].lower()
     return ext in ALL_MEDIA_EXTENSIONS
 
 
 def get_gps_format(file_path) -> str:
-    """Get GPS coordinate format for file type
-    
-    Different file types require different GPS coordinate formats in exiftool:
-    - Images: Use absolute values with explicit hemisphere reference fields
-    - Videos: Use signed coordinates (exiftool auto-sets hemisphere)
-    
-    Args:
-        file_path: Path to the file (string or Path object)
-        
-    Returns:
-        "absolute" for images, "signed" for videos
-        
-    Example:
-        >>> get_gps_format("photo.jpg")
-        'absolute'
-        >>> get_gps_format("video.mp4")
-        'signed'
-    """
+    """Return "absolute" for images (with hemisphere refs), "signed" for videos."""
     media_type = get_media_type(file_path)
     return "absolute" if media_type == "image" else "signed"
 
@@ -97,42 +79,27 @@ def get_gps_format(file_path) -> str:
 
 
 def extract_username_from_export_dir(input_dir: str, prefix: str) -> str:
-    """Extract username from export directory name
-
-    Handles various naming patterns:
-    - google-{username}-YYYYMMDD
-    - snapchat-{username}-YYYY-MM-DD
-    - instagram-{username}-YYYY-MM-DD
-    - instagram-{username}_-YYYY-MM-DD (old format with trailing underscore)
-
-    Args:
-        input_dir: Path to the input directory
-        prefix: Expected prefix (e.g., "google", "snapchat", "instagram")
-
-    Returns:
-        Extracted username, or "unknown" if pattern doesn't match
-
-    Examples:
-        >>> extract_username_from_export_dir("google-username-20250526", "google")
-        'username'
-        >>> extract_username_from_export_dir("instagram-john-doe-2025-10-07", "instagram")
-        'john-doe'
-        >>> extract_username_from_export_dir("instagram-user123-2021-07-25", "instagram")
-        'user123'
-    """
+    """Extract username from export directory name like "prefix-username-YYYYMMDD"."""
     dir_name = Path(input_dir).name
     escaped_prefix = re.escape(prefix)
-    
+
     # Try patterns in order of specificity
     patterns = [
         # Instagram old format with trailing underscore
-        (r"instagram-(.+?)_-(\d{4}-?\d{2}-?\d{2})", lambda m: m.group(1) + "_") if prefix == "instagram" else None,
+        (
+            (r"instagram-(.+?)_-(\d{4}-?\d{2}-?\d{2})", lambda m: m.group(1) + "_")
+            if prefix == "instagram"
+            else None
+        ),
         # Standard pattern with date
         (rf"{escaped_prefix}-(.+?)-(\d{{4}}-?\d{{2}}-?\d{{2}})", lambda m: m.group(1)),
         # Fallback: anything after prefix with date stripped
-        (rf"{escaped_prefix}-(.+)", lambda m: re.sub(r"_?-?\d{4}-?\d{2}-?\d{2}$", "", m.group(1)) or "unknown"),
+        (
+            rf"{escaped_prefix}-(.+)",
+            lambda m: re.sub(r"_?-?\d{4}-?\d{2}-?\d{2}$", "", m.group(1)) or "unknown",
+        ),
     ]
-    
+
     for pattern_tuple in patterns:
         if pattern_tuple is None:
             continue
@@ -140,29 +107,12 @@ def extract_username_from_export_dir(input_dir: str, prefix: str) -> str:
         match = re.match(pattern, dir_name)
         if match:
             return extract_fn(match)
-    
+
     return "unknown"
 
 
 def sanitize_filename(name: str, max_length: int = 50) -> str:
-    """Sanitize a string for safe use in filenames
-
-    Removes or replaces problematic characters that are not allowed in filenames
-    on various operating systems (Windows, macOS, Linux).
-
-    Args:
-        name: String to sanitize (conversation title, username, etc.)
-        max_length: Maximum length for sanitized name (default: 50)
-
-    Returns:
-        Sanitized string safe for use in filenames
-
-    Example:
-        >>> sanitize_filename("John Doe / Jane Smith")
-        'john_doe_jane_smith'
-        >>> sanitize_filename("Group: Friends & Family!")
-        'group_friends_family'
-    """
+    """Sanitize a string for safe use in filenames."""
     # Replace whitespace with underscores
     sanitized = name.replace(" ", "_")
 
@@ -191,6 +141,60 @@ def sanitize_filename(name: str, max_length: int = 50) -> str:
     return sanitized
 
 
+class FilenameGenerator:
+    """Generate unique filenames with sequence numbers for duplicates.
+
+    Tracks used filenames to ensure uniqueness by appending _2, _3, etc.
+    """
+
+    def __init__(
+        self,
+        prefix: str,
+        timestamp_format: str = "%Y-%m-%d %H:%M:%S",
+        sequence_start: int = 2,
+    ):
+        self.prefix = prefix
+        self.timestamp_format = timestamp_format
+        self.sequence_start = sequence_start
+        self.used_filenames: Set[str] = set()
+
+    def generate(
+        self,
+        timestamp_str: Optional[str],
+        identifier: str,
+        extension: str,
+    ) -> str:
+        """Generate a unique filename like "prefix-identifier-20240115.ext"."""
+        date_key = self._parse_date(timestamp_str)
+        base = f"{self.prefix}-{identifier}-{date_key}{extension}"
+        return self._ensure_unique(base, extension)
+
+    def _parse_date(self, timestamp_str: Optional[str]) -> str:
+        """Parse timestamp to YYYYMMDD format, or "00000000" if unparseable."""
+        if not timestamp_str:
+            return "00000000"
+        try:
+            dt = datetime.strptime(timestamp_str, self.timestamp_format)
+            return dt.strftime("%Y%m%d")
+        except ValueError:
+            return "00000000"
+
+    def _ensure_unique(self, base: str, extension: str) -> str:
+        """Add sequence number if filename already used."""
+        if base not in self.used_filenames:
+            self.used_filenames.add(base)
+            return base
+
+        stem = base.rsplit(extension, 1)[0]
+        sequence = self.sequence_start
+        while True:
+            candidate = f"{stem}_{sequence}{extension}"
+            if candidate not in self.used_filenames:
+                self.used_filenames.add(candidate)
+                return candidate
+            sequence += 1
+
+
 def default_worker_count() -> int:
     """Compute default worker count as CPU count minus one, minimum 1."""
     from multiprocessing import cpu_count
@@ -199,43 +203,12 @@ def default_worker_count() -> int:
 
 
 def parse_bool_env(value: str) -> bool:
-    """Parse boolean from environment variable string.
-    
-    Args:
-        value: String value from environment variable
-        
-    Returns:
-        True if value is truthy ("true", "1", "yes", "on"), False otherwise
-        
-    Example:
-        >>> parse_bool_env("true")
-        True
-        >>> parse_bool_env("1")
-        True
-        >>> parse_bool_env("false")
-        False
-    """
+    """Return True if value is truthy ("true", "1", "yes", "on")."""
     return value.lower() in ("true", "1", "yes", "on")
 
 
 def should_cleanup_temp() -> bool:
-    """Check if temporary directory cleanup should be performed.
-    
-    Reads DISABLE_TEMP_CLEANUP environment variable to determine whether
-    temporary preprocessing directories should be cleaned up after processing.
-    
-    Returns:
-        False if DISABLE_TEMP_CLEANUP is set to a truthy value (1, true, yes),
-        True otherwise (cleanup by default).
-        
-    Example:
-        >>> os.environ['DISABLE_TEMP_CLEANUP'] = '1'
-        >>> should_cleanup_temp()
-        False
-        >>> os.environ.pop('DISABLE_TEMP_CLEANUP')
-        >>> should_cleanup_temp()
-        True
-    """
+    """Return False if DISABLE_TEMP_CLEANUP is set, True otherwise."""
     return not parse_bool_env(os.getenv("DISABLE_TEMP_CLEANUP", ""))
 
 
@@ -245,27 +218,7 @@ def should_cleanup_temp() -> bool:
 
 
 def is_preprocessed_directory(input_dir: str) -> bool:
-    """Check if directory has been preprocessed.
-
-    A preprocessed directory contains:
-    - metadata.json: Consolidated metadata from the preprocessing step
-    - media/: Directory containing copied/organized media files
-
-    This is used by processors to determine whether to run preprocessing
-    or use an already-preprocessed directory.
-
-    Args:
-        input_dir: Path to the directory to check
-
-    Returns:
-        True if directory contains metadata.json and media/, False otherwise
-
-    Example:
-        >>> is_preprocessed_directory("/path/to/raw_export")
-        False
-        >>> is_preprocessed_directory("/path/to/preprocessed_export")
-        True
-    """
+    """Return True if directory contains metadata.json and media/."""
     input_path = Path(input_dir)
     metadata_file = input_path / "metadata.json"
     media_dir = input_path / "media"
@@ -278,33 +231,7 @@ def update_file_timestamps(
     timestamp_str: Optional[str],
     timestamp_format: str = "%Y-%m-%d %H:%M:%S",
 ) -> bool:
-    """Update filesystem access and modification timestamps to match content date.
-
-    Sets both the access time and modification time of a file to match
-    a timestamp extracted from the file's metadata (e.g., capture date).
-
-    Args:
-        file_path: Path to the file (string or Path object)
-        timestamp_str: Timestamp string to parse (e.g., "2024-01-15 10:30:00"), or None
-        timestamp_format: strptime format string for parsing timestamp_str
-                         Common formats:
-                         - "%Y-%m-%d %H:%M:%S" (default)
-                         - "%Y-%m-%d %H:%M:%S UTC" (with UTC suffix)
-                         - "%Y-%m-%dT%H:%M:%SZ" (ISO 8601)
-
-    Returns:
-        True if timestamps were updated successfully, False otherwise
-
-    Example:
-        >>> update_file_timestamps(
-        ...     "/path/to/photo.jpg",
-        ...     "2024-01-15 10:30:00",
-        ...     "%Y-%m-%d %H:%M:%S"
-        ... )
-        True
-    """
-    from datetime import datetime
-
+    """Set file atime/mtime to match the given timestamp string."""
     logger = logging.getLogger(__name__)
 
     try:

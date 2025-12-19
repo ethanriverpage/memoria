@@ -4,15 +4,171 @@ File utility functions for media processing
 
 Provides shared file type detection and extension correction functionality
 used across multiple preprocessors.
+
+Performance Features:
+- Reflink (copy-on-write) support for instant file copies on Btrfs/XFS/APFS/ZFS
+- Automatic fallback to standard copy on unsupported filesystems
 """
 
 import logging
+import os
+import platform
+import shutil
+import subprocess
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional, Union
 
 import magic
 
 logger = logging.getLogger(__name__)
+
+# Cache reflink support detection per-filesystem (mount point)
+_reflink_support_cache: dict[str, bool] = {}
+
+
+def _detect_reflink_support(path: Path) -> bool:
+    """Check if filesystem at path supports reflinks (cached per mount point)."""
+    # Get the mount point for this path
+    try:
+        # Use os.path.realpath to resolve symlinks
+        real_path = os.path.realpath(str(path))
+        # Find mount point by walking up until we hit a different device
+        mount_point = real_path
+        while mount_point != "/":
+            parent = os.path.dirname(mount_point)
+            if os.stat(parent).st_dev != os.stat(mount_point).st_dev:
+                break
+            mount_point = parent
+    except (OSError, ValueError):
+        mount_point = "/"
+
+    # Check cache
+    if mount_point in _reflink_support_cache:
+        return _reflink_support_cache[mount_point]
+
+    # Default to False, will be updated if reflink test succeeds
+    _reflink_support_cache[mount_point] = False
+
+    system = platform.system()
+
+    if system == "Linux":
+        # Check /proc/mounts for filesystem type
+        try:
+            with open("/proc/mounts", "r") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        mount_path, fs_type = parts[1], parts[2]
+                        if mount_point.startswith(mount_path):
+                            if fs_type in ("btrfs", "xfs", "bcachefs"):
+                                _reflink_support_cache[mount_point] = True
+                                logger.debug(
+                                    f"Reflink support detected: {fs_type} at {mount_point}"
+                                )
+                                return True
+        except (OSError, IOError):
+            pass
+    elif system == "Darwin":
+        # macOS APFS supports reflinks via clonefile
+        # Check if running on APFS (default since High Sierra)
+        try:
+            result = subprocess.run(
+                ["diskutil", "info", mount_point],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if "APFS" in result.stdout:
+                _reflink_support_cache[mount_point] = True
+                logger.debug(f"Reflink support detected: APFS at {mount_point}")
+                return True
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+
+    return False
+
+
+def copy_file(
+    src: Union[str, Path],
+    dst: Union[str, Path],
+    preserve_metadata: bool = True,
+) -> None:
+    """Copy file with reflink optimization on supported filesystems."""
+    src = Path(src)
+    dst = Path(dst)
+
+    if not src.exists():
+        raise FileNotFoundError(f"Source file not found: {src}")
+
+    # Ensure destination directory exists
+    dst.parent.mkdir(parents=True, exist_ok=True)
+
+    system = platform.system()
+
+    # Try reflink copy first
+    if _detect_reflink_support(dst.parent):
+        try:
+            if system == "Linux":
+                # Use cp --reflink=always for guaranteed reflink
+                cmd = ["cp", "--reflink=always"]
+                if preserve_metadata:
+                    cmd.append("--preserve=all")
+                cmd.extend([str(src), str(dst)])
+
+                subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    check=True,
+                    timeout=60,
+                )
+                logger.debug(f"Reflink copy: {src.name} -> {dst}")
+                return
+
+            elif system == "Darwin":
+                # macOS: use cp -c for clonefile
+                cmd = ["cp", "-c"]
+                if preserve_metadata:
+                    cmd.append("-p")
+                cmd.extend([str(src), str(dst)])
+
+                subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    check=True,
+                    timeout=60,
+                )
+                logger.debug(f"Clonefile copy: {src.name} -> {dst}")
+                return
+
+        except subprocess.CalledProcessError as e:
+            # Reflink failed (e.g., cross-device), fall through to standard copy
+            logger.debug(
+                f"Reflink copy failed, falling back to standard copy: {e.stderr.decode() if e.stderr else str(e)}"
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            # cp command not available or timed out
+            pass
+
+    # Standard copy fallback
+    if preserve_metadata:
+        shutil.copy2(src, dst)
+    else:
+        shutil.copy(src, dst)
+
+
+def copy_file_safe(
+    src: Union[str, Path],
+    dst: Union[str, Path],
+    preserve_metadata: bool = True,
+) -> bool:
+    """Copy file with error handling, return True on success."""
+    try:
+        copy_file(src, dst, preserve_metadata)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to copy {src} to {dst}: {e}")
+        return False
+
 
 # MIME type to extension mapping
 # Comprehensive mapping covering images, videos, and audio formats
@@ -42,50 +198,34 @@ MIME_TO_EXTENSION = {
     "audio/x-m4a": ".m4a",
 }
 
-# Define which extensions belong to which category (for cross-category validation)
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".tiff", ".bmp", ".avif"}
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm", ".mkv", ".m4v"}
-AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a"}
+# Import extension definitions from utils.py (single source of truth)
+# These are used for cross-category validation in detect_and_correct_extension()
+from common.utils import (
+    IMAGE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    AUDIO_EXTENSIONS,
+)
 
 
-def detect_and_correct_extension(
-    file_path: Path,
-    original_filename: str,
-    log_callback: Optional[Callable[[str, str], None]] = None,
-    allow_cross_category: bool = False,
-) -> str:
-    """
-    Detect actual file type using python-magic and return correct extension.
+def batch_correct_extensions(
+    file_paths: list[Path],
+) -> dict[str, str]:
+    """Correct file extensions based on actual MIME type. Returns old->new path map."""
+    corrections: dict[str, str] = {}
+    corrected_count = 0
 
-    Uses the python-magic library to analyze file contents and determine
-    the actual MIME type, then maps it to the appropriate file extension.
+    for file_path in file_paths:
+        if not file_path.exists():
+            continue
 
-    Args:
-        file_path: Path to the file to analyze
-        original_filename: Original filename (used for fallback extension)
-        log_callback: Optional callable(message, details) for logging corrections
-        allow_cross_category: If False, prevents image->video or video->image corrections
-                             (default False to avoid false positives)
+        original_ext = file_path.suffix.lower()
 
-    Returns:
-        Correct extension (with dot), or original extension if detection fails
+        try:
+            mime = magic.from_file(str(file_path), mime=True)
+            detected_ext = MIME_TO_EXTENSION.get(mime)
 
-    Example:
-        >>> correct_ext = detect_and_correct_extension(
-        ...     Path("/tmp/file.jpg"),
-        ...     "photo.jpg",
-        ...     log_callback=lambda msg, detail: print(f"{msg}: {detail}")
-        ... )
-    """
-    original_ext = Path(original_filename).suffix.lower()
-
-    try:
-        mime = magic.from_file(str(file_path), mime=True)
-        detected_ext = MIME_TO_EXTENSION.get(mime)
-
-        if detected_ext and detected_ext != original_ext:
-            # Check for cross-category conversion (e.g., image -> video)
-            if not allow_cross_category:
+            if detected_ext and detected_ext != original_ext:
+                # Check for cross-category conversion (e.g., image -> video)
                 original_is_image = original_ext in IMAGE_EXTENSIONS
                 original_is_video = original_ext in VIDEO_EXTENSIONS
                 original_is_audio = original_ext in AUDIO_EXTENSIONS
@@ -102,43 +242,46 @@ def detect_and_correct_extension(
 
                 if not same_category:
                     logger.debug(
-                        f"Skipping cross-category extension correction for {original_filename}: "
+                        f"Skipping cross-category extension correction for {file_path.name}: "
                         f"{original_ext} -> {detected_ext}"
                     )
-                    return original_ext
+                    continue
 
-            if log_callback:
-                log_callback(
-                    f"Extension corrected: {original_filename}",
-                    f"MIME: {mime}, {original_ext} -> {detected_ext}",
+                # Build new path with corrected extension
+                new_path = file_path.with_suffix(detected_ext)
+
+                # Handle collision if new path already exists
+                if new_path.exists() and new_path != file_path:
+                    counter = 1
+                    while new_path.exists():
+                        new_path = file_path.with_stem(
+                            f"{file_path.stem}_{counter}"
+                        ).with_suffix(detected_ext)
+                        counter += 1
+
+                # Rename the file
+                os.rename(file_path, new_path)
+                corrections[str(file_path)] = str(new_path)
+                corrected_count += 1
+
+                logger.info(
+                    f"Extension corrected: {file_path.name} -> {new_path.name} "
+                    f"(MIME: {mime})"
                 )
-            return detected_ext
-        elif detected_ext:
-            return original_ext  # Already correct
 
-    except Exception as e:
-        logger.debug(f"python-magic failed for {original_filename}: {e}")
+        except Exception as e:
+            logger.debug(f"python-magic failed for {file_path.name}: {e}")
 
-    return original_ext
+    if corrected_count > 0:
+        logger.info(f"Corrected {corrected_count} file extension(s)")
+
+    return corrections
 
 
 def get_mime_type(file_path: Path) -> Optional[str]:
-    """
-    Get the MIME type of a file using python-magic.
-
-    Args:
-        file_path: Path to the file to analyze
-
-    Returns:
-        MIME type string or None if detection fails
-
-    Example:
-        >>> mime = get_mime_type(Path("/tmp/photo.jpg"))
-        >>> print(mime)  # "image/jpeg"
-    """
+    """Get the MIME type of a file using python-magic."""
     try:
         return magic.from_file(str(file_path), mime=True)
     except Exception as e:
         logger.debug(f"Failed to get MIME type for {file_path}: {e}")
         return None
-

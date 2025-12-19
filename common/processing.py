@@ -4,10 +4,12 @@ Processing utility functions for media processors
 
 Provides shared processing functionality used across multiple processors:
 - Temporary directory management with automatic cleanup
+- Preprocessing cache for catalog phase
 - Batch parallel processing with progress bars
 - Standardized summary printing
 """
 
+import hashlib
 import multiprocessing
 import os
 import shutil
@@ -17,35 +19,71 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional
 
+from common.console import console
 from common.progress import PHASE_PROCESS, progress_bar
 from common.utils import should_cleanup_temp
+
+
+def get_preprocessing_cache_path(input_dir: Path, processor_name: str) -> Path:
+    """Get deterministic cache path for preprocessing a specific export."""
+    # Import here to avoid circular imports
+    from common.dedup_config import get_dedup_config
+
+    config = get_dedup_config()
+    cache_base = config.preprocessing_cache_dir.resolve()
+
+    # Create deterministic hash from input path.
+    #
+    # This is used only for generating stable cache directory names (not security).
+    # Bandit flags MD5 by default; usedforsecurity=False clarifies intent.
+    dir_hash = hashlib.md5(  # nosec B324
+        str(input_dir.resolve()).encode(),
+        usedforsecurity=False,
+    ).hexdigest()[:8]
+
+    # Sanitize processor name for filesystem
+    processor_slug = processor_name.lower().replace(" ", "_")
+
+    return cache_base / f"{input_dir.name}_{processor_slug}_{dir_hash}"
+
+
+def is_preprocessing_cache_valid(cache_path: Path) -> bool:
+    """Return True if cache has metadata.json and media/ directory."""
+    if not cache_path.exists():
+        return False
+
+    metadata_file = cache_path / "metadata.json"
+    media_dir = cache_path / "media"
+
+    return metadata_file.exists() and media_dir.exists()
+
+
+def cleanup_preprocessing_cache() -> None:
+    """Clean up preprocessing cache (respects CLEANUP_PREPROCESSING_CACHE env var)."""
+    from common.dedup_config import get_dedup_config
+
+    cleanup_enabled = os.environ.get("CLEANUP_PREPROCESSING_CACHE", "true").lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
+
+    if not cleanup_enabled:
+        return
+
+    config = get_dedup_config()
+    cache_dir = config.preprocessing_cache_dir.resolve()
+
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
 
 
 @contextmanager
 def temp_processing_directory(
     base_dir: str, prefix: str = "temp"
 ) -> Generator[Path, None, None]:
-    """
-    Context manager for temporary processing directories with automatic cleanup.
-
-    Creates a unique temporary directory for preprocessing operations and
-    automatically cleans it up when the context exits (unless cleanup is disabled
-    via DISABLE_TEMP_CLEANUP environment variable).
-
-    Args:
-        base_dir: Base directory path where temp directory will be created
-        prefix: Prefix for the temp directory name (default: "temp")
-
-    Yields:
-        Path to the created temporary directory
-
-    Example:
-        >>> with temp_processing_directory("../pre", "google_photos") as temp_dir:
-        ...     # Process files in temp_dir
-        ...     preprocessor.output_dir = temp_dir
-        ...     preprocessor.process()
-        ... # temp_dir is automatically cleaned up here
-    """
+    """Context manager for temp directory with automatic cleanup."""
     temp_base = Path(base_dir).resolve()
     temp_base.mkdir(parents=True, exist_ok=True)
 
@@ -73,34 +111,7 @@ def process_batches_parallel(
     phase: str = PHASE_PROCESS,
     description: str = "Processing",
 ) -> List[Any]:
-    """
-    Process tasks in batches using multiprocessing pool with progress bar.
-
-    Groups tasks into batches and processes them in parallel using a
-    multiprocessing pool, displaying a progress bar during execution.
-
-    Args:
-        tasks: List of task items to process
-        worker_fn: Worker function that processes a batch of tasks
-                   Signature: (batch: List[Any]) -> List[Any]
-        num_workers: Number of parallel worker processes
-        batch_size: Number of tasks per batch (default: 100)
-        phase: Progress bar phase identifier (default: PHASE_PROCESS)
-        description: Description shown in progress bar (default: "Processing")
-
-    Returns:
-        Flattened list of results from all batches
-
-    Example:
-        >>> def process_batch(batch):
-        ...     return [(True, item) for item in batch]
-        >>> results = process_batches_parallel(
-        ...     tasks=file_list,
-        ...     worker_fn=process_batch,
-        ...     num_workers=4,
-        ...     description="Creating files"
-        ... )
-    """
+    """Process tasks in batches using multiprocessing pool with progress bar."""
     if not tasks:
         return []
 
@@ -135,47 +146,58 @@ def print_processing_summary(
     output_dir: str,
     extra_stats: Optional[Dict[str, int]] = None,
 ) -> None:
-    """
-    Print standardized processing completion summary.
+    """Print formatted processing summary with success/failure counts."""
+    from rich.panel import Panel
+    from rich.text import Text
 
-    Displays a formatted summary of processing results including success/failure
-    counts and output location.
+    # Build content with styled lines
+    content = Text()
 
-    Args:
-        success: Number of successfully processed items
-        failed: Number of failed items
-        total: Total number of items processed
-        output_dir: Path to output directory (will be converted to absolute path)
-        extra_stats: Optional dict of additional statistics to display
-                     Keys are labels, values are counts
+    # Success line (always green)
+    content.append("Successfully processed: ", style="dim")
+    content.append(f"{success}\n", style="green bold")
 
-    Example:
-        >>> print_processing_summary(
-        ...     success=95,
-        ...     failed=5,
-        ...     total=100,
-        ...     output_dir="./output",
-        ...     extra_stats={"EXIF structures rebuilt": 3, "Skipped": 2}
-        ... )
-        ==================================================
-        Processing complete!
-          Successfully processed: 95
-          Failed: 5
-          EXIF structures rebuilt: 3
-          Skipped: 2
-          Total: 100
+    # Failed line (red if any, dim otherwise)
+    content.append("Failed: ", style="dim")
+    if failed > 0:
+        content.append(f"{failed}\n", style="red bold")
+    else:
+        content.append(f"{failed}\n", style="dim")
 
-        Final files saved to: /absolute/path/to/output
-    """
-    print("\n" + "=" * 50)
-    print("Processing complete!")
-    print(f"  Successfully processed: {success}")
-    print(f"  Failed: {failed}")
-
+    # Extra stats
     if extra_stats:
         for label, count in extra_stats.items():
-            print(f"  {label}: {count}")
+            content.append(f"{label}: ", style="dim")
+            content.append(f"{count}\n", style="cyan")
 
-    print(f"  Total: {total}")
-    print(f"\nFinal files saved to: {os.path.abspath(output_dir)}")
+    # Total line
+    content.append("Total: ", style="dim")
+    content.append(f"{total}", style="bold")
 
+    # Determine border style based on failures
+    border_style = "red" if failed > 0 else "green"
+
+    console.print()
+    console.print(
+        Panel(content, title="Processing Complete", border_style=border_style)
+    )
+    console.print(f"[bold]Output:[/bold] {os.path.abspath(output_dir)}")
+
+
+def print_preprocessing_stats(
+    title: str,
+    stats: Dict[str, int],
+    show_zero: bool = False,
+) -> None:
+    """Print preprocessing statistics as a compact Rich table."""
+    from rich.table import Table
+
+    table = Table(title=title, show_header=False, box=None, padding=(0, 1))
+    table.add_column("Stat", style="dim")
+    table.add_column("Value", justify="right", style="cyan")
+
+    for label, value in stats.items():
+        if show_zero or value != 0:
+            table.add_row(label, str(value))
+
+    console.print(table)

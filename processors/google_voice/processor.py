@@ -4,6 +4,7 @@ Google Voice Messages Media Processor
 This processor is designed to be used through memoria.py.
 It handles renaming Google Voice message media files, embedding metadata, and updating filesystem timestamps.
 """
+
 import json
 import logging
 import multiprocessing
@@ -13,13 +14,20 @@ import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+from common.catalog import catalog_media_files
+from common.dedup_service import is_file_primary_by_hash
+from common.file_utils import batch_correct_extensions
+from common.perceptual_hash import compute_content_hash
+from common.processing import print_processing_summary
 from common.progress import PHASE_PROCESS, progress_bar
 from processors.google_voice.preprocess import GoogleVoicePreprocessor
 from processors.base import ProcessorBase
 from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.utils import (
+    ALL_MEDIA_EXTENSIONS,
+    FilenameGenerator,
     is_preprocessed_directory,
     sanitize_filename,
     should_cleanup_temp,
@@ -29,7 +37,10 @@ from common.exiftool_batch import (
     batch_validate_exif,
     batch_rebuild_exif,
     batch_read_existing_metadata,
-    batch_write_metadata_google_voice,
+    batch_write_metadata_requests,
+    DescriptionWriteSpec,
+    MetadataWriteRequest,
+    PREAMBLE_WITH_IGNORE_ERRORS,
 )
 
 # Set up logging
@@ -101,12 +112,61 @@ class GoogleVoiceProcessor(ProcessorBase):
         return 50  # Medium priority
 
     @staticmethod
-    def process(input_dir: str, output_dir: Optional[str] = None, **kwargs) -> bool:
+    def supports_dedup() -> bool:
+        """Return True - Google Voice supports cross-processor deduplication."""
+        return True
+
+    @staticmethod
+    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
+        """Build catalog of files with hashes and metadata.
+
+        Scans all media files in the Google Voice export, computes hashes,
+        and returns a catalog structure without copying any files.
+
+        Args:
+            input_dir: Path to input directory
+            **kwargs: Additional arguments (verbose, workers)
+
+        Returns:
+            Catalog dictionary with processor name and file entries.
+        """
+        input_path = Path(input_dir)
+        workers = kwargs.get("workers", 4)
+
+        # Find media in Google Voice structure
+        voice_dir = input_path / "Voice" / "Calls"
+        if not voice_dir.exists():
+            return {
+                "processor": "Google Voice",
+                "input_dir": str(input_path),
+                "files": [],
+            }
+
+        media_files = []
+        for file_path in voice_dir.rglob("*"):
+            if file_path.is_file() and file_path.suffix.lower() in ALL_MEDIA_EXTENSIONS:
+                media_files.append(file_path)
+
+        return catalog_media_files(
+            processor_name="Google Voice",
+            input_path=input_path,
+            media_files=media_files,
+            workers=workers,
+        )
+
+    @staticmethod
+    def process(
+        input_dir: str,
+        output_dir: Optional[str] = None,
+        dedup_manifest: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> bool:
         """Process Google Voice export
 
         Args:
             input_dir: Path to input directory
             output_dir: Optional base output directory
+            dedup_manifest: Optional deduplication manifest
             **kwargs: Additional arguments (verbose, workers, temp_dir)
 
         Returns:
@@ -131,6 +191,7 @@ class GoogleVoiceProcessor(ProcessorBase):
                 temp_dir=kwargs.get("temp_dir", "../pre"),
                 verbose=kwargs.get("verbose", False),
                 workers=kwargs.get("workers"),
+                dedup_manifest=dedup_manifest,
             )
             return True
 
@@ -156,71 +217,74 @@ def get_processor():
 # ============================================================================
 
 
-def generate_unique_filename(
-    message_data, conversation_name, export_username, extension, used_filenames
-):
-    """Generate a unique filename for a processed media file
-
-    Format: gvoice-{exportUsername}-{conversationName}-YYYYMMDD.extension
-    Or if duplicate: gvoice-{exportUsername}-{conversationName}-YYYYMMDD_N.extension
+def _build_metadata_requests(
+    file_info: List[Tuple[str, dict, str, str]],
+) -> List[MetadataWriteRequest]:
+    """Build MetadataWriteRequest objects for Google Voice files.
 
     Args:
-        message_data: Dict containing message metadata
-        conversation_name: Name of the conversation (original with spaces)
-        export_username: Username extracted from metadata
-        extension: File extension (including the dot)
-        used_filenames: Set of already used filenames to check for duplicates
+        file_info: List of (file_path, message_data, conversation_name, export_username) tuples
 
     Returns:
-        str: Generated unique filename
+        List of MetadataWriteRequest objects
     """
-    # Sanitize conversation name for use in filename
-    sanitized_name = sanitize_filename(conversation_name)
+    requests: List[MetadataWriteRequest] = []
 
-    # Parse date from message_data
-    # Format: "2016-08-23 16:27:32"
-    date_str = message_data["timestamp"]
+    for file_path, message_data, conversation_name, export_username in file_info:
+        # Build datetime tags
+        datetime_tags: List[Tuple[str, str]] = []
+        timestamp_str = message_data.get("timestamp")
+        if timestamp_str:
+            date_obj = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            exif_date = date_obj.strftime("%Y:%m:%d %H:%M:%S")
+            datetime_tags = [
+                ("DateTimeOriginal", exif_date),
+                ("CreateDate", exif_date),
+                ("ModifyDate", exif_date),
+            ]
 
-    # Handle None timestamp
-    if date_str is None:
-        # Use a fallback date for messages without timestamps
-        date_key = "00000000"
-    else:
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
-        date_key = date_obj.strftime("%Y%m%d")
+        # Build description
+        other_party = conversation_name.replace("Group: ", "")
+        default_description = (
+            f'Source: Google Voice/{export_username}&#xa;Conversation: "{other_party}"'
+        )
 
-    # First try without sequence number
-    base_filename = f"gvoice-{export_username}-{sanitized_name}-{date_key}{extension}"
+        requests.append(
+            MetadataWriteRequest(
+                file_path=file_path,
+                arg_preamble=PREAMBLE_WITH_IGNORE_ERRORS,
+                datetime_tags=datetime_tags,
+                gps=None,
+                description=DescriptionWriteSpec(
+                    default_description=default_description,
+                ),
+                processor_name="google_voice",
+            )
+        )
 
-    # If not used, return it
-    if base_filename not in used_filenames:
-        used_filenames.add(base_filename)
-        return base_filename
-
-    # Otherwise, add sequence number until we find an unused name
-    sequence = 1
-    while True:
-        filename = f"gvoice-{export_username}-{sanitized_name}-{date_key}_{sequence}{extension}"
-        if filename not in used_filenames:
-            used_filenames.add(filename)
-            return filename
-        sequence += 1
+    return requests
 
 
 def process_media_batch(batch_args):
     """Process a batch of media files (worker function for multiprocessing)
-    
+
+    Copies files, corrects extensions, and updates timestamps.
+    EXIF validation/rebuild and metadata writing happen in the main process.
+
     Args:
-        batch_args: List of tuples, each containing (media_file, message_data, 
+        batch_args: List of tuples, each containing (media_file, message_data,
                     conversation_name, output_filename, media_dir, output_dir, export_username)
-    
+
     Returns:
-        List of (success, failed, exif_rebuilt) tuples
+        List of (success, output_path, file_info_tuple) tuples where file_info_tuple is
+        (output_path, message_data, conversation_name, export_username) or None on failure
     """
+    results = []
+
     # Phase 1: Copy all files
     file_paths = []
     file_info = []
-    
+
     for args_tuple in batch_args:
         (
             media_file,
@@ -231,44 +295,48 @@ def process_media_batch(batch_args):
             output_dir,
             export_username,
         ) = args_tuple
-        
+
         media_path = os.path.join(media_dir, media_file)
         output_path = os.path.join(output_dir, output_filename)
-        
+
         if not os.path.exists(media_path):
             logger.warning(f"Media file not found: {media_path}")
+            results.append((False, None, None))
             continue
-        
+
         try:
             shutil.copy2(media_path, output_path)
             file_paths.append(output_path)
-            file_info.append((output_path, message_data, conversation_name, export_username))
+            file_info.append(
+                (output_path, message_data, conversation_name, export_username)
+            )
         except Exception as e:
             logger.error(f"Failed to copy {media_file}: {e}")
-    
+            results.append((False, None, None))
+
     if not file_paths:
-        return [(False, True, False)] * len(batch_args)
-    
-    # Phase 2: Batch validate and rebuild
-    corrupted_files = batch_validate_exif(file_paths)
-    if corrupted_files:
-        batch_rebuild_exif(list(corrupted_files))
-    
-    # Phase 3: Batch read metadata, then batch write
-    existing_metadata_map = batch_read_existing_metadata(file_paths)
-    batch_write_metadata_google_voice(file_info, existing_metadata_map)
-    
-    # Phase 4: Update timestamps and compile results
-    results = []
-    for output_path, message_data, _, _ in file_info:
+        return results if results else [(False, None, None)] * len(batch_args)
+
+    # Phase 2: Correct file extensions based on actual content
+    corrections = batch_correct_extensions([Path(p) for p in file_paths])
+    if corrections:
+        # Update file_paths and file_info with corrected paths
+        file_paths = [corrections.get(p, p) for p in file_paths]
+        file_info = [
+            (corrections.get(fp, fp), md, cn, eu) for fp, md, cn, eu in file_info
+        ]
+
+    # Phase 3: Update timestamps and compile results
+    for output_path, message_data, conversation_name, export_username in file_info:
         update_file_timestamps(output_path, message_data.get("timestamp"))
-        exif_rebuilt = output_path in corrupted_files
-        results.append((True, False, exif_rebuilt))
-    
-    # Add failed results for files that didn't get copied
-    while len(results) < len(batch_args):
-        results.append((False, True, False))
-    
+        results.append(
+            (
+                True,
+                output_path,
+                (output_path, message_data, conversation_name, export_username),
+            )
+        )
+
     return results
 
 
@@ -278,6 +346,7 @@ def process_logic(
     temp_dir="../pre",
     verbose=False,
     workers=None,
+    dedup_manifest: Optional[Dict[str, Any]] = None,
 ):
     """Core processing logic for Google Voice exports
 
@@ -287,6 +356,7 @@ def process_logic(
         temp_dir: Directory for temporary preprocessing files
         verbose: Enable verbose logging
         workers: Number of parallel workers (None = auto-detect)
+        dedup_manifest: Optional deduplication manifest for filtering secondary files
     """
     # Logging is configured by the main process
     # Verbose mode enables detailed logging to file
@@ -383,27 +453,40 @@ def process_logic(
 
         # Pre-generate all output filenames to avoid race conditions
         logger.debug("Pre-generating filenames...")
-        used_filenames = set()
+        filename_gen = FilenameGenerator("gvoice")
         processing_tasks = []
 
+        skipped_dedup = 0
         for conversation in conversations:
             conversation_name = conversation.get("conversation_name", "unknown")
+            sanitized_name = sanitize_filename(conversation_name)
             messages = conversation.get("messages", [])
 
             for message in messages:
                 media_files = message.get("media_files", [])
 
                 for media_file in media_files:
+                    # Build full path for dedup check
+                    full_path = os.path.join(media_dir, media_file)
+
+                    # Skip secondary files based on dedup manifest (using hash-based lookup)
+                    if dedup_manifest:
+                        content_hash = compute_content_hash(full_path)
+                        if not is_file_primary_by_hash(
+                            dedup_manifest, content_hash, "Google Voice"
+                        ):
+                            skipped_dedup += 1
+                            continue
+
                     # Get file extension
                     file_ext = os.path.splitext(media_file)[1].lower()
 
-                    # Generate output filename
-                    output_filename = generate_unique_filename(
-                        message,
-                        conversation_name,
-                        export_username,
+                    # Generate output filename using shared FilenameGenerator
+                    identifier = f"{export_username}-{sanitized_name}"
+                    output_filename = filename_gen.generate(
+                        message.get("timestamp"),
+                        identifier,
                         file_ext,
-                        used_filenames,
                     )
 
                     # Create task tuple for worker
@@ -419,53 +502,75 @@ def process_logic(
                         )
                     )
 
-        # Process media files in parallel
-        print(f"\nProcessing media files to {output_dir}/")
-        logger.info("=" * 50)
+        if skipped_dedup > 0:
+            logger.info(f"Skipped {skipped_dedup} secondary files (dedup)")
 
-        success_count = 0
-        failed_count = 0
-        exif_rebuilt_count = 0
+        # Process media files in parallel
+        logger.info("Processing media files to %s/", output_dir)
+        logger.info("%s", "=" * 50)
 
         # Group tasks into batches of 100 files each
         batch_size = 100
         batched_tasks = []
         for i in range(0, len(processing_tasks), batch_size):
-            batched_tasks.append(processing_tasks[i:i + batch_size])
+            batched_tasks.append(processing_tasks[i : i + batch_size])
 
-        # Process batches in parallel
+        # Process batches in parallel (copy files only)
         with multiprocessing.Pool(processes=num_workers) as pool:
             batch_results = list(
                 progress_bar(
                     pool.imap(process_media_batch, batched_tasks),
                     PHASE_PROCESS,
-                    "Creating files",
+                    "Copying files",
                     total=len(batched_tasks),
                 )
             )
 
-        # Flatten results
-        results = []
+        # Flatten results and collect successful files for EXIF processing
+        success_count = 0
+        failed_count = 0
+        file_paths = []
+        file_info = []
+
         for batch_result in batch_results:
-            results.extend(batch_result)
+            for success, output_path, info_tuple in batch_result:
+                if success and output_path:
+                    success_count += 1
+                    file_paths.append(output_path)
+                    file_info.append(info_tuple)
+                else:
+                    failed_count += 1
 
-        # Aggregate results
-        for success, failed, exif_rebuilt in results:
-            if success:
-                success_count += 1
-            if failed:
-                failed_count += 1
-            if exif_rebuilt:
-                exif_rebuilt_count += 1
+        logger.info(f"Copied {success_count} files ({failed_count} failed)")
 
-        # Summary
-        print("\n" + "=" * 50)
-        print("Processing complete!")
-        print(f"  Successfully processed: {success_count}")
-        print(f"  Failed: {failed_count}")
-        print(f"  EXIF structures rebuilt: {exif_rebuilt_count}")
-        print(f"  Total: {len(processing_tasks)}")
-        print(f"\nFinal files saved to: {os.path.abspath(output_dir)}")
+        # Consolidated EXIF processing
+        exif_rebuilt_count = 0
+        if file_paths:
+            logger.info("Batch processing EXIF metadata...")
+
+            # Validate and rebuild corrupted EXIF
+            corrupted_files = batch_validate_exif(file_paths)
+            if corrupted_files:
+                logger.info(
+                    f"Rebuilding {len(corrupted_files)} corrupted EXIF structures..."
+                )
+                batch_rebuild_exif(list(corrupted_files))
+                exif_rebuilt_count = len(corrupted_files)
+
+            # Batch read and write metadata
+            existing_metadata_map = batch_read_existing_metadata(file_paths)
+            requests = _build_metadata_requests(file_info)
+            batch_write_metadata_requests(requests, existing_metadata_map)
+            logger.info(f"EXIF metadata written for {len(file_info)} files")
+
+        # Print summary using shared utility
+        print_processing_summary(
+            success=success_count,
+            failed=failed_count,
+            total=len(processing_tasks),
+            output_dir=output_dir,
+            extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
+        )
 
     finally:
         # Clean up temp directory if it was created
@@ -474,4 +579,6 @@ def process_logic(
                 logger.debug(f"Cleaning up temporary directory: {temp_dir_created}")
                 shutil.rmtree(temp_dir_created)
             else:
-                logger.info(f"Temp cleanup disabled. Temporary directory preserved at: {temp_dir_created}")
+                logger.info(
+                    f"Temp cleanup disabled. Temporary directory preserved at: {temp_dir_created}"
+                )

@@ -14,19 +14,18 @@ import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
-import sys
 import argparse
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
-import multiprocessing
 from common.filter_banned_files import BannedFilesFilter
+from common.utils import default_worker_count
+from common.processing import print_preprocessing_stats
 from common.progress import PHASE_PREPROCESS, futures_progress
 from common.failure_tracker import FailureTracker
 
 # Set up logging
 logger = logging.getLogger(__name__)
-
 
 
 class InstagramPreprocessor:
@@ -76,7 +75,9 @@ class InstagramPreprocessor:
         self.log_file = output_base / "preprocessing.log"
 
         # Final output directory for processor (for failure tracking)
-        self.final_output_dir = Path(final_output_dir) if final_output_dir else output_base
+        self.final_output_dir = (
+            Path(final_output_dir) if final_output_dir else output_base
+        )
 
         # Initialize banned files filter
         self.banned_filter = BannedFilesFilter()
@@ -88,12 +89,8 @@ class InstagramPreprocessor:
         )
 
         # Threading configuration
-        if workers is None:
-            # Default to CPU count - 1, minimum 1
-            self.workers = max(1, multiprocessing.cpu_count() - 1)
-        else:
-            self.workers = max(1, workers)
-        
+        self.workers = workers if workers is not None else default_worker_count()
+
         # Thread-safe locks for shared data structures
         self.stats_lock = Lock()
         self.log_lock = Lock()
@@ -140,32 +137,32 @@ class InstagramPreprocessor:
 
                 f.write(f"\nTotal logged issues: {len(self.log_entries)}\n")
 
-            print(f"SUCCESS: Saved preprocessing log to {self.log_file}")
+            logger.info("Saved preprocessing log to %s", self.log_file)
         except Exception as e:
-            print(f"WARNING: Failed to save log file: {e}")
+            logger.warning("Failed to save log file: %s", e)
 
     def validate_export(self) -> bool:
         """Validate that export directory has required structure"""
         if not self.export_path.exists():
-            print(f"ERROR: Export path does not exist: {self.export_path}")
+            logger.error("Export path does not exist: %s", self.export_path)
             return False
 
         if not self.media_source_dir.exists():
-            print(f"ERROR: media directory not found: {self.media_source_dir}")
+            logger.error("media directory not found: %s", self.media_source_dir)
             return False
 
         if not self.html_dir.exists():
             new_path = self.export_path / "your_instagram_activity" / "media"
             legacy_path = self.export_path / "content"
-            print("ERROR: HTML metadata directory not found.")
-            print(f"  Checked: {new_path}")
-            print(f"  Checked: {legacy_path}")
+            logger.error("HTML metadata directory not found.")
+            logger.error("  Checked: %s", new_path)
+            logger.error("  Checked: %s", legacy_path)
             return False
 
         # Check if at least one HTML file exists
         html_files = list(self.html_dir.glob("*.html"))
         if not html_files:
-            print(f"ERROR: No HTML files found in {self.html_dir}")
+            logger.error("No HTML files found in %s", self.html_dir)
             return False
 
         return True
@@ -180,17 +177,17 @@ class InstagramPreprocessor:
         """
         # Try both timestamp formats (new format first, then legacy with comma)
         formats = [
-            "%b %d, %Y %I:%M %p",   # New format: "Oct 02, 2022 5:58 pm"
+            "%b %d, %Y %I:%M %p",  # New format: "Oct 02, 2022 5:58 pm"
             "%b %d, %Y, %I:%M %p",  # Legacy format: "Oct 02, 2022, 5:58 PM"
         ]
-        
+
         for fmt in formats:
             try:
                 dt = datetime.strptime(timestamp_str, fmt)
                 return dt.strftime("%Y-%m-%d %H:%M:%S")
             except ValueError:
                 continue
-        
+
         # If all formats fail, log the error
         self.log_message(
             "TIMESTAMP_PARSE_ERROR",
@@ -323,7 +320,9 @@ class InstagramPreprocessor:
                 "div", class_="pam _3-95 _2ph- _a6-g uiBoxWhite noborder"
             )
 
-            print(f"   Found {len(post_containers)} posts in {html_path.name}")
+            logger.debug(
+                "   Found %d posts in %s", len(post_containers), html_path.name
+            )
 
             for idx, container in enumerate(post_containers):
                 post_data = {"media_type": media_type}
@@ -332,7 +331,9 @@ class InstagramPreprocessor:
                 # New format uses <h2>, legacy format uses <div> with same class
                 caption_elem = container.find("h2", class_="_3-95 _2pim _a6-h _a6-i")
                 if not caption_elem:
-                    caption_elem = container.find("div", class_="_3-95 _2pim _a6-h _a6-i")
+                    caption_elem = container.find(
+                        "div", class_="_3-95 _2pim _a6-h _a6-i"
+                    )
                 post_data["caption"] = (
                     caption_elem.get_text(strip=True) if caption_elem else ""
                 )
@@ -362,10 +363,16 @@ class InstagramPreprocessor:
                     post_data["additional_metadata"] = additional
 
                 # Log constructed metadata
-                logger.debug(f"Constructed metadata for post {idx + 1} in {html_path.name}:")
+                logger.debug(
+                    f"Constructed metadata for post {idx + 1} in {html_path.name}:"
+                )
                 logger.debug(f"  Media type: {post_data['media_type']}")
-                logger.debug(f"  Timestamp: {post_data['timestamp']} (raw: {post_data['timestamp_raw']})")
-                logger.debug(f"  Caption: {post_data['caption'][:100] if post_data['caption'] else '(none)'}...")
+                logger.debug(
+                    f"  Timestamp: {post_data['timestamp']} (raw: {post_data['timestamp_raw']})"
+                )
+                logger.debug(
+                    f"  Caption: {post_data['caption'][:100] if post_data['caption'] else '(none)'}..."
+                )
                 logger.debug(f"  GPS: lat={latitude}, lon={longitude}")
                 logger.debug(f"  Media files: {len(media_paths)} file(s)")
                 for media_path in media_paths:
@@ -381,7 +388,7 @@ class InstagramPreprocessor:
                 f"Failed to parse {html_path.name}",
                 str(e),
             )
-            print(f"ERROR: Failed to parse {html_path.name}: {e}")
+            logger.error("Failed to parse %s: %s", html_path.name, e)
 
         return posts
 
@@ -395,7 +402,7 @@ class InstagramPreprocessor:
         if not self.media_source_dir.exists():
             return catalog
 
-        print("\nScanning media directories...")
+        logger.info("Scanning media directories...")
 
         # Recursively find all media files
         for file_path in self.media_source_dir.rglob("*"):
@@ -432,7 +439,7 @@ class InstagramPreprocessor:
         # Create output media directory
         self.media_output_dir.mkdir(parents=True, exist_ok=True)
 
-        print("\nCopying media files...")
+        logger.info("Copying media files...")
 
         matched_files = set()
 
@@ -459,7 +466,7 @@ class InstagramPreprocessor:
                             f"Failed to copy {filename}",
                             str(e),
                         )
-                        print(f"ERROR: Failed to copy {filename}: {e}")
+                        logger.error("Failed to copy %s: %s", filename, e)
                 else:
                     self.log_message(
                         "MISSING_FILE",
@@ -467,7 +474,7 @@ class InstagramPreprocessor:
                         f"from path: {media_path}",
                     )
                     self.stats["missing_files"] += 1
-                    
+
                     # Track orphaned metadata
                     self.failure_tracker.add_orphaned_metadata(
                         metadata_entry={
@@ -505,17 +512,19 @@ class InstagramPreprocessor:
                 f"File in filesystem not referenced in any HTML: {filename}",
             )
 
-        logger.info(f"   Copied {self.stats['media_copied']} files")
-        print(f"   Missing files: {self.stats['missing_files']}")
-        print(f"   Orphaned files: {self.stats['orphaned_files']}")
+        logger.info("   Copied %d files", self.stats["media_copied"])
+        logger.info("   Missing files: %d", self.stats["missing_files"])
+        logger.info("   Orphaned files: %d", self.stats["orphaned_files"])
 
-    def _process_single_html_file(self, html_tuple: Tuple[str, str]) -> Tuple[str, List[Dict]]:
+    def _process_single_html_file(
+        self, html_tuple: Tuple[str, str]
+    ) -> Tuple[str, List[Dict]]:
         """
         Process a single HTML file (used by multithreaded processing)
-        
+
         Args:
             html_tuple: Tuple of (html_basename, media_type)
-            
+
         Returns:
             Tuple of (media_type, list of posts)
         """
@@ -547,7 +556,7 @@ class InstagramPreprocessor:
         """
         all_posts = []
 
-        print(f"\nProcessing HTML files (using {self.workers} workers)...")
+        logger.info("Processing HTML files (using %d workers)...", self.workers)
 
         html_files = list(self.MEDIA_TYPES.items())
 
@@ -555,17 +564,23 @@ class InstagramPreprocessor:
         with ThreadPoolExecutor(max_workers=self.workers) as executor:
             # Submit all HTML file processing tasks
             future_to_html = {
-                executor.submit(self._process_single_html_file, html_tuple): html_tuple[0]
+                executor.submit(self._process_single_html_file, html_tuple): html_tuple[
+                    0
+                ]
                 for html_tuple in html_files
             }
-            
+
             # Collect results as they complete
-            for future in futures_progress(future_to_html, PHASE_PREPROCESS, "Parsing HTML files", unit="file"):
+            for future in futures_progress(
+                future_to_html, PHASE_PREPROCESS, "Parsing HTML files", unit="file"
+            ):
                 html_basename = future_to_html[future]
                 try:
                     media_type, posts = future.result()
                     if posts:
-                        print(f"   Processed {html_basename}.html: {len(posts)} posts")
+                        logger.debug(
+                            "   Processed %s.html: %d posts", html_basename, len(posts)
+                        )
                         all_posts.extend(posts)
                 except Exception as e:
                     self.log_message(
@@ -598,39 +613,39 @@ class InstagramPreprocessor:
             with open(self.metadata_file, "w", encoding="utf-8") as f:
                 json.dump(output, f, indent=2, ensure_ascii=False)
 
-            print(f"\nSUCCESS: Saved metadata to {self.metadata_file}")
+            logger.info("Saved metadata to %s", self.metadata_file)
         except Exception as e:
             logger.error(f"Failed to save metadata: {e}")
-            sys.exit(1)
+            raise RuntimeError(f"Failed to save metadata: {e}")
 
     def print_statistics(self) -> None:
-        """Print processing statistics"""
-        print("\n" + "=" * 70)
-        print("PREPROCESSING STATISTICS")
-        print("=" * 70)
-        print(f"Total posts processed:      {self.stats['total_posts']:>6}")
-        print(f"Total media files found:    {self.stats['total_media_files']:>6}")
-        print(f"Media files copied:         {self.stats['media_copied']:>6}")
-        print(f"Banned files skipped:       {self.stats['banned_files_skipped']:>6}")
-        print(f"Missing files:              {self.stats['missing_files']:>6}")
-        print(f"Orphaned files:             {self.stats['orphaned_files']:>6}")
-        print()
-        print("By Media Type:")
+        """Print processing statistics as a compact table."""
+        stats = {
+            "Posts processed": self.stats["total_posts"],
+            "Media files found": self.stats["total_media_files"],
+            "Files copied": self.stats["media_copied"],
+            "Banned skipped": self.stats["banned_files_skipped"],
+            "Missing files": self.stats["missing_files"],
+            "Orphaned files": self.stats["orphaned_files"],
+        }
+        # Add media type breakdown
         for media_type, type_stats in self.stats["by_type"].items():
-            print(
-                f"  {media_type:20} {type_stats['posts']:>4} posts, {type_stats['media_files']:>4} files"
-            )
-        print("=" * 70)
+            stats[f"{media_type}"] = type_stats["media_files"]
+        print_preprocessing_stats("Preprocessing Stats", stats)
 
-    def process(self) -> None:
-        """Main processing pipeline"""
+    def process(self) -> bool:
+        """Main processing pipeline
+
+        Returns:
+            True if preprocessing succeeded, False otherwise
+        """
         logger.info("Starting Instagram Export Preprocessing")
-        print(f"Export path: {self.export_path}")
-        print(f"Output path: {self.output_dir}\n")
+        logger.info("Export path: %s", self.export_path)
+        logger.info("Output path: %s", self.output_dir)
 
         # Validate export structure
         if not self.validate_export():
-            sys.exit(1)
+            return False
 
         # Build file catalog
         file_catalog = self.build_file_catalog()
@@ -654,6 +669,7 @@ class InstagramPreprocessor:
         self.print_statistics()
 
         logger.info("Preprocessing complete!")
+        return True
 
 
 def main():

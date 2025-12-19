@@ -19,13 +19,12 @@ import sys
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
-import multiprocessing
-import xxhash
 
 from common.progress import PHASE_PREPROCESS, futures_progress
+from common.processing import print_preprocessing_stats
+from common.perceptual_hash import compute_content_hash
 
-from common.file_utils import detect_and_correct_extension
-from common.utils import ALL_MEDIA_EXTENSIONS
+from common.utils import ALL_MEDIA_EXTENSIONS, default_worker_count
 from common.filter_banned_files import BannedFilesFilter
 from common.failure_tracker import FailureTracker
 
@@ -59,7 +58,9 @@ class GooglePhotosPreprocessor:
         self.log_file = output_base / "preprocessing.log"
 
         # Final output directory for processor (for failure tracking)
-        self.final_output_dir = Path(final_output_dir) if final_output_dir else output_base
+        self.final_output_dir = (
+            Path(final_output_dir) if final_output_dir else output_base
+        )
 
         # Initialize banned files filter
         self.banned_filter = BannedFilesFilter()
@@ -71,12 +72,8 @@ class GooglePhotosPreprocessor:
         )
 
         # Threading configuration
-        if workers is None:
-            # Default to CPU count - 1, minimum 1
-            self.workers = max(1, multiprocessing.cpu_count() - 1)
-        else:
-            self.workers = max(1, workers)
-        
+        self.workers = workers if workers is not None else default_worker_count()
+
         # Thread-safe locks for shared data structures
         self.stats_lock = Lock()
         self.log_lock = Lock()
@@ -91,7 +88,6 @@ class GooglePhotosPreprocessor:
             "matched_files": 0,
             "unmatched_files": 0,
             "fuzzy_matches": 0,
-            "extensions_corrected": 0,
             "duplicate_files": 0,
             "deduplicated_files": 0,
             "skipped_banned": 0,
@@ -103,7 +99,7 @@ class GooglePhotosPreprocessor:
         # Track copied files to avoid duplicates
         self.copied_files = {}  # maps (size, hash) -> destination_filename
         self.destination_files = {}  # maps destination_filename -> source_path
-        
+
         # Track file hashes for deduplication across albums
         # Maps hash -> {"filename": str, "albums": [str], "metadata": Dict}
         self.file_hashes = {}
@@ -147,24 +143,24 @@ class GooglePhotosPreprocessor:
 
                 f.write(f"\nTotal logged issues: {len(self.log_entries)}\n")
 
-            print(f"SUCCESS: Saved preprocessing log to {self.log_file}")
+            logger.info("Saved preprocessing log to %s", self.log_file)
         except Exception as e:
-            print(f"WARNING: Failed to save log file: {e}")
+            logger.warning("Failed to save log file: %s", e)
 
     def validate_export(self) -> bool:
         """Validate that export directory has required structure"""
         if not self.export_path.exists():
-            print(f"ERROR: Export path does not exist: {self.export_path}")
+            logger.error("Export path does not exist: %s", self.export_path)
             return False
 
         if not self.photos_dir.exists():
-            print(f"ERROR: Google Photos directory not found: {self.photos_dir}")
+            logger.error("Google Photos directory not found: %s", self.photos_dir)
             return False
 
         # Check if at least one album folder exists
         album_folders = [d for d in self.photos_dir.iterdir() if d.is_dir()]
         if not album_folders:
-            print(f"ERROR: No album folders found in {self.photos_dir}")
+            logger.error("No album folders found in %s", self.photos_dir)
             return False
 
         return True
@@ -196,6 +192,7 @@ class GooglePhotosPreprocessor:
 
         try:
             import os
+
             with os.scandir(self.photos_dir) as entries:
                 for entry in sorted(entries, key=lambda e: e.name):
                     if not entry.is_dir():
@@ -255,6 +252,7 @@ class GooglePhotosPreprocessor:
 
         try:
             import os
+
             with os.scandir(album_folder) as entries:
                 for entry in entries:
                     if not entry.is_file():
@@ -758,75 +756,30 @@ class GooglePhotosPreprocessor:
     def _compute_file_hash(self, file_path: Path) -> str:
         """
         Compute xxHash64 of file for deduplication (fast, non-cryptographic)
-        
+
         Args:
             file_path: Path to file to hash
-            
+
         Returns:
             str: Hexadecimal hash digest
         """
-        hasher = xxhash.xxh64()
-        with open(file_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(65536), b''):  # 64KB chunks
-                hasher.update(chunk)
-        return hasher.hexdigest()
+        return compute_content_hash(file_path)
 
-    def copy_media_file(self, source_path: Path, filename: str, album_name: str) -> Optional[str]:
+    def copy_media_file(
+        self, source_path: Path, filename: str, album_name: str
+    ) -> Optional[str]:
         """
         Copy media file to output directory with hash-based deduplication
         Returns destination filename or None
-        
+
         Args:
             source_path: Path to source media file
             filename: Original filename
             album_name: Name of album this file belongs to
-            
+
         Returns:
             Destination filename if successful, None otherwise
         """
-        # Define image and video extension categories
-        image_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic"}
-        video_extensions = {".mov", ".mp4", ".avi", ".webm", ".mkv"}
-
-        # Detect and correct extension if needed using shared utility
-        correct_ext = detect_and_correct_extension(
-            source_path,
-            filename,
-            log_callback=lambda msg, details: self.log_message("EXTENSION_CORRECTED", msg, details),
-        )
-        original_ext = Path(filename).suffix.lower()
-
-        if correct_ext != original_ext:
-            # Check if conversion is valid (same category)
-            original_is_image = original_ext in image_extensions
-            original_is_video = original_ext in video_extensions
-            correct_is_image = correct_ext in image_extensions
-            correct_is_video = correct_ext in video_extensions
-
-            # Only apply correction if both are same type (image->image or video->video)
-            if (original_is_image and correct_is_image) or (
-                original_is_video and correct_is_video
-            ):
-                base_name = Path(filename).stem
-                corrected_filename = base_name + correct_ext
-                self.log_message(
-                    "EXTENSION_CORRECTED",
-                    f"Fixed extension: {filename} -> {corrected_filename}",
-                    f"Actual format: {correct_ext}",
-                )
-                with self.stats_lock:
-                    self.stats["extensions_corrected"] += 1
-                filename = corrected_filename
-            elif (original_is_image and correct_is_video) or (
-                original_is_video and correct_is_image
-            ):
-                # Skip cross-category conversions
-                self.log_message(
-                    "EXTENSION_CROSS_CATEGORY_SKIPPED",
-                    f"Skipped cross-category conversion: {filename}",
-                    f"Original: {original_ext}, Detected: {correct_ext}",
-                )
-
         # Compute file hash for content-based deduplication
         try:
             file_hash = self._compute_file_hash(source_path)
@@ -840,7 +793,7 @@ class GooglePhotosPreprocessor:
             file_hash = None
 
         dest_filename = filename
-        
+
         # Check if this file content already exists (thread-safe)
         if file_hash:
             with self.hash_lock:
@@ -848,20 +801,20 @@ class GooglePhotosPreprocessor:
                     # Duplicate content found - reuse existing file
                     existing_entry = self.file_hashes[file_hash]
                     existing_filename = existing_entry["filename"]
-                    
+
                     # Add this album to the list if not already present
                     if album_name not in existing_entry["albums"]:
                         existing_entry["albums"].append(album_name)
-                    
+
                     with self.stats_lock:
                         self.stats["deduplicated_files"] += 1
-                    
+
                     self.log_message(
                         "DEDUPLICATED",
                         f"Duplicate content: {filename} in album '{album_name}'",
                         f"Using existing file: {existing_filename}, Hash: {file_hash[:16]}...",
                     )
-                    
+
                     # Return existing filename (file already copied)
                     return existing_filename
 
@@ -872,7 +825,9 @@ class GooglePhotosPreprocessor:
         with self.destination_lock:
             if dest_filename in self.destination_files:
                 # Different file with same name - create unique name
-                base, ext = filename.rsplit(".", 1) if "." in filename else (filename, "")
+                base, ext = (
+                    filename.rsplit(".", 1) if "." in filename else (filename, "")
+                )
                 counter = 1
                 while dest_filename in self.destination_files:
                     dest_filename = (
@@ -886,16 +841,16 @@ class GooglePhotosPreprocessor:
                 self.destination_files[dest_filename] = source_path
                 with self.stats_lock:
                     self.stats["media_copied"] += 1
-                
+
                 # Record hash for future deduplication
                 if file_hash:
                     with self.hash_lock:
                         self.file_hashes[file_hash] = {
                             "filename": dest_filename,
                             "albums": [album_name],
-                            "metadata": {}  # Will be populated later
+                            "metadata": {},  # Will be populated later
                         }
-                
+
                 return dest_filename
 
             except Exception as e:
@@ -909,15 +864,15 @@ class GooglePhotosPreprocessor:
     def _process_single_album(self, album_tuple: Tuple[str, Path]) -> Optional[Dict]:
         """
         Process a single album (used by multithreaded processing)
-        
+
         Args:
             album_tuple: Tuple of (album_name, album_path)
-            
+
         Returns:
             Album data dict or None if album has no media
         """
         album_name, album_path = album_tuple
-        
+
         # Build catalog for this album
         catalog = self.build_album_catalog(album_path)
 
@@ -927,9 +882,7 @@ class GooglePhotosPreprocessor:
             album_metadata = self.parse_album_metadata(catalog["album_metadata"])
 
         album_title = (
-            album_metadata.get("title", album_name)
-            if album_metadata
-            else album_name
+            album_metadata.get("title", album_name) if album_metadata else album_name
         )
 
         media_files = []
@@ -948,7 +901,7 @@ class GooglePhotosPreprocessor:
 
             if metadata_path:
                 matched_metadata_paths.add(str(metadata_path))
-                
+
                 # Parse metadata
                 media_metadata = self.parse_media_metadata(metadata_path)
                 if media_metadata:
@@ -956,14 +909,16 @@ class GooglePhotosPreprocessor:
                         self.stats["matched_files"] += 1
 
                     # Copy media file (handles deduplication)
-                    dest_filename = self.copy_media_file(media_path, media_name, album_name)
+                    dest_filename = self.copy_media_file(
+                        media_path, media_name, album_name
+                    )
                     if dest_filename:
                         media_metadata["filename"] = dest_filename
                         media_metadata["original_filename"] = media_metadata.get(
                             "title", media_name
                         )
                         media_files.append(media_metadata)
-                        
+
                         # Update metadata in file_hashes for consolidated output
                         # Need to find the hash entry for this file
                         try:
@@ -971,16 +926,25 @@ class GooglePhotosPreprocessor:
                             with self.hash_lock:
                                 if file_hash in self.file_hashes:
                                     # Store/merge metadata (prefer non-empty values)
-                                    stored_metadata = self.file_hashes[file_hash]["metadata"]
+                                    stored_metadata = self.file_hashes[file_hash][
+                                        "metadata"
+                                    ]
                                     if not stored_metadata:
-                                        self.file_hashes[file_hash]["metadata"] = media_metadata.copy()
+                                        self.file_hashes[file_hash][
+                                            "metadata"
+                                        ] = media_metadata.copy()
                                     else:
                                         # Merge metadata, preferring non-empty values
                                         for key, value in media_metadata.items():
-                                            if key not in stored_metadata or not stored_metadata[key]:
+                                            if (
+                                                key not in stored_metadata
+                                                or not stored_metadata[key]
+                                            ):
                                                 stored_metadata[key] = value
                         except Exception as e:
-                            logger.debug(f"Failed to update hash metadata for {media_name}: {e}")
+                            logger.debug(
+                                f"Failed to update hash metadata for {media_name}: {e}"
+                            )
                 else:
                     with self.stats_lock:
                         self.stats["unmatched_files"] += 1
@@ -994,7 +958,7 @@ class GooglePhotosPreprocessor:
                     f"album: {album_name}",
                 )
                 album_unmatched.append(media_name)
-                
+
                 # Track orphaned media file
                 self.failure_tracker.add_orphaned_media(
                     media_path=media_path,
@@ -1004,7 +968,7 @@ class GooglePhotosPreprocessor:
                         "original_location": str(media_path),
                     },
                 )
-        
+
         # Track orphaned metadata (metadata files that didn't match any media)
         for metadata_name, metadata_path in catalog["metadata"].items():
             if str(metadata_path) not in matched_metadata_paths:
@@ -1013,9 +977,11 @@ class GooglePhotosPreprocessor:
                     with open(metadata_path, "r", encoding="utf-8") as f:
                         metadata_content = json.load(f)
                 except Exception as e:
-                    logger.debug(f"Failed to parse orphaned metadata {metadata_path}: {e}")
+                    logger.debug(
+                        f"Failed to parse orphaned metadata {metadata_path}: {e}"
+                    )
                     metadata_content = {"filename": metadata_name}
-                
+
                 self.failure_tracker.add_orphaned_metadata(
                     metadata_entry=metadata_content,
                     reason="Media file not found in filesystem",
@@ -1044,7 +1010,7 @@ class GooglePhotosPreprocessor:
                 album_data["unmatched_media"] = album_unmatched
 
             return album_data
-        
+
         return None
 
     def process_albums(self) -> List[Dict]:
@@ -1054,14 +1020,16 @@ class GooglePhotosPreprocessor:
         """
         all_albums = []
 
-        print("\nScanning albums...")
+        logger.info("Scanning albums...")
         album_list = self.scan_albums()
         logger.info(f"   Found {len(album_list)} albums")
 
         # Create output media directory
         self.media_output_dir.mkdir(parents=True, exist_ok=True)
 
-        print(f"\nProcessing albums and media files (using {self.workers} workers)...")
+        logger.info(
+            "Processing albums and media files (using %d workers)...", self.workers
+        )
 
         # Process albums in parallel
         with ThreadPoolExecutor(max_workers=self.workers) as executor:
@@ -1070,9 +1038,11 @@ class GooglePhotosPreprocessor:
                 executor.submit(self._process_single_album, album_tuple): album_tuple[0]
                 for album_tuple in album_list
             }
-            
+
             # Collect results as they complete
-            for future in futures_progress(future_to_album, PHASE_PREPROCESS, "Parsing albums", unit="album"):
+            for future in futures_progress(
+                future_to_album, PHASE_PREPROCESS, "Parsing albums", unit="album"
+            ):
                 album_name = future_to_album[future]
                 try:
                     album_data = future.result()
@@ -1089,10 +1059,10 @@ class GooglePhotosPreprocessor:
         with self.stats_lock:
             self.stats["total_albums"] = len(all_albums)
 
-        print(f"   Processed {self.stats['total_albums']} albums")
+        logger.info("   Processed %d albums", self.stats["total_albums"])
         logger.info(f"   Found {self.stats['total_media_files']} media files")
-        print(f"   Matched {self.stats['matched_files']} files with metadata")
-        print(f"   Unmatched {self.stats['unmatched_files']} files")
+        logger.info("   Matched %d files with metadata", self.stats["matched_files"])
+        logger.info("   Unmatched %d files", self.stats["unmatched_files"])
 
         return all_albums
 
@@ -1101,21 +1071,21 @@ class GooglePhotosPreprocessor:
         try:
             # Build file-centric structure from file_hashes
             media_files = []
-            
+
             with self.hash_lock:
                 for file_hash, entry in self.file_hashes.items():
                     # Get metadata for this file
                     file_metadata = entry["metadata"].copy()
-                    
+
                     # Add albums list and filename
                     file_metadata["albums"] = sorted(entry["albums"])
                     file_metadata["filename"] = entry["filename"]
-                    
+
                     media_files.append(file_metadata)
-            
+
             # Sort by filename for consistency
             media_files.sort(key=lambda x: x.get("filename", ""))
-            
+
             output = {
                 "export_info": {
                     "export_path": str(self.export_path),
@@ -1135,43 +1105,30 @@ class GooglePhotosPreprocessor:
             with open(self.metadata_file, "w", encoding="utf-8") as f:
                 json.dump(output, f, indent=2, ensure_ascii=False)
 
-            print(f"\nSUCCESS: Saved metadata to {self.metadata_file}")
+            logger.info("Saved metadata to %s", self.metadata_file)
         except Exception as e:
             logger.error(f"Failed to save metadata: {e}")
             sys.exit(1)
 
     def print_statistics(self) -> None:
-        """Print processing statistics"""
-        print("\n" + "=" * 70)
-        print("PREPROCESSING STATISTICS")
-        print("=" * 70)
-        print(f"Total albums processed:           {self.stats['total_albums']:>6}")
-        print(f"Total media files found:          {self.stats['total_media_files']:>6}")
-        print(f"Files matched with metadata:      {self.stats['matched_files']:>6}")
-        print(f"Files without metadata:           {self.stats['unmatched_files']:>6}")
-        print(f"Media files copied:               {self.stats['media_copied']:>6}")
-        print(f"Deduplicated files (not copied):  {self.stats['deduplicated_files']:>6}")
-        print(f"Fuzzy matches applied:            {self.stats['fuzzy_matches']:>6}")
-        print(
-            f"Extensions corrected:             {self.stats['extensions_corrected']:>6}"
-        )
-        print(f"Banned items skipped:             {self.stats['skipped_banned']:>6}")
-        print("=" * 70)
-        
-        # Calculate and display space savings
-        if self.stats['deduplicated_files'] > 0:
-            unique_files = len(self.file_hashes)
-            print("\nDEDUPLICATION SUMMARY:")
-            print(f"  Unique media files:             {unique_files:>6}")
-            print(f"  Duplicate instances avoided:    {self.stats['deduplicated_files']:>6}")
-            print(f"  Space savings: Deduplicated {self.stats['deduplicated_files']} files")
-            print("=" * 70)
+        """Print processing statistics as a compact table."""
+        stats = {
+            "Albums processed": self.stats["total_albums"],
+            "Media files found": self.stats["total_media_files"],
+            "Files matched": self.stats["matched_files"],
+            "Unmatched files": self.stats["unmatched_files"],
+            "Files copied": self.stats["media_copied"],
+            "Deduplicated": self.stats["deduplicated_files"],
+            "Fuzzy matches": self.stats["fuzzy_matches"],
+            "Banned skipped": self.stats["skipped_banned"],
+        }
+        print_preprocessing_stats("Preprocessing Stats", stats)
 
     def process(self) -> None:
         """Main processing pipeline"""
         logger.info("Starting Google Photos Preprocessing")
-        print(f"Export path: {self.export_path}")
-        print(f"Output path: {self.output_dir}\n")
+        logger.info("Export path: %s", self.export_path)
+        logger.info("Output path: %s", self.output_dir)
 
         # Validate export structure
         if not self.validate_export():
@@ -1240,7 +1197,9 @@ Examples:
     export_path = Path(args.export_directory)
     output_path = Path(args.output) if args.output else None
 
-    preprocessor = GooglePhotosPreprocessor(export_path, output_path, workers=args.workers)
+    preprocessor = GooglePhotosPreprocessor(
+        export_path, output_path, workers=args.workers
+    )
     preprocessor.process()
 
 

@@ -48,5 +48,3 @@ def load_dotenv_file(path: Optional[str]) -> None:
     except Exception:
         # Silently ignore malformed files
         return
-
-

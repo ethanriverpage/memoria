@@ -18,7 +18,9 @@ from tests.fixtures.media_samples import write_media_file
 class TestSnapchatMessagesMatching:
     """Tests for media-to-conversation matching in Snapchat Messages."""
 
-    def test_media_matched_to_conversation(self, snapchat_messages_processor, temp_export_dir, temp_output_dir):
+    def test_media_matched_to_conversation(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
         """Should match media file to conversation via metadata."""
         create_snapchat_messages_export(
             temp_export_dir,
@@ -36,15 +38,17 @@ class TestSnapchatMessagesMatching:
                     ],
                 }
             },
-            raw_format=False
+            raw_format=False,
         )
 
         assert (temp_export_dir / "media" / "2021-01-01_b~abc123.jpg").exists()
-        
+
         metadata = json.loads((temp_export_dir / "metadata.json").read_text())
         assert "other_user" in metadata["conversations"]
 
-    def test_orphaned_media(self, snapchat_messages_processor, temp_export_dir, temp_output_dir):
+    def test_orphaned_media(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle orphaned media (no matching metadata)."""
         media_dir = temp_export_dir / "media"
         overlays_dir = temp_export_dir / "overlays"
@@ -72,7 +76,9 @@ class TestSnapchatMessagesMatching:
 class TestSnapchatMessagesOverlays:
     """Tests for overlay matching in Snapchat Messages."""
 
-    def test_media_with_overlay(self, snapchat_messages_processor, temp_export_dir, temp_output_dir):
+    def test_media_with_overlay(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
         """Should match media with corresponding overlay."""
         media_dir = temp_export_dir / "media"
         overlays_dir = temp_export_dir / "overlays"
@@ -106,7 +112,9 @@ class TestSnapchatMessagesOverlays:
         assert (media_dir / "2021-01-01_b~abc123.jpg").exists()
         assert (overlays_dir / "2021-01-01_b~abc123_overlay.png").exists()
 
-    def test_timestamp_based_overlay_matching(self, snapchat_messages_processor, temp_export_dir, temp_output_dir):
+    def test_timestamp_based_overlay_matching(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
         """Should match overlays based on timestamp when media_id matching fails."""
         media_dir = temp_export_dir / "media"
         overlays_dir = temp_export_dir / "overlays"
@@ -131,7 +139,9 @@ class TestSnapchatMessagesOverlays:
 class TestSnapchatMessagesAmbiguousCases:
     """Tests for ambiguous matching scenarios."""
 
-    def test_multiple_videos_same_timestamp(self, snapchat_messages_processor, temp_export_dir, temp_output_dir):
+    def test_multiple_videos_same_timestamp(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle multiple videos with same timestamp."""
         media_dir = temp_export_dir / "media"
         overlays_dir = temp_export_dir / "overlays"
@@ -161,7 +171,9 @@ class TestSnapchatMessagesAmbiguousCases:
 class TestSnapchatMessagesRawFormat:
     """Tests for raw export format processing."""
 
-    def test_raw_export_structure(self, snapchat_messages_processor, temp_export_dir, temp_output_dir):
+    def test_raw_export_structure(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process raw export with json/ directory."""
         create_snapchat_messages_export(temp_export_dir, raw_format=True)
 
@@ -169,7 +181,9 @@ class TestSnapchatMessagesRawFormat:
         assert (json_dir / "chat_history.json").exists()
         assert (json_dir / "snap_history.json").exists()
 
-    def test_chat_history_structure(self, snapchat_messages_processor, temp_export_dir, temp_output_dir):
+    def test_chat_history_structure(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
         """Should parse chat history with received and sent sections."""
         create_snapchat_messages_export(temp_export_dir, raw_format=True)
 
@@ -179,7 +193,9 @@ class TestSnapchatMessagesRawFormat:
         assert "Received Saved Chat History" in chat_history
         assert "Sent Saved Chat History" in chat_history
 
-    def test_snap_history_structure(self, snapchat_messages_processor, temp_export_dir, temp_output_dir):
+    def test_snap_history_structure(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
         """Should parse snap history with received and sent sections."""
         create_snapchat_messages_export(temp_export_dir, raw_format=True)
 
@@ -192,7 +208,9 @@ class TestSnapchatMessagesRawFormat:
 class TestSnapchatMessagesConsolidated:
     """Tests for consolidated export structure."""
 
-    def test_consolidated_messages_structure(self, snapchat_messages_processor, temp_export_dir, temp_output_dir):
+    def test_consolidated_messages_structure(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle consolidated export with messages/ subdirectory."""
         messages_dir = temp_export_dir / "messages"
         create_snapchat_messages_export(messages_dir, raw_format=True)
@@ -205,7 +223,9 @@ class TestSnapchatMessagesConsolidated:
 class TestSnapchatMessagesConversationTypes:
     """Tests for different conversation types."""
 
-    def test_dm_conversation(self, snapchat_messages_processor, temp_export_dir, temp_output_dir):
+    def test_dm_conversation(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process DM conversations."""
         create_snapchat_messages_export(
             temp_export_dir,
@@ -223,13 +243,15 @@ class TestSnapchatMessagesConversationTypes:
                     ],
                 }
             },
-            raw_format=False
+            raw_format=False,
         )
 
         metadata = json.loads((temp_export_dir / "metadata.json").read_text())
         assert metadata["conversations"]["user1"]["type"] == "dm"
 
-    def test_group_conversation(self, snapchat_messages_processor, temp_export_dir, temp_output_dir):
+    def test_group_conversation(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
         """Should process group conversations."""
         create_snapchat_messages_export(
             temp_export_dir,
@@ -247,9 +269,8 @@ class TestSnapchatMessagesConversationTypes:
                     ],
                 }
             },
-            raw_format=False
+            raw_format=False,
         )
 
         metadata = json.loads((temp_export_dir / "metadata.json").read_text())
         assert metadata["conversations"]["group_abc"]["type"] == "group"
-

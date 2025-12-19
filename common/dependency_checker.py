@@ -11,12 +11,17 @@ import subprocess
 
 def check_exiftool() -> bool:
     """Check if exiftool is installed and available in PATH
-    
+
     Returns:
         True if exiftool is available, False otherwise
     """
     try:
-        subprocess.run(["exiftool", "-ver"], capture_output=True, check=True, stdin=subprocess.DEVNULL)
+        subprocess.run(
+            ["exiftool", "-ver"],
+            capture_output=True,
+            check=True,
+            stdin=subprocess.DEVNULL,
+        )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
@@ -24,12 +29,17 @@ def check_exiftool() -> bool:
 
 def check_ffmpeg() -> bool:
     """Check if ffmpeg is installed and available in PATH
-    
+
     Returns:
         True if ffmpeg is available, False otherwise
     """
     try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True, stdin=subprocess.DEVNULL)
+        subprocess.run(
+            ["ffmpeg", "-version"],
+            capture_output=True,
+            check=True,
+            stdin=subprocess.DEVNULL,
+        )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
@@ -60,7 +70,9 @@ def check_immich_cli() -> bool:
         True if `immich` CLI is available, False otherwise
     """
     try:
-        subprocess.run(["immich", "-V"], capture_output=True, check=True, stdin=subprocess.DEVNULL)
+        subprocess.run(
+            ["immich", "-V"], capture_output=True, check=True, stdin=subprocess.DEVNULL
+        )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
@@ -74,3 +86,22 @@ def print_immich_error() -> None:
     print("Or use Docker:")
     print("  docker run -it ghcr.io/immich-app/immich-cli:latest")
 
+
+def check_pillow() -> bool:
+    """Check if PIL/Pillow is installed
+
+    Returns:
+        True if Pillow is available, False otherwise
+    """
+    try:
+        __import__("PIL")
+        return True
+    except ImportError:
+        return False
+
+
+def print_pillow_error() -> None:
+    """Print installation instructions for Pillow"""
+    print("ERROR: PIL/Pillow is not installed")
+    print("Please install Pillow:")
+    print("  pip install Pillow")

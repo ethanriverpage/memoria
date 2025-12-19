@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""
-Base class for all media processors
-
-Provides abstract interface that all processors must implement for
-unified detection and processing.
-"""
+"""Base class for all media processors."""
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class ProcessorBase(ABC):
-    """Base class for all media processors"""
+    """Base class for all media processors
+
+    All media processors must inherit from this class and implement
+    the required abstract methods: detect(), get_name(), get_priority(),
+    and process().
+
+    Optional methods for cross-processor deduplication:
+    - build_catalog(): Build hash catalog without copying files
+    - supports_dedup(): Return True to participate in cross-processor dedup
+    """
 
     @staticmethod
     @abstractmethod
@@ -85,7 +89,12 @@ class ProcessorBase(ABC):
 
     @staticmethod
     @abstractmethod
-    def process(input_dir: str, output_dir: Optional[str] = None, **kwargs) -> bool:
+    def process(
+        input_dir: str,
+        output_dir: Optional[str] = None,
+        dedup_manifest: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ) -> bool:
         """Process the input directory
 
         Args:
@@ -93,6 +102,10 @@ class ProcessorBase(ABC):
             output_dir: Optional base output directory. If provided, processor
                        should create a subdirectory within it. If None, use
                        processor's default output location.
+            dedup_manifest: Optional deduplication manifest from cross-processor
+                           analysis. If provided, processor should respect
+                           primary/secondary designations and skip copying
+                           files marked as secondary.
             **kwargs: Additional arguments (verbose, workers, etc.)
 
         Returns:
@@ -137,4 +150,62 @@ class ProcessorBase(ABC):
         raise NotImplementedError(
             "Processor declares supports_consolidation=True "
             "but does not implement process_consolidated()"
+        )
+
+    @staticmethod
+    def supports_dedup() -> bool:
+        """Return True if processor supports cross-processor deduplication.
+
+        Override this method to enable participation in cross-processor
+        deduplication. When True, memoria.py will call build_catalog()
+        during the catalog phase.
+
+        Processors that handle media files (photos, videos) should return True.
+        Processors that handle non-media content (text chats, voice calls)
+        may return False.
+
+        Returns:
+            True if deduplication is supported, False otherwise
+        """
+        return False
+
+    @staticmethod
+    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
+        """Build catalog of files with hashes and metadata.
+
+        This method is called during the catalog phase of cross-processor
+        deduplication. It should scan all media files, compute hashes,
+        and return a catalog structure without copying any files.
+
+        Args:
+            input_dir: Path to input directory (as string)
+            **kwargs: Additional arguments (verbose, workers, etc.)
+
+        Returns:
+            Catalog dictionary with structure:
+            {
+                "processor": str,           # Processor name
+                "input_dir": str,           # Input directory path
+                "files": [                  # List of file entries
+                    {
+                        "source_path": str,           # Full path to source file
+                        "relative_path": str,         # Path relative to input_dir
+                        "content_hash": str,          # xxHash64 hex digest
+                        "perceptual_hash": str|None,  # dhash hex or None
+                        "file_size": int,             # Size in bytes
+                        "dimensions": tuple|None,     # (width, height) or None
+                        "timestamp": str|None,        # ISO timestamp or None
+                        "metadata": dict,             # Processor-specific metadata
+                    },
+                    ...
+                ]
+            }
+
+        Raises:
+            NotImplementedError: If processor declares supports_dedup=True
+                but does not implement this method
+        """
+        raise NotImplementedError(
+            "Processor declares supports_dedup=True "
+            "but does not implement build_catalog()"
         )

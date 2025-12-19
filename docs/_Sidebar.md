@@ -36,3 +36,4 @@
 
 - [Standalone Tools](Standalone-Tools)
 - [Adding Processors](Adding-Processors)
+- [DRY Violations](DRY-Violations)

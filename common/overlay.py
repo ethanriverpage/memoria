@@ -18,12 +18,18 @@ Video processing uses a 4-pass approach:
 Video rotation metadata (common in portrait videos) is automatically detected and
 the rotation is physically applied to the video. Output files have correct orientation
 without rotation metadata, ensuring compatibility with all video players.
+
+Performance Optimizations:
+- Single FFprobe call to get all video metadata (rotation, dimensions, bitrate)
+- Cached video metadata to avoid redundant probing
 """
 
+import json
 import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 import logging
@@ -39,8 +45,8 @@ from common.video_encoder import (
     get_encoder_args,
     get_encoder_input_args,
     get_encoder_name,
-    get_software_encoder_args,
     get_video_bitrate,
+    get_software_encoder_args,
     is_hardware_accelerated,
     is_hardware_acceleration_error,
 )
@@ -53,6 +59,142 @@ _ENCODER_NAME = get_encoder_name()
 _IS_HARDWARE = is_hardware_accelerated()
 
 logger.debug(f"Video encoder initialized: {_ENCODER_NAME} (hardware: {_IS_HARDWARE})")
+
+
+@dataclass
+class VideoMetadata:
+    """Container for video metadata extracted in a single FFprobe call."""
+
+    width: int
+    height: int
+    rotation: Optional[int]
+    bitrate: Optional[int]
+
+
+def get_video_metadata(video_path: Path) -> Optional[VideoMetadata]:
+    """
+    Get all video metadata in a single FFprobe call.
+
+    Consolidates rotation, dimensions, and bitrate detection into one probe
+    for better performance (avoids 3 separate subprocess calls).
+
+    Args:
+        video_path: Path to the video file
+
+    Returns:
+        VideoMetadata with all extracted info, or None if probing failed
+    """
+    try:
+        # Single ffprobe call to get all metadata as JSON
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,bit_rate:stream_tags=rotate:stream_side_data",
+            "-show_entries",
+            "format=bit_rate",
+            "-of",
+            "json",
+            str(video_path),
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+
+        if result.returncode != 0:
+            logger.debug(f"[{video_path.name}] FFprobe failed: {result.stderr}")
+            return None
+
+        data = json.loads(result.stdout)
+
+        # Extract stream info
+        streams = data.get("streams", [])
+        if not streams:
+            logger.debug(f"[{video_path.name}] No video streams found")
+            return None
+
+        stream = streams[0]
+        width = stream.get("width")
+        height = stream.get("height")
+
+        if not width or not height:
+            logger.debug(f"[{video_path.name}] Missing dimensions in stream data")
+            return None
+
+        # Extract rotation from tags or side_data
+        rotation = None
+
+        # Check stream tags first
+        tags = stream.get("tags", {})
+        if "rotate" in tags:
+            try:
+                rotation = int(float(tags["rotate"])) % 360
+                if rotation == 0:
+                    rotation = None
+            except (ValueError, TypeError):
+                pass
+
+        # Check side_data_list for displaymatrix rotation
+        if rotation is None:
+            side_data_list = stream.get("side_data_list", [])
+            for side_data in side_data_list:
+                if side_data.get("side_data_type") == "Display Matrix":
+                    try:
+                        rot = side_data.get("rotation")
+                        if rot is not None:
+                            # FFprobe reports negative rotation for displaymatrix
+                            rotation = (-int(float(rot))) % 360
+                            if rotation == 0:
+                                rotation = None
+                    except (ValueError, TypeError):
+                        pass
+
+        # Extract bitrate - try format first, then stream
+        bitrate = None
+        format_info = data.get("format", {})
+
+        if format_info.get("bit_rate"):
+            try:
+                bitrate = int(format_info["bit_rate"])
+            except (ValueError, TypeError):
+                pass
+
+        if bitrate is None and stream.get("bit_rate"):
+            try:
+                bitrate = int(stream["bit_rate"])
+            except (ValueError, TypeError):
+                pass
+
+        logger.debug(
+            f"[{video_path.name}] Metadata: {width}x{height}, "
+            f"rotation={rotation}, bitrate={bitrate}"
+        )
+
+        return VideoMetadata(
+            width=width,
+            height=height,
+            rotation=rotation,
+            bitrate=bitrate,
+        )
+
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Timeout probing video metadata for {video_path.name}")
+        return None
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse FFprobe JSON for {video_path.name}: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Error probing video metadata for {video_path.name}: {e}")
+        return None
 
 
 def get_video_rotation(video_path: Path) -> Optional[int]:
@@ -80,7 +222,12 @@ def get_video_rotation(video_path: Path) -> Optional[int]:
 
     try:
         result = subprocess.run(
-            rotation_cmd, capture_output=True, text=True, timeout=10, check=False, stdin=subprocess.DEVNULL
+            rotation_cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            stdin=subprocess.DEVNULL,
         )
 
         logger.debug(
@@ -122,6 +269,179 @@ def get_video_rotation(video_path: Path) -> Optional[int]:
 # Multi-pass video processing helper functions
 
 
+def _pass1_rotate_video_with_metadata(
+    video_path: Path, video_meta: VideoMetadata
+) -> tuple[Path, int, int, Optional[int]]:
+    """
+    PASS 1: Rotate video if needed using pre-fetched metadata.
+
+    Uses metadata from get_video_metadata() to avoid redundant FFprobe calls.
+
+    Args:
+        video_path: Path to the input video
+        video_meta: Pre-fetched VideoMetadata from get_video_metadata()
+
+    Returns:
+        Tuple of (rotated_video_path, final_width, final_height, original_bitrate)
+
+    Raises:
+        RuntimeError: If video processing fails
+    """
+    return _pass1_rotate_video_impl_with_metadata(
+        video_path, video_meta, use_hardware=True
+    )
+
+
+def _pass1_rotate_video_impl_with_metadata(
+    video_path: Path, video_meta: VideoMetadata, use_hardware: bool = True
+) -> tuple[Path, int, int, Optional[int]]:
+    """
+    PASS 1 Implementation using pre-fetched metadata.
+
+    Avoids redundant FFprobe calls by using pre-fetched VideoMetadata.
+
+    Args:
+        video_path: Path to the input video
+        video_meta: Pre-fetched VideoMetadata
+        use_hardware: Whether to use hardware acceleration
+
+    Returns:
+        Tuple of (rotated_video_path, final_width, final_height, original_bitrate)
+
+    Raises:
+        RuntimeError: If video processing fails
+    """
+    logger.debug(f"[{video_path.name}] PASS 1: Rotating with pre-fetched metadata")
+
+    # Use pre-fetched metadata
+    orig_width = video_meta.width
+    orig_height = video_meta.height
+    rotation = video_meta.rotation
+    original_bitrate = video_meta.bitrate
+
+    if original_bitrate:
+        logger.debug(
+            f"[{video_path.name}] Using pre-fetched bitrate: {original_bitrate / 1_000_000:.2f} Mbps"
+        )
+
+    # Ensure dimensions are even for libx265
+    if orig_width % 2 != 0:
+        orig_width += 1
+    if orig_height % 2 != 0:
+        orig_height += 1
+
+    logger.debug(
+        f"[{video_path.name}] Original video dimensions: {orig_width}x{orig_height}"
+    )
+
+    # Calculate target dimensions after rotation
+    if rotation and rotation in [90, 270]:
+        target_width, target_height = orig_height, orig_width
+        logger.debug(
+            f"[{video_path.name}] Target dimensions after {rotation} rotation: {target_width}x{target_height}"
+        )
+    else:
+        target_width, target_height = orig_width, orig_height
+
+    # Create temp file for rotated video
+    temp_rotated = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    temp_rotated.close()
+    temp_rotated_path = Path(temp_rotated.name)
+
+    if rotation:
+        logger.debug(f"[{video_path.name}] Applying {rotation} rotation")
+
+        # Build rotation filter
+        if rotation == 90:
+            rotation_filter = "transpose=2"
+        elif rotation == 180:
+            rotation_filter = "hflip,vflip"
+        elif rotation == 270:
+            rotation_filter = "transpose=1"
+        else:
+            logger.warning(
+                f"[{video_path.name}] Unsupported rotation {rotation}, copying without rotation"
+            )
+            rotation_filter = None
+
+        if rotation_filter:
+            # Get encoder args
+            if use_hardware and is_hardware_accelerated():
+                encoder_input_args = get_encoder_input_args()
+                encoder_output_args = get_encoder_args(original_bitrate)
+                encoder_name = get_encoder_name()
+            else:
+                encoder_input_args = []
+                encoder_output_args = get_software_encoder_args(original_bitrate)
+                encoder_name = "libx265"
+
+            # Build filter for VAAPI vs other encoders
+            if encoder_name == "hevc_vaapi":
+                combined_filter = (
+                    f"hwdownload,format=nv12,{rotation_filter},"
+                    f"sidedata=mode=delete:type=DISPLAYMATRIX,hwupload"
+                )
+            else:
+                combined_filter = (
+                    f"{rotation_filter},sidedata=mode=delete:type=DISPLAYMATRIX"
+                )
+
+            cmd_rotate = [
+                "ffmpeg",
+                *encoder_input_args,
+                "-noautorotate",
+                "-i",
+                str(video_path),
+                "-vf",
+                combined_filter,
+                *encoder_output_args,
+                "-c:a",
+                "copy",
+                "-y",
+                str(temp_rotated_path),
+            ]
+
+            logger.debug(
+                f"[{video_path.name}] Pass 1 ffmpeg command: {' '.join(cmd_rotate)}"
+            )
+            result = subprocess.run(
+                cmd_rotate,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+
+            if result.returncode != 0:
+                temp_rotated_path.unlink(missing_ok=True)
+                # Check for hardware error and retry with software
+                if (
+                    use_hardware
+                    and is_hardware_accelerated()
+                    and is_hardware_acceleration_error(result.stderr)
+                ):
+                    logger.warning(
+                        f"[{video_path.name}] Hardware encoding failed, retrying with software"
+                    )
+                    return _pass1_rotate_video_impl_with_metadata(
+                        video_path, video_meta, use_hardware=False
+                    )
+                raise RuntimeError(f"Pass 1 rotation failed: {result.stderr}")
+
+            logger.debug(f"[{video_path.name}] Pass 1 complete - video rotated")
+        else:
+            shutil.copy2(video_path, temp_rotated_path)
+            logger.debug(
+                f"[{video_path.name}] Pass 1 complete - copied without rotation"
+            )
+    else:
+        shutil.copy2(video_path, temp_rotated_path)
+        logger.debug(f"[{video_path.name}] Pass 1 complete - no rotation needed")
+
+    return temp_rotated_path, target_width, target_height, original_bitrate
+
+
 def _pass1_rotate_video(
     video_path: Path, rotation: Optional[int]
 ) -> tuple[Path, int, int, Optional[int]]:
@@ -155,7 +475,9 @@ def _pass1_rotate_video(
                 f"falling back to software encoding: {error_msg[:100]}"
             )
             try:
-                return _pass1_rotate_video_impl(video_path, rotation, use_hardware=False)
+                return _pass1_rotate_video_impl(
+                    video_path, rotation, use_hardware=False
+                )
             except RuntimeError as fallback_error:
                 logger.error(
                     f"[{video_path.name}] Software encoding fallback also failed in Pass 1: {fallback_error}"
@@ -186,7 +508,9 @@ def _pass1_rotate_video_impl(
     Raises:
         RuntimeError: If video processing fails
     """
-    logger.debug(f"[{video_path.name}] PASS 1: Checking rotation and rotating if needed")
+    logger.debug(
+        f"[{video_path.name}] PASS 1: Checking rotation and rotating if needed"
+    )
 
     # Detect original video bitrate for quality preservation
     original_bitrate = get_video_bitrate(video_path)
@@ -214,7 +538,12 @@ def _pass1_rotate_video_impl(
     ]
 
     probe_result = subprocess.run(
-        probe_cmd, capture_output=True, text=True, timeout=10, check=False, stdin=subprocess.DEVNULL
+        probe_cmd,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+        stdin=subprocess.DEVNULL,
     )
     if probe_result.returncode != 0:
         raise RuntimeError(f"Failed to probe video dimensions: {probe_result.stderr}")
@@ -279,20 +608,28 @@ def _pass1_rotate_video_impl(
             # Note: We need to disable auto-rotation to prevent the decoder from
             # applying rotation before our transpose filter
             # We use sidedata filter to delete DISPLAYMATRIX side data
-            
+
             # Get encoder args based on hardware/software preference
             if use_hardware and is_hardware_accelerated():
-                encoder_input_args = get_encoder_input_args()  # Input args (e.g., hwaccel)
-                encoder_output_args = get_encoder_args(original_bitrate)  # Output args (codec, bitrate, etc)
+                encoder_input_args = (
+                    get_encoder_input_args()
+                )  # Input args (e.g., hwaccel)
+                encoder_output_args = get_encoder_args(
+                    original_bitrate
+                )  # Output args (codec, bitrate, etc)
                 encoder_name = get_encoder_name()
-                logger.debug(f"[{video_path.name}] Pass 1 using hardware encoder: {encoder_name}")
+                logger.debug(
+                    f"[{video_path.name}] Pass 1 using hardware encoder: {encoder_name}"
+                )
             else:
                 # Software encoding fallback
                 encoder_input_args = []
                 encoder_output_args = get_software_encoder_args(original_bitrate)
                 encoder_name = "libx265"
-                logger.debug(f"[{video_path.name}] Pass 1 using software encoder: {encoder_name}")
-            
+                logger.debug(
+                    f"[{video_path.name}] Pass 1 using software encoder: {encoder_name}"
+                )
+
             # For VAAPI, we need to handle filters differently:
             # 1. Hardware decode produces VAAPI surfaces
             # 2. We need to download to CPU memory for software filters
@@ -328,7 +665,12 @@ def _pass1_rotate_video_impl(
                 f"[{video_path.name}] Pass 1 ffmpeg command: {' '.join(cmd_rotate)}"
             )
             result = subprocess.run(
-                cmd_rotate, capture_output=True, text=True, timeout=300, check=False, stdin=subprocess.DEVNULL
+                cmd_rotate,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+                stdin=subprocess.DEVNULL,
             )
 
             if result.stderr:
@@ -370,7 +712,12 @@ def _pass1_rotate_video_impl(
         str(temp_rotated_path),
     ]
     verify_result = subprocess.run(
-        verify_probe_cmd, capture_output=True, text=True, timeout=10, check=False, stdin=subprocess.DEVNULL
+        verify_probe_cmd,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+        stdin=subprocess.DEVNULL,
     )
     if verify_result.returncode == 0:
         output_dims = verify_result.stdout.strip().rstrip("x")
@@ -381,7 +728,7 @@ def _pass1_rotate_video_impl(
             logger.warning(
                 f"[{video_path.name}] Pass 1 dimension mismatch! Expected {target_width}x{target_height}, got {output_dims}"
             )
-    
+
     logger.debug(f"[{video_path.name}] Pass 1 complete")
     return temp_rotated_path, target_width, target_height, original_bitrate
 
@@ -417,8 +764,12 @@ def _pass2_apply_overlay(
     # Try hardware encoding first if available
     try:
         return _pass2_apply_overlay_impl(
-            rotated_video_path, overlay_path, target_width, target_height,
-            original_bitrate, use_hardware=True
+            rotated_video_path,
+            overlay_path,
+            target_width,
+            target_height,
+            original_bitrate,
+            use_hardware=True,
         )
     except RuntimeError as e:
         error_msg = str(e)
@@ -430,8 +781,12 @@ def _pass2_apply_overlay(
             )
             try:
                 return _pass2_apply_overlay_impl(
-                    rotated_video_path, overlay_path, target_width, target_height,
-                    original_bitrate, use_hardware=False
+                    rotated_video_path,
+                    overlay_path,
+                    target_width,
+                    target_height,
+                    original_bitrate,
+                    use_hardware=False,
                 )
             except RuntimeError as fallback_error:
                 logger.error(
@@ -490,7 +845,9 @@ def _pass2_apply_overlay_impl(
 
             # Convert to RGBA if not already (for transparency support)
             if overlay_img.mode != "RGBA":
-                overlay_img = overlay_img.convert("RGBA")
+                converted = overlay_img.convert("RGBA")
+                overlay_img.close()  # Close original to free memory
+                overlay_img = converted
 
             # Resize using high-quality Lanczos resampling if needed
             if orig_width != target_width or orig_height != target_height:
@@ -500,6 +857,7 @@ def _pass2_apply_overlay_impl(
                 scaled_overlay = overlay_img.resize(
                     (target_width, target_height), Image.Resampling.LANCZOS
                 )
+                overlay_img.close()  # Close pre-resize image
             else:
                 logger.debug(
                     f"[{overlay_path.name}] Overlay already matches target dimensions"
@@ -511,13 +869,16 @@ def _pass2_apply_overlay_impl(
             temp_overlay.close()
             temp_overlay_path = Path(temp_overlay.name)
             scaled_overlay.save(temp_overlay_path, format="PNG", optimize=True)
+            scaled_overlay.close()  # Close after saving
             logger.debug(
                 f"[{overlay_path.name}] Scaled overlay saved to {temp_overlay_path.name}"
             )
 
     except Exception as e:
         # Provide clear error message for corrupted overlays
-        logger.error(f"Cannot open overlay file (possibly corrupted): {overlay_path}: {e}")
+        logger.error(
+            f"Cannot open overlay file (possibly corrupted): {overlay_path}: {e}"
+        )
         raise RuntimeError(f"Pass 2 overlay scaling failed - corrupted overlay: {e}")
 
     # Create temp file for video with overlay
@@ -533,16 +894,22 @@ def _pass2_apply_overlay_impl(
         # Get encoder args based on hardware/software preference
         if use_hardware and is_hardware_accelerated():
             encoder_input_args = get_encoder_input_args()  # Input args (e.g., hwaccel)
-            encoder_output_args = get_encoder_args(original_bitrate)  # Output args (codec, bitrate, etc)
+            encoder_output_args = get_encoder_args(
+                original_bitrate
+            )  # Output args (codec, bitrate, etc)
             encoder_name = get_encoder_name()
-            logger.debug(f"[{rotated_video_path.name}] Pass 2 using hardware encoder: {encoder_name}")
+            logger.debug(
+                f"[{rotated_video_path.name}] Pass 2 using hardware encoder: {encoder_name}"
+            )
         else:
             # Software encoding fallback
             encoder_input_args = []
             encoder_output_args = get_software_encoder_args(original_bitrate)
             encoder_name = "libx265"
-            logger.debug(f"[{rotated_video_path.name}] Pass 2 using software encoder: {encoder_name}")
-        
+            logger.debug(
+                f"[{rotated_video_path.name}] Pass 2 using software encoder: {encoder_name}"
+            )
+
         # For VAAPI, we need to handle overlay filter differently:
         # Hardware surfaces need to be downloaded to CPU, filtered, then uploaded
         if encoder_name == "hevc_vaapi":
@@ -553,7 +920,9 @@ def _pass2_apply_overlay_impl(
             )
         else:
             # Other encoders can use filters directly
-            filter_complex = "[0:v][1:v]overlay=0:0,sidedata=mode=delete:type=DISPLAYMATRIX"
+            filter_complex = (
+                "[0:v][1:v]overlay=0:0,sidedata=mode=delete:type=DISPLAYMATRIX"
+            )
 
         cmd_overlay = [
             "ffmpeg",
@@ -576,7 +945,12 @@ def _pass2_apply_overlay_impl(
             f"[{rotated_video_path.name}] Pass 2 ffmpeg command: {' '.join(cmd_overlay)}"
         )
         result = subprocess.run(
-            cmd_overlay, capture_output=True, text=True, timeout=300, check=False, stdin=subprocess.DEVNULL
+            cmd_overlay,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+            stdin=subprocess.DEVNULL,
         )
 
         if result.stderr:
@@ -679,7 +1053,12 @@ def _pass3_combine_tracks(with_overlay_path: Path, original_video_path: Path) ->
         f"[{with_overlay_path.name}] Pass 3 ffmpeg command: {' '.join(cmd_combine)}"
     )
     result = subprocess.run(
-        cmd_combine, capture_output=True, text=True, timeout=300, check=False, stdin=subprocess.DEVNULL
+        cmd_combine,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+        stdin=subprocess.DEVNULL,
     )
 
     if result.stderr:
@@ -705,15 +1084,18 @@ def _pass3_combine_tracks(with_overlay_path: Path, original_video_path: Path) ->
         str(temp_dual_path),
     ]
     verify_result = subprocess.run(
-        verify_cmd, capture_output=True, text=True, timeout=10, check=False, stdin=subprocess.DEVNULL
+        verify_cmd,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+        stdin=subprocess.DEVNULL,
     )
 
     if verify_result.returncode == 0:
         streams = verify_result.stdout.strip().split("\n")
         stream_count = len(streams)
-        logger.debug(
-            f"[{with_overlay_path.name}] Created {stream_count} video streams"
-        )
+        logger.debug(f"[{with_overlay_path.name}] Created {stream_count} video streams")
         for idx, stream_info in enumerate(streams):
             track_label = "With Overlay (default)" if idx == 0 else "Original"
             logger.debug(
@@ -742,7 +1124,7 @@ def _build_message_description(metadata: Optional[dict], export_username: str) -
     """
     if metadata is None:
         return f"Source: Snapchat/{export_username}/messages"
-    
+
     conv_type = metadata.get("conversation_type")
     conv_id = metadata.get("conversation_id")
 
@@ -761,12 +1143,12 @@ def _build_message_description(metadata: Optional[dict], export_username: str) -
 
     description_parts = [
         f"Source: Snapchat/{export_username}/messages",
-        f"Conversation: \"{conversation_context}\"",
-        f"Sender: \"{sender}\"",
+        f'Conversation: "{conversation_context}"',
+        f'Sender: "{sender}"',
     ]
 
     if content:
-        description_parts.append(f"Content: \"{content}\"")
+        description_parts.append(f'Content: "{content}"')
 
     return "\n".join(description_parts)
 
@@ -888,7 +1270,12 @@ def _pass4_embed_metadata(
 
     logger.debug(f"[{video_path.name}] Pass 4 ffmpeg command: {' '.join(cmd_metadata)}")
     result = subprocess.run(
-        cmd_metadata, capture_output=True, text=True, timeout=300, check=False, stdin=subprocess.DEVNULL
+        cmd_metadata,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+        stdin=subprocess.DEVNULL,
     )
 
     if result.stderr:
@@ -919,7 +1306,12 @@ def _pass4_embed_metadata(
         str(output_path),
     ]
     verify_result = subprocess.run(
-        verify_cmd, capture_output=True, text=True, timeout=10, check=False, stdin=subprocess.DEVNULL
+        verify_cmd,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+        stdin=subprocess.DEVNULL,
     )
 
     if verify_result.returncode == 0:
@@ -963,38 +1355,49 @@ def create_image_with_overlay(
         with Image.open(image_path) as base_img:
             # Convert to RGBA if not already
             if base_img.mode != "RGBA":
-                base_img = base_img.convert("RGBA")
+                converted = base_img.convert("RGBA")
+                base_img.close()
+                base_img = converted
 
             # Open the overlay image - catch specific PIL errors
             try:
                 with Image.open(overlay_path) as overlay_img:
                     # Convert overlay to RGBA for transparency support
                     if overlay_img.mode != "RGBA":
-                        overlay_img = overlay_img.convert("RGBA")
+                        converted = overlay_img.convert("RGBA")
+                        overlay_img.close()
+                        overlay_img = converted
 
                     # Resize overlay to match base image if needed
                     if overlay_img.size != base_img.size:
-                        overlay_img = overlay_img.resize(
+                        resized = overlay_img.resize(
                             base_img.size, Image.Resampling.LANCZOS
                         )
+                        overlay_img.close()
+                        overlay_img = resized
 
                     # Composite overlay on top of base image
                     result_img = Image.alpha_composite(base_img, overlay_img)
+                    overlay_img.close()  # Done with overlay
 
                     # Convert back to RGB for JPEG files
                     if output_path.suffix.lower() in [".jpg", ".jpeg"]:
                         # Create white background for JPEG
                         rgb_img = Image.new("RGB", result_img.size, (255, 255, 255))
                         rgb_img.paste(result_img, mask=result_img.split()[-1])
+                        result_img.close()
                         result_img = rgb_img
 
                     # Save the result
                     result_img.save(output_path, quality=quality, optimize=True)
+                    result_img.close()
                     return True
 
             except Exception as e:
                 # Provide clear error message for corrupted overlays
-                logger.error(f"Cannot open overlay file (possibly corrupted): {overlay_path}: {e}")
+                logger.error(
+                    f"Cannot open overlay file (possibly corrupted): {overlay_path}: {e}"
+                )
                 return False
 
     except Exception as e:  # noqa: BLE001
@@ -1023,6 +1426,9 @@ def create_video_with_overlay(
     Auto-detects whether to use rich message metadata or simple memory metadata
     based on the presence of conversation_type and conversation_id fields.
 
+    Uses a single FFprobe call to get all video metadata (rotation, dimensions,
+    bitrate) for better performance.
+
     Args:
         video_path: Path to the input video
         overlay_path: Path to the overlay image
@@ -1040,13 +1446,16 @@ def create_video_with_overlay(
     try:
         logger.debug(f"[{video_path.name}] Starting multi-pass video processing")
 
-        # Detect rotation metadata
-        rotation = get_video_rotation(video_path)
+        # Get all video metadata in single FFprobe call (rotation, dimensions, bitrate)
+        video_meta = get_video_metadata(video_path)
+        if video_meta is None:
+            logger.error(f"[{video_path.name}] Failed to probe video metadata")
+            return False
 
-        # PASS 1: Rotate video if needed
+        # PASS 1: Rotate video if needed (pass pre-fetched metadata)
         try:
             rotated_video_path, final_width, final_height, original_bitrate = (
-                _pass1_rotate_video(video_path, rotation)
+                _pass1_rotate_video_with_metadata(video_path, video_meta)
             )
             temp_files.append(rotated_video_path)
         except Exception as e:
@@ -1108,4 +1517,3 @@ def create_video_with_overlay(
                 logger.warning(
                     f"[{video_path.name}] Failed to clean up {temp_file.name}: {e}"
                 )
-

@@ -61,7 +61,7 @@ def create_google_photos_export(
                     "title": filename,
                     "photoTakenTime": {
                         "timestamp": "1609459200",  # 2021-01-01
-                        "formatted": "Jan 1, 2021, 12:00:00 AM UTC"
+                        "formatted": "Jan 1, 2021, 12:00:00 AM UTC",
                     },
                     "geoData": {
                         "latitude": 0.0,
@@ -109,7 +109,9 @@ def create_google_chat_export(
                     "creator": {"name": "User One", "email": "user1@example.com"},
                     "created_date": "2021-01-01T12:00:00Z",
                     "text": "Hello!",
-                    "attached_files": [{"export_name": "image.jpg"}] if include_media else [],
+                    "attached_files": (
+                        [{"export_name": "image.jpg"}] if include_media else []
+                    ),
                 }
             ],
             "Users/Other User": [
@@ -327,6 +329,10 @@ def create_snapchat_messages_export(
         # Create raw export structure
         json_dir = base_path / "json"
         json_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create chat_media directory (required by preprocessor)
+        chat_media_dir = base_path / "chat_media"
+        chat_media_dir.mkdir(parents=True, exist_ok=True)
 
         chat_history = {
             "Received Saved Chat History": [
@@ -699,7 +705,11 @@ def create_discord_export(
             "id": channel_id.replace("c", ""),
             "type": 0 if data.get("type") == "server" else 1,
             "name": data.get("name"),
-            "guild": {"id": "guild123", "name": data.get("guild_name", "")} if data.get("guild_name") else None,
+            "guild": (
+                {"id": "guild123", "name": data.get("guild_name", "")}
+                if data.get("guild_name")
+                else None
+            ),
         }
         (channel_dir / "channel.json").write_text(json.dumps(channel_data, indent=2))
 
@@ -767,6 +777,7 @@ def create_imessage_mac_export(
 
     # Populate database and create attachment files
     import sqlite3
+
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
@@ -781,19 +792,19 @@ def create_imessage_mac_export(
         # Insert handle
         cursor.execute(
             "INSERT INTO handle (ROWID, id, service) VALUES (?, ?, ?)",
-            (handle_id, chat_identifier, "iMessage")
+            (handle_id, chat_identifier, "iMessage"),
         )
 
         # Insert chat
         cursor.execute(
             "INSERT INTO chat (ROWID, guid, chat_identifier, display_name) VALUES (?, ?, ?, ?)",
-            (chat_id, f"chat{chat_id}", chat_identifier, conv.get("display_name"))
+            (chat_id, f"chat{chat_id}", chat_identifier, conv.get("display_name")),
         )
 
         # Link handle to chat
         cursor.execute(
             "INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (?, ?)",
-            (chat_id, handle_id)
+            (chat_id, handle_id),
         )
 
         for msg in conv.get("messages", []):
@@ -803,14 +814,21 @@ def create_imessage_mac_export(
                 """INSERT INTO message
                    (ROWID, guid, text, handle_id, date, is_from_me, cache_has_attachments)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (msg_id, f"msg{msg_id}", msg.get("text"), handle_id,
-                 msg.get("date", 0), msg.get("is_from_me", 0), has_attachment)
+                (
+                    msg_id,
+                    f"msg{msg_id}",
+                    msg.get("text"),
+                    handle_id,
+                    msg.get("date", 0),
+                    msg.get("is_from_me", 0),
+                    has_attachment,
+                ),
             )
 
             # Link message to chat
             cursor.execute(
                 "INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)",
-                (chat_id, msg_id)
+                (chat_id, msg_id),
             )
 
             # Create attachment if present
@@ -827,15 +845,19 @@ def create_imessage_mac_export(
                     """INSERT INTO attachment
                        (ROWID, guid, filename, mime_type, transfer_name)
                        VALUES (?, ?, ?, ?, ?)""",
-                    (attach_id, f"attach{attach_id}",
-                     f"~/Library/Messages/Attachments/{attachment_path}",
-                     f"image/{ext}", attachment_path.split("/")[-1])
+                    (
+                        attach_id,
+                        f"attach{attach_id}",
+                        f"~/Library/Messages/Attachments/{attachment_path}",
+                        f"image/{ext}",
+                        attachment_path.split("/")[-1],
+                    ),
                 )
 
                 # Link attachment to message
                 cursor.execute(
                     "INSERT INTO message_attachment_join (message_id, attachment_id) VALUES (?, ?)",
-                    (msg_id, attach_id)
+                    (msg_id, attach_id),
                 )
                 attach_id += 1
 
@@ -882,4 +904,3 @@ def create_imessage_iphone_export(
     (sms_dir / "chat.db").rename(sms_dir / "sms.db")
 
     return base_path
-
