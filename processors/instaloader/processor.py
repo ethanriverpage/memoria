@@ -1,8 +1,9 @@
 """
-Old Instagram Media Processor
+Instaloader Media Processor
 
-This processor is designed to be used through memoria.py.
-It handles renaming old Instagram media files, embedding metadata, and updating filesystem timestamps.
+This processor handles media scraped using Instaloader (https://instaloader.github.io/).
+It is NOT an official Instagram export format - it processes scrape data from the Instaloader tool.
+Handles renaming media files, embedding metadata, and updating filesystem timestamps.
 """
 
 import json
@@ -17,17 +18,24 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.dedup.catalog import catalog_media_files
+from common.dedup.description import (
+    SourceEntry,
+    build_description,
+    PLATFORM_INSTAGRAM,
+    SERVICE_STORIES,
+    SERVICE_POSTS,
+    SERVICE_REELS,
+)
 from common.output.console import console
 from common.dedup.service import is_file_primary_by_hash
-from common.files.utils import batch_correct_extensions
+from common.files.utils import batch_correct_extensions, short_path
 from common.dedup.hashing import compute_content_hash
 from common.processing import print_processing_summary
 from common.output.progress import PHASE_PROCESS, progress_bar
-from processors.instagram_old_public_media.preprocess import OldInstagramPreprocessor
+from processors.instaloader.preprocess import InstaloaderPreprocessor
 from common.dependency_checker import check_exiftool, print_exiftool_error
 from processors.base import ProcessorBase
 from common.utils import (
-    ALL_MEDIA_EXTENSIONS,
     extract_username_from_export_dir,
     FilenameGenerator,
     is_preprocessed_directory,
@@ -114,7 +122,7 @@ class OldInstagramPublicMediaProcessor(ProcessorBase):
         return True
 
     @staticmethod
-    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
+    def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata."""
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
@@ -129,7 +137,7 @@ class OldInstagramPublicMediaProcessor(ProcessorBase):
             if f.is_file() and instagram_pattern.match(f.name)
         ]
 
-        return catalog_media_files(
+        yield from catalog_media_files(
             processor_name="Instagram Old Public Media",
             input_path=input_path,
             media_files=media_files,
@@ -225,8 +233,23 @@ def _build_metadata_requests(
                 ("ModifyDate", exif_date),
             ]
 
-        # Build description
-        default_description = f"Source: Instagram/{export_username}&#xa;Type: {media_type}"
+        # Build description using unified format
+        # Map media_type to service name (story->stories, post->posts, reel->reels)
+        service_map = {
+            "story": SERVICE_STORIES,
+            "stories": SERVICE_STORIES,
+            "post": SERVICE_POSTS,
+            "posts": SERVICE_POSTS,
+            "reel": SERVICE_REELS,
+            "reels": SERVICE_REELS,
+        }
+        service = service_map.get(media_type.lower(), media_type)
+        entry = SourceEntry(
+            processor=PLATFORM_INSTAGRAM,
+            username=export_username,
+            service=service,
+        )
+        default_description = build_description(entry)
 
         requests.append(
             MetadataWriteRequest(
@@ -305,8 +328,7 @@ def process_media_batch(batch_args):
         # Update file_paths and file_info with corrected paths
         file_paths = [corrections.get(p, p) for p in file_paths]
         file_info = [
-            (corrections.get(fp, fp), pd, eu, mt)
-            for fp, pd, eu, mt in file_info
+            (corrections.get(fp, fp), pd, eu, mt) for fp, pd, eu, mt in file_info
         ]
 
     # Phase 3: Update timestamps and compile results
@@ -551,7 +573,7 @@ def process_logic(
             corrupted_files = batch_validate_exif(file_paths)
             if corrupted_files:
                 for f in corrupted_files:
-                    logger.debug(f"Detected corrupted EXIF in {f}")
+                    logger.debug(f"Detected corrupted EXIF in {short_path(f)}")
                 logger.info(
                     f"Rebuilding {len(corrupted_files)} corrupted EXIF structures..."
                 )

@@ -186,20 +186,28 @@ def _build_catalog_worker(
     export_dir_str: str,
     workers: int,
     log_file: Optional[str] = None,
-) -> tuple[str, list[dict]]:
+    db_path: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> tuple[str, int]:
     """Build catalogs for a single export directory (multiprocessing worker).
 
     This function is designed to be called by ProcessPoolExecutor for parallel
     catalog building. It re-creates the ProcessorRegistry in the worker process
     since registry instances cannot be pickled across process boundaries.
 
+    When db_path and run_id are provided, entries are written directly to the
+    database for memory-efficient streaming. Otherwise, entries are collected
+    but not returned (legacy mode returns empty count for compatibility).
+
     Args:
         export_dir_str: Path to the export directory as a string.
         workers: Number of worker threads for hashing within this process.
         log_file: Optional path to log file for verbose output.
+        db_path: Optional path to SQLite database for streaming writes.
+        run_id: Optional unique identifier for this processing run.
 
     Returns:
-        Tuple of (export_dir_name, list_of_catalogs).
+        Tuple of (export_dir_name, file_count).
     """
     from processors.registry import ProcessorRegistry
     from common.output.logging import init_worker_logging
@@ -220,7 +228,14 @@ def _build_catalog_worker(
     registry = ProcessorRegistry()
     load_all_processors(registry, quiet=True)
 
-    catalogs = []
+    file_count = 0
+
+    # Initialize database connection if streaming mode
+    db = None
+    if db_path and run_id:
+        from common.dedup.database import HashDatabase
+
+        db = HashDatabase(Path(db_path))
 
     # Detect matching processors that support dedup
     matching_processors = registry.detect_all(export_dir)
@@ -228,16 +243,41 @@ def _build_catalog_worker(
 
     for processor in dedup_processors:
         try:
-            catalog = processor.build_catalog(str(export_dir), workers=workers)
-            if catalog and catalog.get("files"):
-                catalogs.append(catalog)
+            processor_name = processor.get_name()
+
+            if db and run_id:
+                # Streaming mode: iterate generator and write entries to database
+                # This never accumulates all entries in memory
+                batch = []
+                for entry in processor.build_catalog(str(export_dir), workers=workers):
+                    # Ensure _processor is set
+                    if "_processor" not in entry:
+                        entry["_processor"] = processor_name
+                    batch.append(entry)
+                    file_count += 1
+
+                    # Write in batches of 100 for efficiency
+                    if len(batch) >= 100:
+                        db.write_catalog_entries_batch(
+                            run_id, export_dir.name, batch
+                        )
+                        batch = []
+
+                # Write remaining entries
+                if batch:
+                    db.write_catalog_entries_batch(run_id, export_dir.name, batch)
+            else:
+                # Legacy mode: just count files from generator
+                for _ in processor.build_catalog(str(export_dir), workers=workers):
+                    file_count += 1
+
         except Exception as e:
             logging.warning(
                 f"Catalog build failed for {processor.get_name()} "
                 f"in {export_dir.name}: {e}"
             )
 
-    return export_dir.name, catalogs
+    return export_dir.name, file_count
 
 
 def _print_catalog_summary_table(
@@ -280,9 +320,13 @@ def run_phased_dedup_processing(
 ) -> tuple[int, int, list]:
     """Run phased processing with cross-processor deduplication.
 
-    Phase 1: CATALOG - Build catalogs from all processors
-    Phase 2: DEDUP ANALYSIS - Analyze for duplicates
+    Phase 1: CATALOG - Build catalogs from all processors (streaming to DB)
+    Phase 2: DEDUP ANALYSIS - Analyze for duplicates (from DB)
     Phase 3: PROCESS - Process with dedup manifest
+
+    Uses streaming architecture to avoid OOM when processing large export
+    collections. Catalog entries are written directly to SQLite database
+    rather than accumulated in memory.
 
     Args:
         dirs_to_process: List of export directories
@@ -294,6 +338,8 @@ def run_phased_dedup_processing(
     Returns:
         Tuple of (success_count, failed_count, results_list)
     """
+    import uuid
+
     config = get_dedup_config()
     phase_header("CROSS-PROCESSOR DEDUPLICATION MODE")
     logger.info("Database: %s", config.database_path)
@@ -302,21 +348,29 @@ def run_phased_dedup_processing(
     )
     logger.info("Perceptual threshold: %s", config.perceptual_threshold)
 
-    # Phase 1: Build catalogs
+    # Generate unique run_id for this processing session
+    run_id = f"run_{uuid.uuid4().hex[:12]}"
+    logger.info("Run ID: %s", run_id)
+
+    # Initialize database
+    db = HashDatabase(config.database_path)
+
+    # Phase 1: Build catalogs (streaming to database)
     phase_header("PHASE 1: CATALOG")
 
-    catalogs = []
     catalog_results = []  # List of (export_name, file_count, status) for summary table
+    total_files = 0
     use_parallel_catalog = os.environ.get("PARALLEL_CATALOG", "true").lower() == "true"
 
     if use_parallel_catalog and len(dirs_to_process) > 1:
-        # Parallel catalog building across exports
+        # Parallel catalog building across exports with streaming to DB
         max_catalog_workers = min(len(dirs_to_process), 8)
         logger.info(
-            "Building catalogs in parallel (%d workers)...", max_catalog_workers
+            "Building catalogs in parallel (%d workers, streaming to DB)...",
+            max_catalog_workers,
         )
 
-        from rich.status import Status
+        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
 
         with ProcessPoolExecutor(max_workers=max_catalog_workers) as executor:
             futures = {
@@ -325,38 +379,38 @@ def run_phased_dedup_processing(
                     str(export_dir),
                     args.workers,
                     str(log_file) if log_file else None,
+                    str(config.database_path),  # Pass DB path for streaming
+                    run_id,  # Pass run_id for streaming
                 ): export_dir
                 for export_dir in dirs_to_process
             }
 
-            completed = 0
             total = len(futures)
-            with Status(
-                f"[bold blue]Cataloging exports... [0/{total}]",
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[bold blue]Cataloging exports..."),
+                BarColumn(),
+                MofNCompleteColumn(),
                 console=console,
-                spinner="dots",
-            ) as status:
+                transient=False,
+                refresh_per_second=4,
+            ) as progress:
+                task = progress.add_task("Cataloging", total=total)
                 for future in as_completed(futures):
                     export_dir = futures[future]
-                    completed += 1
-                    status.update(
-                        f"[bold blue]Cataloging exports... [{completed}/{total}]"
-                    )
+                    progress.advance(task)
                     try:
-                        export_name, export_catalogs = future.result()
-                        if export_catalogs:
-                            catalogs.extend(export_catalogs)
-                            total_in_export = sum(
-                                len(c.get("files", [])) for c in export_catalogs
-                            )
-                            catalog_results.append((export_name, total_in_export, "OK"))
+                        export_name, file_count = future.result()
+                        if file_count > 0:
+                            catalog_results.append((export_name, file_count, "OK"))
+                            total_files += file_count
                         else:
                             catalog_results.append((export_name, 0, "No processors"))
                     except Exception as e:
                         catalog_results.append((export_dir.name, 0, f"ERROR: {e}"))
                         logger.error("Catalog failed for %s: %s", export_dir.name, e)
     else:
-        # Sequential catalog building (single export or PARALLEL_CATALOG=false)
+        # Sequential catalog building with streaming to DB
         for export_dir in dirs_to_process:
             logger.debug("Scanning: %s", export_dir.name)
 
@@ -371,37 +425,56 @@ def run_phased_dedup_processing(
             export_file_count = 0
             for processor in dedup_processors:
                 logger.debug("  Building catalog: %s", processor.get_name())
+                processor_name = processor.get_name()
                 try:
-                    catalog = processor.build_catalog(
+                    # Stream entries directly from generator to database
+                    batch = []
+                    processor_file_count = 0
+                    for entry in processor.build_catalog(
                         str(export_dir),
                         workers=args.workers,
-                    )
-                    if catalog and catalog.get("files"):
-                        catalogs.append(catalog)
-                        export_file_count += len(catalog["files"])
-                        logger.debug("    Found %d files", len(catalog["files"]))
+                    ):
+                        if "_processor" not in entry:
+                            entry["_processor"] = processor_name
+                        batch.append(entry)
+                        export_file_count += 1
+                        processor_file_count += 1
+
+                        if len(batch) >= 100:
+                            db.write_catalog_entries_batch(
+                                run_id, export_dir.name, batch
+                            )
+                            batch = []
+
+                    if batch:
+                        db.write_catalog_entries_batch(
+                            run_id, export_dir.name, batch
+                        )
+
+                    logger.debug("    Found %d files", processor_file_count)
                 except Exception as e:
                     logger.error("    ERROR: %s", e)
 
             if export_file_count > 0:
                 catalog_results.append((export_dir.name, export_file_count, "OK"))
+                total_files += export_file_count
             else:
                 catalog_results.append((export_dir.name, 0, "No files"))
 
     # Display catalog results summary table
-    total_files = sum(len(c.get("files", [])) for c in catalogs)
     _print_catalog_summary_table(catalog_results, total_files)
 
     if total_files == 0:
         logger.info("No files to process. Exiting.")
+        # Clean up empty run
+        db.clear_run(run_id)
         return 0, 0, []
 
-    # Phase 2: Deduplication Analysis
+    # Phase 2: Deduplication Analysis (from database)
     phase_header("PHASE 2: DEDUP ANALYSIS")
 
-    db = HashDatabase(config.database_path)
     dedup_service = DeduplicationService(db=db, config=config)
-    manifest = dedup_service.analyze(catalogs)
+    manifest = dedup_service.analyze_from_db(run_id)
 
     # Save manifest
     output_base = Path(args.output) if args.output else Path("processed")
@@ -475,6 +548,9 @@ def run_phased_dedup_processing(
     from common.processing import cleanup_preprocessing_cache
 
     cleanup_preprocessing_cache()
+
+    # Clean up catalog entries from this run to free database space
+    db.clear_run(run_id)
 
     return success_count, failed_count, results
 
@@ -585,6 +661,11 @@ def _process_export_worker(
     try:
         # Create a simple args namespace
         class Args:
+            output: Optional[str]
+            verbose: bool
+            workers: Optional[int]
+            processor: Optional[str]
+
             def __init__(self):
                 self.output = None
                 self.verbose = False
@@ -637,12 +718,12 @@ def process_single_export(
     registry: ProcessorRegistry,
     args,
     immich_enabled: bool,
-    immich_url: str,
-    immich_key: str,
+    immich_url: Optional[str],
+    immich_key: Optional[str],
     immich_concurrency: int,
     immich_skip_hash: bool,
     temp_dir: str,
-    detection_cache: dict = None,
+    detection_cache: Optional[dict] = None,
     upload_queue=None,
 ) -> tuple[int, int, list]:
     """Process a single export directory
@@ -1265,6 +1346,13 @@ Examples:
         default=None,
         help="Path to .env file to load (default: ./.env if present)",
     )
+    parser.add_argument(
+        "--file-log-level",
+        choices=["debug", "info"],
+        default="debug",
+        help="Log level for file output: 'debug' (default) captures all details, "
+        "'info' produces smaller logs with only phase summaries",
+    )
 
     args = parser.parse_args()
 
@@ -1299,7 +1387,13 @@ Examples:
         log_file = (
             logs_dir / f"media_processor_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         )
-    setup_logging(verbosity=args.verbose, log_file=log_file)
+    # Map string log level to logging constant
+    file_log_level = logging.DEBUG if args.file_log_level == "debug" else logging.INFO
+    setup_logging(
+        verbosity=args.verbose,
+        log_file=str(log_file) if log_file else None,
+        file_log_level=file_log_level,
+    )
 
     # Initialize registry and load all processors
     registry = ProcessorRegistry()

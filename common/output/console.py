@@ -11,12 +11,26 @@ Example:
     >>> section_header("Processing Export")
 """
 
+import os
+
 from rich.console import Console
 
 # Shared console instance for all Rich output
 # Using a singleton ensures progress bars and logging coordinate properly
 # stderr=False makes Rich output to stdout for consistency with previous behavior
 console = Console(stderr=False)
+
+
+def is_subprocess() -> bool:
+    """Check if we're running in a subprocess worker.
+
+    Subprocess workers set _MEMORIA_SUBPROCESS=1 to signal that console output
+    should be suppressed to prevent interleaved/corrupted terminal display.
+
+    Returns:
+        True if running in a subprocess worker, False otherwise.
+    """
+    return os.environ.get("_MEMORIA_SUBPROCESS") == "1"
 
 
 def section_header(title: str, style: str = "bold cyan") -> None:

@@ -22,12 +22,15 @@ from threading import Lock
 from common.files.filter import BannedFilesFilter
 from common.dedup.hashing import compute_content_hash
 from common.utils import default_worker_count
+from common.output.logging import get_processor_logger
 from common.processing import print_preprocessing_stats
 from common.output.progress import PHASE_PREPROCESS, futures_progress
 from common.failure_tracker import FailureTracker
 
-# Set up logging
+# Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
+# Standardized processor logger for consistent output
+log = get_processor_logger(__name__)
 
 
 class InstagramMessagesPreprocessor:
@@ -59,8 +62,19 @@ class InstagramMessagesPreprocessor:
             self.messages_dir = new_format_inbox
             self.is_legacy_format = False
 
-        # Output directories
-        output_base = Path(output_dir) if output_dir else self.export_path
+        # Output directories - require explicit output_dir to prevent writing to exports
+        if output_dir is None:
+            raise ValueError(
+                "output_dir is required. Preprocessors must not write to the export "
+                "directory. Use a temp directory or specify an explicit output path."
+            )
+        output_base = Path(output_dir)
+        # Safety check: never write to the export directory
+        if output_base.resolve() == self.export_path.resolve():
+            raise ValueError(
+                f"output_dir cannot be the same as export_path ({self.export_path}). "
+                "This would corrupt the original export."
+            )
         self.output_dir = output_base
         self.media_output_dir = output_base / "media"
         self.metadata_file = output_base / "metadata.json"
@@ -140,24 +154,24 @@ class InstagramMessagesPreprocessor:
 
                 f.write(f"\nTotal logged issues: {len(self.log_entries)}\n")
 
-            logger.info("Saved preprocessing log to %s", self.log_file)
+            log.saved_log(str(self.log_file))
         except Exception as e:
-            logger.warning("Failed to save log file: %s", e)
+            log.logger.warning("Failed to save log file: %s", e)
 
     def validate_export(self) -> bool:
         """Validate that export directory has required structure"""
         if not self.export_path.exists():
-            logger.error("Export path does not exist: %s", self.export_path)
+            log.file_not_found(str(self.export_path), "Export path")
             return False
 
         if not self.messages_dir.exists():
-            logger.error("Messages directory not found: %s", self.messages_dir)
+            log.file_not_found(str(self.messages_dir), "Messages directory")
             return False
 
         # Check if at least one conversation folder exists
         conversation_folders = [d for d in self.messages_dir.iterdir() if d.is_dir()]
         if not conversation_folders:
-            logger.error("No conversation folders found in %s", self.messages_dir)
+            log.logger.error("No conversation folders found in %s", self.messages_dir)
             return False
 
         return True
@@ -337,7 +351,7 @@ class InstagramMessagesPreprocessor:
                 f"Failed to parse {html_path.name}",
                 str(e),
             )
-            logger.error("Failed to parse %s: %s", html_path.name, e)
+            log.parse_error(html_path.name, e)
 
         return messages
 
@@ -386,7 +400,7 @@ class InstagramMessagesPreprocessor:
                 "Failed to scan conversation folders",
                 str(e),
             )
-            logger.error(f"Failed to scan conversations: {e}")
+            log.logger.error("Failed to scan conversations: %s", e)
 
         return conversations
 
@@ -400,7 +414,7 @@ class InstagramMessagesPreprocessor:
         if not self.messages_dir.exists():
             return catalog
 
-        logger.info("Scanning media directories...")
+        log.logger.info("Scanning media directories...")
 
         # Recursively find all media files in photos directories
         import os
@@ -443,7 +457,7 @@ class InstagramMessagesPreprocessor:
                         catalog[filename] = file_path
                         self.stats["total_media_files"] += 1
 
-        logger.info(f"   Found {len(catalog)} media files")
+        log.found_files(len(catalog), "media")
 
         return catalog
 
@@ -535,7 +549,7 @@ class InstagramMessagesPreprocessor:
                                         f"Failed to copy {filename}",
                                         str(e),
                                     )
-                                    logger.error("Failed to copy %s: %s", filename, e)
+                                    log.copy_error(filename, e)
                     else:
                         self.log_message(
                             "MISSING_FILE",
@@ -585,11 +599,11 @@ class InstagramMessagesPreprocessor:
                 },
             )
 
-        logger.info("   Copied %d files", self.stats["media_copied"])
-        logger.info("   Unique files copied: %d", self.stats["unique_files"])
-        logger.info("   Duplicates skipped: %d", self.stats["duplicate_files"])
-        logger.info("   Missing files: %d", self.stats["missing_files"])
-        logger.info("   Orphaned files: %d", self.stats["orphaned_files"])
+        log.logger.info("   Copied %d files", self.stats["media_copied"])
+        log.logger.info("   Unique files copied: %d", self.stats["unique_files"])
+        log.logger.info("   Duplicates skipped: %d", self.stats["duplicate_files"])
+        log.logger.info("   Missing files: %d", self.stats["missing_files"])
+        log.logger.info("   Orphaned files: %d", self.stats["orphaned_files"])
 
     def _process_single_conversation(
         self, conversation_tuple: Tuple[str, Path]
@@ -632,13 +646,13 @@ class InstagramMessagesPreprocessor:
         """
         all_conversations = []
 
-        logger.info("Processing conversation files...")
+        log.logger.info("Processing conversation files...")
 
         # Scan all conversation folders
         conversation_list = self.scan_conversations()
-        logger.info("   Found %d conversations", len(conversation_list))
+        log.found_items(len(conversation_list), "conversations")
 
-        logger.info(
+        log.logger.info(
             "Processing %d conversations (using %d workers)...",
             len(conversation_list),
             self.workers,
@@ -672,18 +686,18 @@ class InstagramMessagesPreprocessor:
                         f"Failed to process conversation {conversation_id}",
                         str(e),
                     )
-                    logger.error(
-                        f"Failed to process conversation {conversation_id}: {e}"
+                    log.logger.error(
+                        "Failed to process conversation %s: %s", conversation_id, e
                     )
 
         with self.stats_lock:
             self.stats["total_conversations"] = len(all_conversations)
 
-        logger.info(
+        log.logger.info(
             "   Processed %d conversations with media",
             self.stats["total_conversations"],
         )
-        logger.info(
+        log.logger.info(
             "   Found %d messages with media", self.stats["total_messages_with_media"]
         )
 
@@ -712,9 +726,9 @@ class InstagramMessagesPreprocessor:
             with open(self.metadata_file, "w", encoding="utf-8") as f:
                 json.dump(output, f, indent=2, ensure_ascii=False)
 
-            logger.info("Saved metadata to %s", self.metadata_file)
+            log.saved_metadata(str(self.metadata_file))
         except Exception as e:
-            logger.error(f"Failed to save metadata: {e}")
+            log.logger.error("Failed to save metadata: %s", e)
             raise RuntimeError(f"Failed to save metadata: {e}")
 
     def print_statistics(self) -> None:
@@ -738,9 +752,9 @@ class InstagramMessagesPreprocessor:
         Returns:
             True if preprocessing succeeded, False otherwise
         """
-        logger.info("Starting Instagram Messages Preprocessing")
-        logger.info("Export path: %s", self.export_path)
-        logger.info("Output path: %s", self.output_dir)
+        log.preprocessor_start(
+            "Instagram Messages", str(self.export_path), str(self.output_dir)
+        )
 
         # Validate export structure
         if not self.validate_export():
@@ -767,7 +781,7 @@ class InstagramMessagesPreprocessor:
         # Print statistics
         self.print_statistics()
 
-        logger.info("Preprocessing complete!")
+        log.preprocessing_complete()
         return True
 
 
@@ -799,8 +813,8 @@ Examples:
         "-o",
         "--output",
         type=str,
-        help="Optional output directory (default: creates folders in export directory)",
-        default=None,
+        required=True,
+        help="Output directory for preprocessed files (required to prevent writing to exports)",
     )
 
     parser.add_argument(

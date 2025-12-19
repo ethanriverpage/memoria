@@ -7,19 +7,15 @@ Focuses on:
 - Datetime and GPS tag handling
 """
 
-import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from common.media.exiftool import (
     DEFAULT_PREAMBLE,
     DescriptionWriteSpec,
     GPSData,
     MetadataWriteRequest,
-    PREAMBLE_WITH_IGNORE_ERRORS,
     batch_write_metadata_requests,
 )
 
@@ -56,8 +52,9 @@ class TestDescriptionWriting:
                 argfile_content.append(Path(argfile_path).read_text())
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile), \
-             patch("common.media.exiftool.get_media_type", return_value="image"):
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=capture_argfile
+        ), patch("common.media.exiftool.get_media_type", return_value="image"):
             batch_write_metadata_requests(
                 [request],
                 existing_metadata_map,
@@ -103,8 +100,9 @@ class TestDescriptionWriting:
                 argfile_content.append(Path(argfile_path).read_text())
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile), \
-             patch("common.media.exiftool.get_media_type", return_value="image"):
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=capture_argfile
+        ), patch("common.media.exiftool.get_media_type", return_value="image"):
             batch_write_metadata_requests(
                 [request],
                 existing_metadata_map,
@@ -141,8 +139,9 @@ class TestDescriptionWriting:
                 argfile_content.append(Path(argfile_path).read_text())
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile), \
-             patch("common.media.exiftool.get_media_type", return_value="video"):
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=capture_argfile
+        ), patch("common.media.exiftool.get_media_type", return_value="video"):
             batch_write_metadata_requests(
                 [request],
                 existing_metadata_map,
@@ -187,9 +186,12 @@ class TestDedupOverride:
                 argfile_content.append(Path(argfile_path).read_text())
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile), \
-             patch("common.media.exiftool.get_media_type", return_value="image"), \
-             patch("common.media.exiftool._get_description_for_file", return_value=merged_description):
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=capture_argfile
+        ), patch("common.media.exiftool.get_media_type", return_value="image"), patch(
+            "common.media.exiftool._get_description_for_file",
+            return_value=merged_description,
+        ):
             batch_write_metadata_requests(
                 [request],
                 existing_metadata_map,
@@ -227,8 +229,9 @@ class TestDedupOverride:
                 argfile_content.append(Path(argfile_path).read_text())
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile), \
-             patch("common.media.exiftool.get_media_type", return_value="image"):
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=capture_argfile
+        ), patch("common.media.exiftool.get_media_type", return_value="image"):
             batch_write_metadata_requests(
                 [request],
                 existing_metadata_map,
@@ -276,8 +279,9 @@ class TestDatetimeAndGPS:
                 argfile_content.append(Path(argfile_path).read_text())
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile), \
-             patch("common.media.exiftool.get_media_type", return_value="image"):
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=capture_argfile
+        ), patch("common.media.exiftool.get_media_type", return_value="image"):
             batch_write_metadata_requests(
                 [request],
                 existing_metadata_map,
@@ -324,8 +328,9 @@ class TestDatetimeAndGPS:
                 argfile_content.append(Path(argfile_path).read_text())
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile), \
-             patch("common.media.exiftool.get_media_type", return_value="image"):
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=capture_argfile
+        ), patch("common.media.exiftool.get_media_type", return_value="image"):
             batch_write_metadata_requests(
                 [request],
                 existing_metadata_map,
@@ -362,9 +367,11 @@ class TestDatetimeAndGPS:
                 argfile_content.append(Path(argfile_path).read_text())
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile), \
-             patch("common.media.exiftool.get_media_type", return_value="image"), \
-             patch("common.media.exiftool.get_gps_format", return_value="signed"):
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=capture_argfile
+        ), patch("common.media.exiftool.get_media_type", return_value="image"), patch(
+            "common.media.exiftool.get_gps_format", return_value="signed"
+        ):
             batch_write_metadata_requests(
                 [request],
                 existing_metadata_map,

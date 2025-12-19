@@ -16,6 +16,7 @@ Subpackages:
 # File scanning and filtering (from files subpackage)
 from .files.filter import BannedFilesFilter
 from .files.scanner import collect_media_files, iter_media_files
+from .files.utils import short_path, get_export_name
 
 # Re-export ProcessorBase and ProcessorRegistry from processors package for convenience
 try:
@@ -81,6 +82,8 @@ __all__ = [
     "BannedFilesFilter",
     "collect_media_files",
     "iter_media_files",
+    "short_path",
+    "get_export_name",
     # Processors
     "ProcessorBase",
     "ProcessorRegistry",

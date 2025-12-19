@@ -4,6 +4,15 @@ ImageDescription Builder for Cross-Processor Deduplication
 
 Formats merged metadata from multiple sources into a standardized
 EXIF ImageDescription field for embedded provenance tracking.
+
+Unified Description Format:
+    Source: {platform}/{username}[/{service}]
+      - {sender} in "{conversation}": "{content}"
+
+Examples:
+    Source: Google/john.doe@gmail.com/photos
+    Source: Instagram/johndoe/messages
+      - jane_doe in "Best Friends": "Look at this sunset!"
 """
 
 import logging
@@ -15,17 +24,39 @@ from common.dedup.config import get_dedup_config
 
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# Platform and Service Constants
+# =============================================================================
+
+# Platform names (Title case, except iMessage)
+PLATFORM_GOOGLE = "Google"
+PLATFORM_INSTAGRAM = "Instagram"
+PLATFORM_SNAPCHAT = "Snapchat"
+PLATFORM_DISCORD = "Discord"
+PLATFORM_IMESSAGE = "iMessage"
+
+# Service names (lowercase)
+SERVICE_PHOTOS = "photos"
+SERVICE_CHAT = "chat"
+SERVICE_VOICE = "voice"
+SERVICE_MESSAGES = "messages"
+SERVICE_MEMORIES = "memories"
+SERVICE_STORIES = "stories"
+SERVICE_POSTS = "posts"
+SERVICE_REELS = "reels"
+
 
 @dataclass
 class SourceEntry:
     """Represents a source for a deduplicated file.
 
     Attributes:
-        processor: Name of the processor (e.g., "Google Photos", "Instagram")
+        processor: Platform name (e.g., "Google", "Instagram", "iMessage")
         username: Username or identifier from the source
+        service: Service type (e.g., "photos", "messages", "memories")
         is_primary: Whether this is the primary source
-        albums: List of album names (for photo libraries)
-        context_type: Type of context (e.g., "Story", "Post", "Message")
+        albums: List of album names (for photo libraries) - deprecated, use service
+        context_type: Type of context (e.g., "Story", "Post", "Message") - deprecated
         content: Message or caption content
         conversation: Conversation or chat name
         sender: Sender name for messages
@@ -34,6 +65,7 @@ class SourceEntry:
 
     processor: str
     username: str = ""
+    service: str = ""
     is_primary: bool = False
     albums: List[str] = field(default_factory=list)
     context_type: str = ""
@@ -87,10 +119,138 @@ def format_timestamp(ts: Optional[datetime]) -> str:
     return ts.strftime("%Y-%m-%d")
 
 
-def format_primary_source(entry: SourceEntry, max_chars: int = 100) -> str:
-    """Format the primary source line.
+# =============================================================================
+# Unified Description Building Functions
+# =============================================================================
 
-    Format: Source: {Processor}/{username} | {albums/context}
+
+def build_source_line(entry: SourceEntry) -> str:
+    """Build the unified source line.
+
+    Format: Source: {platform}/{username}[/{service}]
+
+    Examples:
+        Source: Google/john.doe@gmail.com/photos
+        Source: Instagram/johndoe/messages
+        Source: iMessage/mac
+        Source: Discord/johndoe
+
+    Args:
+        entry: Source entry with platform, username, and optional service.
+
+    Returns:
+        Formatted source line string.
+    """
+    parts = [f"Source: {entry.processor}"]
+
+    if entry.username:
+        parts[0] += f"/{entry.username}"
+
+    if entry.service:
+        parts[0] += f"/{entry.service}"
+
+    return parts[0]
+
+
+def build_message_context(entry: SourceEntry, max_content: int = 100) -> str:
+    """Build the message context line.
+
+    Format:   - {sender} in "{conversation}": "{content}"
+
+    Examples:
+        - John Doe in "Family Group": "Check out this photo!"
+        - in "DM with +14045551234": "Here's that picture"
+        - jane_doe in "Best Friends": "Look at this sunset!"
+
+    Args:
+        entry: Source entry with sender, conversation, and content.
+        max_content: Maximum characters for content (will be truncated).
+
+    Returns:
+        Formatted message context line, or empty string if no context.
+    """
+    if not entry.conversation and not entry.sender and not entry.content:
+        return ""
+
+    parts = []
+
+    # Add sender if present
+    if entry.sender:
+        parts.append(entry.sender)
+
+    # Add conversation
+    if entry.conversation:
+        if parts:
+            parts.append(f'in "{entry.conversation}"')
+        else:
+            parts.append(f'in "{entry.conversation}"')
+
+    # Add content if present
+    if entry.content:
+        content = entry.content.replace("\n", " ")
+        content = truncate_text(content, max_content)
+        if parts:
+            parts.append(f': "{content}"')
+        else:
+            parts.append(f'"{content}"')
+
+    if not parts:
+        return ""
+
+    # Build the line with proper formatting
+    result = "  - "
+    if entry.sender and entry.conversation:
+        result += f'{entry.sender} in "{entry.conversation}"'
+    elif entry.sender:
+        result += entry.sender
+    elif entry.conversation:
+        result += f'in "{entry.conversation}"'
+
+    if entry.content:
+        content = entry.content.replace("\n", " ")
+        content = truncate_text(content, max_content)
+        result += f': "{content}"'
+
+    return result
+
+
+def build_description(entry: SourceEntry, max_content: int = 100) -> str:
+    """Build complete single-source description for processor use.
+
+    This is the main function processors should use to build descriptions.
+
+    Format:
+        Source: {platform}/{username}[/{service}]
+        [  - {sender} in "{conversation}": "{content}"]
+
+    Examples:
+        Source: Google/john.doe@gmail.com/photos
+
+        Source: Instagram/johndoe/messages
+          - jane_doe in "Best Friends": "Look at this sunset!"
+
+    Args:
+        entry: Source entry with all metadata.
+        max_content: Maximum characters for message content.
+
+    Returns:
+        Complete description string with &#xa; line separators.
+    """
+    lines = [build_source_line(entry)]
+
+    # Add message context if we have conversation/sender info
+    if entry.conversation or entry.sender:
+        context_line = build_message_context(entry, max_content)
+        if context_line:
+            lines.append(context_line)
+
+    return "&#xa;".join(lines)
+
+
+def format_primary_source(entry: SourceEntry, max_chars: int = 100) -> str:
+    """Format the primary source line using unified format.
+
+    Format: Source: {platform}/{username}[/{service}]
 
     Args:
         entry: Primary source entry.
@@ -99,31 +259,18 @@ def format_primary_source(entry: SourceEntry, max_chars: int = 100) -> str:
     Returns:
         Formatted primary source string.
     """
-    parts = [f"Source: {entry.processor}"]
-
-    if entry.username:
-        parts[0] += f"/{entry.username}"
-
-    # Add albums or context
-    context_parts = []
-    if entry.albums:
-        context_parts.append(", ".join(entry.albums[:3]))  # Limit to 3 albums
-        if len(entry.albums) > 3:
-            context_parts.append(f"+{len(entry.albums) - 3} more")
-
-    if context_parts:
-        parts.append(" | ".join(context_parts))
-
-    result = " | ".join(parts) if len(parts) > 1 else parts[0]
+    result = build_source_line(entry)
     return truncate_text(result, max_chars)
 
 
 def format_secondary_source(entry: SourceEntry, max_chars: int = 250) -> str:
-    """Format a secondary source line.
+    """Format a secondary source line using unified format.
 
-    Formats:
-    - Story/Post: +{Processor}/{username}: {type} "{content}" ({date})
-    - Message: +{Processor}/{username}: {Sender} [{Conv}] "{content}" ({date})
+    Format: +{platform}/{username}[/{service}]: {sender} in "{conv}": "{content}" ({date})
+
+    Examples:
+        +iMessage/mac: Jane in "Family Group": "Everyone needs to see this!" (2024-01-15)
+        +Instagram/johndoe/messages: bestfriend in "Close Friends": "Making you jealous" (2024-01-16)
 
     Args:
         entry: Secondary source entry.
@@ -135,40 +282,53 @@ def format_secondary_source(entry: SourceEntry, max_chars: int = 250) -> str:
     config = get_dedup_config()
     msg_truncate = config.msg_truncate
 
-    parts = [f"+{entry.processor}"]
-
+    # Build source prefix: +{platform}/{username}[/{service}]:
+    source_prefix = f"+{entry.processor}"
     if entry.username:
-        parts[0] += f"/{entry.username}"
+        source_prefix += f"/{entry.username}"
+    if entry.service:
+        source_prefix += f"/{entry.service}"
+    source_prefix += ":"
 
-    parts[0] += ":"
+    # Build context using unified message format
+    context_parts = []
 
-    # Format content based on type
-    content_parts = []
-
-    if entry.context_type:
-        content_parts.append(entry.context_type)
-
-    # Message format with sender and conversation
-    if entry.sender or entry.conversation:
-        sender_conv = []
-        if entry.sender:
-            sender_conv.append(entry.sender)
-        if entry.conversation:
-            sender_conv.append(f"[{entry.conversation}]")
-        if sender_conv:
-            content_parts.append(" ".join(sender_conv))
+    # Sender and conversation in unified format
+    if entry.sender and entry.conversation:
+        context_parts.append(f'{entry.sender} in "{entry.conversation}"')
+    elif entry.sender:
+        context_parts.append(entry.sender)
+    elif entry.conversation:
+        context_parts.append(f'in "{entry.conversation}"')
 
     # Add truncated content in quotes
     if entry.content:
-        truncated_content = truncate_text(entry.content, msg_truncate)
-        content_parts.append(f'"{truncated_content}"')
+        content = entry.content.replace("\n", " ")
+        truncated_content = truncate_text(content, msg_truncate)
+        context_parts.append(f'"{truncated_content}"')
 
     # Add timestamp
     date_str = format_timestamp(entry.timestamp)
     if date_str:
-        content_parts.append(f"({date_str})")
+        context_parts.append(f"({date_str})")
 
-    result = " ".join([parts[0]] + content_parts)
+    # Combine with proper separators
+    if context_parts:
+        # Join sender/conv and content with ": " if both exist
+        if (
+            len(context_parts) >= 2
+            and entry.content
+            and (entry.sender or entry.conversation)
+        ):
+            # Format: sender in "conv": "content" (date)
+            result = (
+                f"{source_prefix} {context_parts[0]}: {' '.join(context_parts[1:])}"
+            )
+        else:
+            result = f"{source_prefix} {' '.join(context_parts)}"
+    else:
+        result = source_prefix.rstrip(":")
+
     return truncate_text(result, max_chars)
 
 
@@ -285,11 +445,84 @@ def merge_descriptions(
     return "\n".join(result_lines)
 
 
+def _parse_source_path(path: str) -> tuple:
+    """Parse platform/username/service from a source path.
+
+    Args:
+        path: Source path like "Google/user@gmail.com/photos" or "iMessage/mac"
+
+    Returns:
+        Tuple of (processor, username, service)
+    """
+    parts = path.split("/")
+    processor = parts[0].strip() if len(parts) > 0 else "Unknown"
+    username = parts[1].strip() if len(parts) > 1 else ""
+    service = parts[2].strip() if len(parts) > 2 else ""
+    return processor, username, service
+
+
+def _parse_message_context(context: str) -> tuple:
+    """Parse sender, conversation, and content from message context.
+
+    Handles formats like:
+        - jane_doe in "Best Friends": "Look at this sunset!"
+        - in "DM with +1404...": "content"
+        - John Doe in "Family Group"
+
+    Args:
+        context: Message context string.
+
+    Returns:
+        Tuple of (sender, conversation, content)
+    """
+    sender = ""
+    conversation = ""
+    content = ""
+
+    # Extract content in quotes (last quoted string if multiple)
+    if '": "' in context:
+        # Format: sender in "conv": "content"
+        parts = context.split('": "', 1)
+        before_content = parts[0]
+        content_with_end = parts[1] if len(parts) > 1 else ""
+        if content_with_end.endswith('"'):
+            content = content_with_end[:-1]
+        else:
+            # May have timestamp after: "content" (2024-01-15)
+            end_quote = content_with_end.rfind('"')
+            if end_quote > 0:
+                content = content_with_end[:end_quote]
+    else:
+        before_content = context
+
+    # Extract conversation in quotes
+    if ' in "' in before_content:
+        idx = before_content.find(' in "')
+        sender = before_content[:idx].strip()
+        rest = before_content[idx + 5 :]  # Skip ' in "'
+        end_quote = rest.find('"')
+        if end_quote > 0:
+            conversation = rest[:end_quote]
+        else:
+            conversation = rest.rstrip('"')
+    elif before_content.startswith('in "'):
+        rest = before_content[4:]  # Skip 'in "'
+        end_quote = rest.find('"')
+        if end_quote > 0:
+            conversation = rest[:end_quote]
+        else:
+            conversation = rest.rstrip('"')
+
+    return sender, conversation, content
+
+
 def parse_source_from_description(description: str) -> List[SourceEntry]:
     """Parse source entries from an existing ImageDescription.
 
-    Attempts to extract structured source information from the
-    standard description format.
+    Handles unified format:
+        Source: {platform}/{username}[/{service}]
+          - {sender} in "{conversation}": "{content}"
+        +{platform}/{username}[/{service}]: {sender} in "{conv}": "{content}" ({date})
 
     Args:
         description: ImageDescription string to parse.
@@ -298,56 +531,82 @@ def parse_source_from_description(description: str) -> List[SourceEntry]:
         List of SourceEntry objects parsed from description.
     """
     entries = []
+    current_entry = None
 
     for line in description.split("\n"):
         line = line.strip()
         if not line:
             continue
 
-        entry = SourceEntry(processor="Unknown")
-
         # Parse primary source line
         if line.startswith("Source:"):
-            entry.is_primary = True
-            rest = line[7:].strip()
+            # Save previous entry if exists
+            if current_entry is not None:
+                entries.append(current_entry)
 
-            # Extract processor/username
-            if "/" in rest:
-                parts = rest.split("/", 1)
-                entry.processor = parts[0].strip()
-                if "|" in parts[1]:
-                    username_part, context = parts[1].split("|", 1)
-                    entry.username = username_part.strip()
-                    # Parse albums from context
-                    entry.albums = [a.strip() for a in context.split(",")]
-                else:
-                    entry.username = parts[1].strip()
-            else:
-                entry.processor = rest.split("|")[0].strip()
+            rest = line[7:].strip()
+            processor, username, service = _parse_source_path(rest)
+
+            current_entry = SourceEntry(
+                processor=processor,
+                username=username,
+                service=service,
+                is_primary=True,
+            )
+
+        # Parse message context line (belongs to current primary entry)
+        elif line.startswith("  - ") or line.startswith("- "):
+            if current_entry is not None:
+                context = line.lstrip(" -")
+                sender, conversation, content = _parse_message_context(context)
+                current_entry.sender = sender
+                current_entry.conversation = conversation
+                current_entry.content = content
 
         # Parse secondary source line
         elif line.startswith("+"):
+            # Save previous entry if exists
+            if current_entry is not None:
+                entries.append(current_entry)
+
             rest = line[1:].strip()
 
-            # Extract processor/username
-            if ":" in rest:
-                source_part, content_part = rest.split(":", 1)
-                if "/" in source_part:
-                    parts = source_part.split("/", 1)
-                    entry.processor = parts[0].strip()
-                    entry.username = parts[1].strip()
-                else:
-                    entry.processor = source_part.strip()
+            # Split at first ": " to separate source from context
+            if ": " in rest:
+                source_part, context_part = rest.split(": ", 1)
+            else:
+                source_part = rest.rstrip(":")
+                context_part = ""
 
-                # Try to extract content in quotes
-                content_part = content_part.strip()
-                if '"' in content_part:
-                    start = content_part.find('"')
-                    end = content_part.rfind('"')
-                    if start < end:
-                        entry.content = content_part[start + 1 : end]
+            processor, username, service = _parse_source_path(source_part)
+            sender, conversation, content = _parse_message_context(context_part)
 
-        entries.append(entry)
+            current_entry = SourceEntry(
+                processor=processor,
+                username=username,
+                service=service,
+                is_primary=False,
+                sender=sender,
+                conversation=conversation,
+                content=content,
+            )
+
+            # Try to extract timestamp from end: (YYYY-MM-DD)
+            if context_part and "(" in context_part:
+                date_match = context_part.rfind("(")
+                date_end = context_part.rfind(")")
+                if date_match < date_end:
+                    date_str = context_part[date_match + 1 : date_end]
+                    try:
+                        current_entry.timestamp = datetime.strptime(
+                            date_str, "%Y-%m-%d"
+                        )
+                    except ValueError:
+                        pass
+
+    # Don't forget the last entry
+    if current_entry is not None:
+        entries.append(current_entry)
 
     return entries
 
@@ -356,6 +615,7 @@ def create_source_entry(
     processor: str,
     metadata: Dict[str, Any],
     is_primary: bool = False,
+    service: str = "",
 ) -> SourceEntry:
     """Create a SourceEntry from processor metadata.
 
@@ -363,9 +623,10 @@ def create_source_entry(
     a standardized SourceEntry for description building.
 
     Args:
-        processor: Processor name.
+        processor: Platform name (e.g., "Google", "Instagram").
         metadata: Metadata dictionary from processor.
         is_primary: Whether this is the primary source.
+        service: Service name (e.g., "photos", "messages").
 
     Returns:
         SourceEntry populated from metadata.
@@ -373,6 +634,7 @@ def create_source_entry(
     entry = SourceEntry(
         processor=processor,
         is_primary=is_primary,
+        service=service or metadata.get("service", ""),
     )
 
     # Extract common fields

@@ -17,6 +17,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.dedup.catalog import catalog_media_files
+from common.dedup.description import (
+    SourceEntry,
+    build_description,
+    PLATFORM_GOOGLE,
+    SERVICE_VOICE,
+)
 from common.dedup.service import is_file_primary_by_hash
 from common.files.utils import batch_correct_extensions
 from common.dedup.hashing import compute_content_hash
@@ -117,7 +123,7 @@ class GoogleVoiceProcessor(ProcessorBase):
         return True
 
     @staticmethod
-    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
+    def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata.
 
         Scans all media files in the Google Voice export, computes hashes,
@@ -136,18 +142,14 @@ class GoogleVoiceProcessor(ProcessorBase):
         # Find media in Google Voice structure
         voice_dir = input_path / "Voice" / "Calls"
         if not voice_dir.exists():
-            return {
-                "processor": "Google Voice",
-                "input_dir": str(input_path),
-                "files": [],
-            }
+            return
 
         media_files = []
         for file_path in voice_dir.rglob("*"):
             if file_path.is_file() and file_path.suffix.lower() in ALL_MEDIA_EXTENSIONS:
                 media_files.append(file_path)
 
-        return catalog_media_files(
+        yield from catalog_media_files(
             processor_name="Google Voice",
             input_path=input_path,
             media_files=media_files,
@@ -243,11 +245,15 @@ def _build_metadata_requests(
                 ("ModifyDate", exif_date),
             ]
 
-        # Build description
+        # Build description using unified format
         other_party = conversation_name.replace("Group: ", "")
-        default_description = (
-            f'Source: Google Voice/{export_username}&#xa;Conversation: "{other_party}"'
+        entry = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username=export_username,
+            service=SERVICE_VOICE,
+            conversation=f"DM with {other_party}" if "Group:" not in conversation_name else other_party,
         )
+        default_description = build_description(entry)
 
         requests.append(
             MetadataWriteRequest(

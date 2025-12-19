@@ -17,6 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from common.files.utils import short_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -67,7 +69,7 @@ class FailureTracker:
             try:
                 context["file_size"] = media_path.stat().st_size
             except Exception as e:
-                logger.debug(f"Could not get file size for {media_path}: {e}")
+                logger.debug(f"Size failed: {short_path(media_path)}: {e}")
 
         entry = {
             "file_path": str(media_path),
@@ -76,7 +78,6 @@ class FailureTracker:
         }
 
         self.orphaned_media.append(entry)
-        logger.debug(f"Tracked orphaned media: {media_path}")
 
     def add_orphaned_metadata(
         self,
@@ -102,9 +103,6 @@ class FailureTracker:
         }
 
         self.orphaned_metadata.append(entry)
-        logger.debug(
-            f"Tracked orphaned metadata: {context.get('expected_path', 'unknown')}"
-        )
 
     def add_processing_failure(
         self,
@@ -136,7 +134,6 @@ class FailureTracker:
         }
 
         self.processing_failures.append(entry)
-        logger.debug(f"Tracked processing failure: {media_path}")
 
     def has_failures(self) -> bool:
         """Check if any failures have been tracked."""
@@ -157,6 +154,87 @@ class FailureTracker:
             "failed_matching": failed_matching,
             "failed_processing": len(self.processing_failures),
         }
+
+    def _relative_path(self, full_path: str) -> str:
+        """
+        Convert a full path to a relative path from the export directory.
+
+        Args:
+            full_path: Full absolute path to a file
+
+        Returns:
+            Path relative to export directory, or export dir name + path
+        """
+        try:
+            export_path = Path(self.export_directory)
+            file_path = Path(full_path)
+            # Try to get relative path from export directory's parent
+            # so we include the export directory name itself
+            if export_path.parent in file_path.parents or file_path.is_relative_to(
+                export_path.parent
+            ):
+                return str(file_path.relative_to(export_path.parent))
+            # Fallback: just use export dir name + relative path
+            if file_path.is_relative_to(export_path):
+                return f"{export_path.name}/{file_path.relative_to(export_path)}"
+            return str(file_path)
+        except (ValueError, TypeError):
+            return str(full_path)
+
+    def log_tracking_summary(self) -> None:
+        """
+        Log a grouped summary of all tracked failures.
+
+        Instead of logging each failure individually, this logs counts
+        and sample file paths for each category.
+        """
+        if not self.has_failures():
+            return
+
+        if self.orphaned_metadata:
+            logger.debug(f"Tracked {len(self.orphaned_metadata)} orphaned metadata entries")
+
+        if self.orphaned_media:
+            # Group by reason and show counts
+            reasons: Dict[str, List[str]] = {}
+            for entry in self.orphaned_media:
+                reason = entry.get("reason", "unknown")
+                rel_path = self._relative_path(entry["file_path"])
+                if reason not in reasons:
+                    reasons[reason] = []
+                reasons[reason].append(rel_path)
+
+            for reason, paths in reasons.items():
+                if len(paths) <= 3:
+                    # Show all paths if 3 or fewer
+                    paths_str = ", ".join(paths)
+                    logger.debug(f"Tracked {len(paths)} orphaned media ({reason}): {paths_str}")
+                else:
+                    # Show count and first few examples
+                    samples = ", ".join(paths[:2])
+                    logger.debug(
+                        f"Tracked {len(paths)} orphaned media ({reason}), e.g.: {samples}"
+                    )
+
+        if self.processing_failures:
+            # Group by reason and show counts
+            reasons: Dict[str, List[str]] = {}
+            for entry in self.processing_failures:
+                reason = entry.get("reason", "unknown")
+                rel_path = self._relative_path(entry["file_path"])
+                if reason not in reasons:
+                    reasons[reason] = []
+                reasons[reason].append(rel_path)
+
+            for reason, paths in reasons.items():
+                if len(paths) <= 3:
+                    paths_str = ", ".join(paths)
+                    logger.debug(f"Tracked {len(paths)} processing failures ({reason}): {paths_str}")
+                else:
+                    samples = ", ".join(paths[:2])
+                    logger.debug(
+                        f"Tracked {len(paths)} processing failures ({reason}), e.g.: {samples}"
+                    )
 
     def generate_report(self) -> Dict[str, Any]:
         """
@@ -200,7 +278,7 @@ class FailureTracker:
             source_path = Path(entry["file_path"])
 
             if not source_path.exists():
-                logger.warning(f"Orphaned media file no longer exists: {source_path}")
+                logger.warning(f"Orphaned media file no longer exists: {short_path(source_path)}")
                 entry["context"]["copy_error"] = "Source file not found"
                 continue
 
@@ -331,9 +409,10 @@ class FailureTracker:
         Handle all tracked failures by copying files and generating reports.
 
         This is a convenience method that:
-        1. Copies orphaned media files
-        2. Saves orphaned metadata files
-        3. Saves the failure report
+        1. Logs a grouped summary of tracked failures
+        2. Copies orphaned media files
+        3. Saves orphaned metadata files
+        4. Saves the failure report
 
         Args:
             output_dir: Processor output directory (e.g., {base}/Google Photos/)
@@ -342,6 +421,9 @@ class FailureTracker:
             return
 
         output_path = Path(output_dir)
+
+        # Log grouped summary of what was tracked
+        self.log_tracking_summary()
 
         logger.info(f"Handling failures for {self.processor_name}...")
 

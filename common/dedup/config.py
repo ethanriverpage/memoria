@@ -76,7 +76,7 @@ class DedupConfig:
         desc_max_total: Max total characters for ImageDescription field.
         msg_truncate: Max characters for message content truncation.
         validate_gps_distance: Max GPS distance (meters) for duplicate validation.
-        validate_timestamp_delta: Max timestamp difference (seconds) for validation.
+        validate_timestamp_delta: DEPRECATED - no longer used for validation.
         validate_aspect_ratio: Max aspect ratio difference for validation.
         preprocessing_cache_dir: Directory for preprocessing cache during catalog phase.
     """
@@ -100,7 +100,7 @@ class DedupConfig:
 
     # Duplicate validation thresholds
     validate_gps_distance: float = 500.0  # meters
-    validate_timestamp_delta: float = 3600.0  # seconds (1 hour)
+    validate_timestamp_delta: float = 3600.0  # DEPRECATED: no longer used (see service.py)
     validate_aspect_ratio: float = 0.10  # 10% tolerance
 
     # Preprocessing cache for catalog phase

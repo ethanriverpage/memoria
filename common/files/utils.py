@@ -13,6 +13,7 @@ Performance Features:
 import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -21,6 +22,90 @@ from typing import Optional, Union
 import magic
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# Path Shortening for Logs
+# =============================================================================
+
+# Pattern to match export directory names like:
+# - google-ethanriverpage-20250526
+# - iph17pm-messages-20251121
+# - snapchat-ethanriverpage-20251017_snapchat_messages_eeffbbd4
+# - discord-minmatic-20251204
+_EXPORT_NAME_PATTERN = re.compile(
+    r"^[a-z0-9]+[-_][a-z0-9_]+-\d{8}(?:[-_].+)?$", re.IGNORECASE
+)
+
+
+def short_path(path: Union[str, Path]) -> str:
+    """Shorten a path for logging to just export name and filename.
+
+    Attempts to find the export directory name in the path and returns
+    just the export name and the filename, omitting intermediate directories.
+    Export names match patterns like:
+    - google-username-20250526
+    - iph17pm-messages-20251121
+    - snapchat-username-20251017_snapchat_messages_abc123
+
+    If no export name pattern is found, returns just the filename.
+
+    Args:
+        path: Full path to shorten
+
+    Returns:
+        Shortened path string in format "export-name/filename" or just "filename"
+
+    Examples:
+        >>> short_path("/mnt/media/originals/google-user-20250526/Photos/img.jpg")
+        'google-user-20250526/img.jpg'
+        >>> short_path("/mnt/media/processed/iph17pm-messages-20251121/messages/file.mov")
+        'iph17pm-messages-20251121/file.mov'
+        >>> short_path("/some/unknown/path/to/file.jpg")
+        'file.jpg'
+    """
+    path = Path(path)
+    parts = path.parts
+    filename = path.name
+
+    # Find the first component that looks like an export name
+    for part in parts:
+        if _EXPORT_NAME_PATTERN.match(part):
+            return f"{part}/{filename}"
+
+    # Fallback: just return the filename
+    return filename
+
+
+def get_export_name(path: Union[str, Path]) -> str:
+    """Extract the export directory name from a path.
+
+    Finds the first path component matching export name patterns like:
+    - google-username-20250526
+    - iph17pm-messages-20251121
+    - snapchat-username-20251017_snapchat_messages_abc123
+
+    Args:
+        path: Full path (file or directory) to extract export name from
+
+    Returns:
+        Export name if found, otherwise the path's final component
+
+    Examples:
+        >>> get_export_name("/mnt/media/originals/google-user-20250526/Photos")
+        'google-user-20250526'
+        >>> get_export_name("/mnt/media/pre/snap-user-20251017_snap_msgs_abc/media")
+        'snap-user-20251017_snap_msgs_abc'
+    """
+    path = Path(path)
+    parts = path.parts
+
+    # Find the first component that looks like an export name
+    for part in parts:
+        if _EXPORT_NAME_PATTERN.match(part):
+            return part
+
+    # Fallback: return the directory name
+    return path.name
 
 # Cache reflink support detection per-filesystem (mount point)
 _reflink_support_cache: dict[str, bool] = {}
@@ -121,7 +206,7 @@ def copy_file(
                     check=True,
                     timeout=60,
                 )
-                logger.debug(f"Reflink copy: {src.name} -> {dst}")
+                logger.debug(f"Reflink: {src.name} -> {short_path(dst)}")
                 return
 
             elif system == "Darwin":
@@ -137,7 +222,7 @@ def copy_file(
                     check=True,
                     timeout=60,
                 )
-                logger.debug(f"Clonefile copy: {src.name} -> {dst}")
+                logger.debug(f"Clone: {src.name} -> {short_path(dst)}")
                 return
 
         except subprocess.CalledProcessError as e:
@@ -166,7 +251,7 @@ def copy_file_safe(
         copy_file(src, dst, preserve_metadata)
         return True
     except Exception as e:
-        logger.error(f"Failed to copy {src} to {dst}: {e}")
+        logger.error(f"Copy failed: {short_path(src)} -> {short_path(dst)}: {e}")
         return False
 
 
@@ -200,7 +285,7 @@ MIME_TO_EXTENSION = {
 
 # Import extension definitions from utils.py (single source of truth)
 # These are used for cross-category validation in detect_and_correct_extension()
-from common.utils import (
+from common.utils import (  # noqa: E402
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
     AUDIO_EXTENSIONS,

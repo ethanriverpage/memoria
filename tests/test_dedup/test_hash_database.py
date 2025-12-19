@@ -241,3 +241,446 @@ class TestHashDatabase:
 
         duplicates = temp_db.get_duplicates("abc123")
         assert duplicates[0]["metadata"] == metadata
+
+
+class TestCatalogEntries:
+    """Tests for streaming catalog entry methods."""
+
+    def test_write_catalog_entry(self, temp_db):
+        """Test writing a single catalog entry."""
+        entry = {
+            "source_path": "/path/to/file.jpg",
+            "relative_path": "file.jpg",
+            "content_hash": "abc123",
+            "perceptual_hash": "fff00000",
+            "file_size": 1000,
+            "dimensions": (1920, 1080),
+            "_processor": "Google Photos",
+        }
+
+        result = temp_db.write_catalog_entry("run_001", "export1", entry)
+        assert result is True
+
+        # Verify it was written
+        stats = temp_db.get_run_statistics("run_001")
+        assert stats["total_files"] == 1
+
+    def test_write_catalog_entries_batch(self, temp_db):
+        """Test writing multiple catalog entries in a batch."""
+        entries = [
+            {
+                "source_path": f"/path/file{i}.jpg",
+                "content_hash": f"hash{i}",
+                "_processor": "Google Photos",
+            }
+            for i in range(5)
+        ]
+
+        written = temp_db.write_catalog_entries_batch("run_001", "export1", entries)
+        assert written == 5
+
+        stats = temp_db.get_run_statistics("run_001")
+        assert stats["total_files"] == 5
+
+    def test_get_duplicate_content_hashes(self, temp_db):
+        """Test finding content hashes with duplicates."""
+        # Write entries with duplicate hashes
+        entries = [
+            {"source_path": "/a/1.jpg", "content_hash": "dup_hash", "_processor": "P1"},
+            {"source_path": "/b/1.jpg", "content_hash": "dup_hash", "_processor": "P2"},
+            {"source_path": "/a/2.jpg", "content_hash": "unique", "_processor": "P1"},
+        ]
+        temp_db.write_catalog_entries_batch("run_001", "export1", entries)
+
+        dup_hashes = temp_db.get_duplicate_content_hashes("run_001")
+        assert len(dup_hashes) == 1
+        assert "dup_hash" in dup_hashes
+
+    def test_get_entries_by_hash(self, temp_db):
+        """Test retrieving entries by content hash."""
+        entries = [
+            {"source_path": "/a/1.jpg", "content_hash": "abc123", "_processor": "P1"},
+            {"source_path": "/b/1.jpg", "content_hash": "abc123", "_processor": "P2"},
+            {"source_path": "/a/2.jpg", "content_hash": "def456", "_processor": "P1"},
+        ]
+        temp_db.write_catalog_entries_batch("run_001", "export1", entries)
+
+        matching = temp_db.get_entries_by_hash("run_001", "abc123")
+        assert len(matching) == 2
+        assert all(e["content_hash"] == "abc123" for e in matching)
+
+    def test_iter_all_entries(self, temp_db):
+        """Test iterating over all entries."""
+        entries = [
+            {
+                "source_path": f"/path/file{i}.jpg",
+                "content_hash": f"hash{i}",
+                "_processor": "P",
+            }
+            for i in range(10)
+        ]
+        temp_db.write_catalog_entries_batch("run_001", "export1", entries)
+
+        all_entries = list(temp_db.iter_all_entries("run_001", batch_size=3))
+        assert len(all_entries) == 10
+
+    def test_iter_entries_with_perceptual_hash(self, temp_db):
+        """Test iterating over entries with perceptual hashes."""
+        entries = [
+            {
+                "source_path": "/1.jpg",
+                "content_hash": "h1",
+                "perceptual_hash": "p1",
+                "_processor": "P",
+            },
+            {
+                "source_path": "/2.jpg",
+                "content_hash": "h2",
+                "perceptual_hash": None,
+                "_processor": "P",
+            },
+            {
+                "source_path": "/3.jpg",
+                "content_hash": "h3",
+                "perceptual_hash": "p3",
+                "_processor": "P",
+            },
+        ]
+        temp_db.write_catalog_entries_batch("run_001", "export1", entries)
+
+        with_phash = list(temp_db.iter_entries_with_perceptual_hash("run_001"))
+        assert len(with_phash) == 2
+
+    def test_iter_entries_with_exclusions(self, temp_db):
+        """Test iterating with content hash exclusions."""
+        entries = [
+            {
+                "source_path": "/1.jpg",
+                "content_hash": "h1",
+                "perceptual_hash": "p1",
+                "_processor": "P",
+            },
+            {
+                "source_path": "/2.jpg",
+                "content_hash": "h2",
+                "perceptual_hash": "p2",
+                "_processor": "P",
+            },
+            {
+                "source_path": "/3.jpg",
+                "content_hash": "h3",
+                "perceptual_hash": "p3",
+                "_processor": "P",
+            },
+        ]
+        temp_db.write_catalog_entries_batch("run_001", "export1", entries)
+
+        # Exclude h1 and h2
+        with_phash = list(
+            temp_db.iter_entries_with_perceptual_hash(
+                "run_001", exclude_hashes={"h1", "h2"}
+            )
+        )
+        assert len(with_phash) == 1
+        assert with_phash[0]["content_hash"] == "h3"
+
+    def test_get_run_statistics(self, temp_db):
+        """Test getting statistics for a run."""
+        entries = [
+            {"source_path": "/a/1.jpg", "content_hash": "h1", "_processor": "P1"},
+            {"source_path": "/b/1.jpg", "content_hash": "h1", "_processor": "P2"},
+            {
+                "source_path": "/a/2.jpg",
+                "content_hash": "h2",
+                "perceptual_hash": "ph",
+                "_processor": "P1",
+            },
+        ]
+        temp_db.write_catalog_entries_batch("run_001", "export1", entries)
+
+        stats = temp_db.get_run_statistics("run_001")
+        assert stats["run_id"] == "run_001"
+        assert stats["total_files"] == 3
+        assert stats["unique_content_hashes"] == 2
+        assert stats["duplicate_groups"] == 1
+        assert stats["files_with_perceptual_hash"] == 1
+        assert set(stats["processors"]) == {"P1", "P2"}
+
+    def test_clear_run(self, temp_db):
+        """Test clearing entries for a specific run."""
+        temp_db.write_catalog_entries_batch(
+            "run_001",
+            "export1",
+            [{"source_path": "/1.jpg", "content_hash": "h1", "_processor": "P"}],
+        )
+        temp_db.write_catalog_entries_batch(
+            "run_002",
+            "export2",
+            [{"source_path": "/2.jpg", "content_hash": "h2", "_processor": "P"}],
+        )
+
+        deleted = temp_db.clear_run("run_001")
+        assert deleted == 1
+
+        # run_002 should still exist
+        stats = temp_db.get_run_statistics("run_002")
+        assert stats["total_files"] == 1
+
+        # run_001 should be empty
+        stats = temp_db.get_run_statistics("run_001")
+        assert stats["total_files"] == 0
+
+    def test_isolation_between_runs(self, temp_db):
+        """Test that different runs are isolated."""
+        temp_db.write_catalog_entries_batch(
+            "run_A",
+            "export",
+            [{"source_path": "/a.jpg", "content_hash": "h1", "_processor": "P"}],
+        )
+        temp_db.write_catalog_entries_batch(
+            "run_B",
+            "export",
+            [{"source_path": "/b.jpg", "content_hash": "h1", "_processor": "P"}],
+        )
+
+        # Each run should only see its own entries
+        entries_A = list(temp_db.iter_all_entries("run_A"))
+        entries_B = list(temp_db.iter_all_entries("run_B"))
+
+        assert len(entries_A) == 1
+        assert len(entries_B) == 1
+        assert entries_A[0]["source_path"] == "/a.jpg"
+        assert entries_B[0]["source_path"] == "/b.jpg"
+
+
+class TestHashCache:
+    """Tests for hash caching functionality."""
+
+    def test_cache_and_retrieve_hashes(self, temp_db):
+        """Test basic cache storage and retrieval."""
+        # Cache a file's hashes
+        result = temp_db.cache_hashes(
+            source_path="/path/to/file.jpg",
+            file_size=1000,
+            mtime=1234567890.123,
+            content_hash="abc123def456",
+            perceptual_hash="fff00000",
+            dimensions=(1920, 1080),
+        )
+        assert result is True
+
+        # Retrieve with matching file stats
+        cached = temp_db.get_cached_hashes(
+            source_path="/path/to/file.jpg",
+            file_size=1000,
+            mtime=1234567890.123,
+        )
+        assert cached is not None
+        assert cached["content_hash"] == "abc123def456"
+        assert cached["perceptual_hash"] == "fff00000"
+        assert cached["dimensions"] == [1920, 1080]
+
+    def test_cache_miss_on_size_change(self, temp_db):
+        """Test cache miss when file size changes."""
+        temp_db.cache_hashes(
+            source_path="/path/to/file.jpg",
+            file_size=1000,
+            mtime=1234567890.123,
+            content_hash="abc123",
+        )
+
+        # Different file size should not match
+        cached = temp_db.get_cached_hashes(
+            source_path="/path/to/file.jpg",
+            file_size=2000,  # Changed
+            mtime=1234567890.123,
+        )
+        assert cached is None
+
+    def test_cache_miss_on_mtime_change(self, temp_db):
+        """Test cache miss when file mtime changes."""
+        temp_db.cache_hashes(
+            source_path="/path/to/file.jpg",
+            file_size=1000,
+            mtime=1234567890.123,
+            content_hash="abc123",
+        )
+
+        # Different mtime should not match
+        cached = temp_db.get_cached_hashes(
+            source_path="/path/to/file.jpg",
+            file_size=1000,
+            mtime=1234567899.999,  # Changed
+        )
+        assert cached is None
+
+    def test_cache_miss_on_unknown_path(self, temp_db):
+        """Test cache miss for unknown file path."""
+        cached = temp_db.get_cached_hashes(
+            source_path="/unknown/file.jpg",
+            file_size=1000,
+            mtime=1234567890.123,
+        )
+        assert cached is None
+
+    def test_cache_update_on_file_change(self, temp_db):
+        """Test that cache is updated when file changes."""
+        # Initial cache
+        temp_db.cache_hashes(
+            source_path="/path/to/file.jpg",
+            file_size=1000,
+            mtime=1234567890.0,
+            content_hash="old_hash",
+        )
+
+        # File was modified - cache with new stats
+        temp_db.cache_hashes(
+            source_path="/path/to/file.jpg",
+            file_size=2000,
+            mtime=1234567999.0,
+            content_hash="new_hash",
+        )
+
+        # Old stats should not match
+        cached_old = temp_db.get_cached_hashes(
+            source_path="/path/to/file.jpg",
+            file_size=1000,
+            mtime=1234567890.0,
+        )
+        assert cached_old is None
+
+        # New stats should match
+        cached_new = temp_db.get_cached_hashes(
+            source_path="/path/to/file.jpg",
+            file_size=2000,
+            mtime=1234567999.0,
+        )
+        assert cached_new is not None
+        assert cached_new["content_hash"] == "new_hash"
+
+    def test_cache_without_perceptual_hash(self, temp_db):
+        """Test caching files without perceptual hash."""
+        temp_db.cache_hashes(
+            source_path="/path/to/video.mp4",
+            file_size=50000,
+            mtime=1234567890.0,
+            content_hash="video_hash",
+            perceptual_hash=None,
+            dimensions=None,
+        )
+
+        cached = temp_db.get_cached_hashes(
+            source_path="/path/to/video.mp4",
+            file_size=50000,
+            mtime=1234567890.0,
+        )
+        assert cached is not None
+        assert cached["content_hash"] == "video_hash"
+        assert cached["perceptual_hash"] is None
+        assert cached["dimensions"] is None
+
+    def test_cache_hashes_batch(self, temp_db):
+        """Test batch caching of multiple files."""
+        entries = [
+            {
+                "source_path": f"/path/file{i}.jpg",
+                "file_size": 1000 + i,
+                "mtime": 1234567890.0 + i,
+                "content_hash": f"hash{i}",
+                "perceptual_hash": f"phash{i}",
+                "dimensions": (100 + i, 200 + i),
+            }
+            for i in range(5)
+        ]
+
+        cached_count = temp_db.cache_hashes_batch(entries)
+        assert cached_count == 5
+
+        # Verify each entry
+        for i, entry in enumerate(entries):
+            cached = temp_db.get_cached_hashes(
+                source_path=entry["source_path"],
+                file_size=entry["file_size"],
+                mtime=entry["mtime"],
+            )
+            assert cached is not None
+            assert cached["content_hash"] == f"hash{i}"
+
+    def test_get_hash_cache_statistics(self, temp_db):
+        """Test getting cache statistics."""
+        # Add some cached entries
+        temp_db.cache_hashes(
+            source_path="/1.jpg",
+            file_size=1000,
+            mtime=1234567890.0,
+            content_hash="h1",
+            perceptual_hash="p1",
+        )
+        temp_db.cache_hashes(
+            source_path="/2.jpg",
+            file_size=2000,
+            mtime=1234567890.0,
+            content_hash="h2",
+            perceptual_hash=None,
+        )
+        temp_db.cache_hashes(
+            source_path="/3.jpg",
+            file_size=3000,
+            mtime=1234567890.0,
+            content_hash="h3",
+            perceptual_hash="p3",
+        )
+
+        stats = temp_db.get_hash_cache_statistics()
+        assert stats["total_entries"] == 3
+        assert stats["with_perceptual_hash"] == 2
+
+    def test_clear_hash_cache(self, temp_db):
+        """Test clearing the hash cache."""
+        temp_db.cache_hashes(
+            source_path="/1.jpg",
+            file_size=1000,
+            mtime=1234567890.0,
+            content_hash="h1",
+        )
+        temp_db.cache_hashes(
+            source_path="/2.jpg",
+            file_size=2000,
+            mtime=1234567890.0,
+            content_hash="h2",
+        )
+
+        deleted = temp_db.clear_hash_cache()
+        assert deleted == 2
+
+        stats = temp_db.get_hash_cache_statistics()
+        assert stats["total_entries"] == 0
+
+    def test_prune_hash_cache_with_valid_paths(self, temp_db):
+        """Test pruning cache with a set of valid paths."""
+        temp_db.cache_hashes(
+            source_path="/keep/file1.jpg",
+            file_size=1000,
+            mtime=1234567890.0,
+            content_hash="h1",
+        )
+        temp_db.cache_hashes(
+            source_path="/keep/file2.jpg",
+            file_size=2000,
+            mtime=1234567890.0,
+            content_hash="h2",
+        )
+        temp_db.cache_hashes(
+            source_path="/remove/file3.jpg",
+            file_size=3000,
+            mtime=1234567890.0,
+            content_hash="h3",
+        )
+
+        # Only keep files in /keep/
+        valid_paths = {"/keep/file1.jpg", "/keep/file2.jpg"}
+        removed = temp_db.prune_hash_cache(valid_paths=valid_paths)
+        assert removed == 1
+
+        stats = temp_db.get_hash_cache_statistics()
+        assert stats["total_entries"] == 2

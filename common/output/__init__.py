@@ -7,7 +7,7 @@ This package provides:
 - Progress bar utilities with phase prefixes
 """
 
-from common.output.console import console, section_header, phase_header
+from common.output.console import console, section_header, phase_header, is_subprocess
 from common.output.logging import setup_logging, get_logger
 from common.output.progress import (
     progress_bar,
@@ -25,6 +25,7 @@ __all__ = [
     "console",
     "section_header",
     "phase_header",
+    "is_subprocess",
     # Logging
     "setup_logging",
     "get_logger",

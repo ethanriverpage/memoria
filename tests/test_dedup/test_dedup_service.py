@@ -268,6 +268,99 @@ class TestDeduplicationService:
         assert len(dup["merged_metadata"]["provenance"]) == 2
 
 
+class TestAnalyzeFromDb:
+    """Tests for analyze_from_db() streaming analysis method."""
+
+    def test_analyze_from_db_empty_run(self, service, temp_db):
+        """Test analyzing an empty run."""
+        manifest = service.analyze_from_db("empty_run")
+
+        assert manifest["version"] == "1.0"
+        assert manifest["statistics"]["total_files_scanned"] == 0
+        assert manifest["duplicates"] == {}
+
+    def test_analyze_from_db_finds_duplicates(self, service, temp_db):
+        """Test that duplicates are found when analyzing from DB."""
+        # Write entries with duplicate hashes
+        entries = [
+            {
+                "source_path": "/google/photo.jpg",
+                "content_hash": "abc123",
+                "file_size": 1000,
+                "_processor": "Google Photos",
+                "metadata": {"timestamp": "2024-01-01T10:00:00Z"},
+            },
+            {
+                "source_path": "/imessage/photo.jpg",
+                "content_hash": "abc123",
+                "file_size": 1000,
+                "_processor": "iMessage",
+                "metadata": {"timestamp": "2024-01-02T10:00:00Z"},
+            },
+        ]
+        temp_db.write_catalog_entries_batch("run_001", "export1", entries)
+
+        manifest = service.analyze_from_db("run_001")
+
+        assert manifest["statistics"]["total_files_scanned"] == 2
+        assert manifest["statistics"]["duplicates_found"] == 1
+        assert "abc123" in manifest["duplicates"]
+
+    def test_analyze_from_db_unique_files(self, service, temp_db):
+        """Test that unique files are counted correctly."""
+        entries = [
+            {
+                "source_path": "/1.jpg",
+                "content_hash": "h1",
+                "_processor": "P",
+                "file_size": 100,
+            },
+            {
+                "source_path": "/2.jpg",
+                "content_hash": "h2",
+                "_processor": "P",
+                "file_size": 100,
+            },
+            {
+                "source_path": "/3.jpg",
+                "content_hash": "h3",
+                "_processor": "P",
+                "file_size": 100,
+            },
+        ]
+        temp_db.write_catalog_entries_batch("run_001", "export", entries)
+
+        manifest = service.analyze_from_db("run_001")
+
+        assert manifest["statistics"]["total_files_scanned"] == 3
+        assert manifest["statistics"]["unique_files"] == 3
+        assert manifest["statistics"]["duplicates_found"] == 0
+
+    def test_analyze_from_db_selects_best_file(self, service, temp_db):
+        """Test that best quality file is selected."""
+        entries = [
+            {
+                "source_path": "/small.jpg",
+                "content_hash": "abc123",
+                "file_size": 500,
+                "_processor": "P1",
+            },
+            {
+                "source_path": "/large.jpg",
+                "content_hash": "abc123",
+                "file_size": 2000,
+                "_processor": "P2",
+            },
+        ]
+        temp_db.write_catalog_entries_batch("run_001", "export", entries)
+
+        manifest = service.analyze_from_db("run_001")
+
+        dup = manifest["duplicates"]["abc123"]
+        assert dup["best_quality"]["file_size"] == 2000
+        assert dup["best_quality"]["source_path"] == "/large.jpg"
+
+
 class TestValidateDuplicatePair:
     """Tests for duplicate validation."""
 
@@ -740,7 +833,8 @@ class TestFilterPrimaryFiles:
         # Compute actual hashes
         from common.dedup.hashing import compute_content_hash
 
-        primary_hash = compute_content_hash(primary_file)
+        # primary_hash not needed for this test, but compute to ensure different files
+        _ = compute_content_hash(primary_file)
         secondary_hash = compute_content_hash(secondary_file)
 
         # Build manifest where secondary_file is not primary for "Test Processor"

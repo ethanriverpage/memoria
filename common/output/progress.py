@@ -6,7 +6,6 @@ Provides standardized progress bar formatting with phase prefixes to clearly
 indicate which stage of processing is active. Uses Rich for styled terminal output.
 """
 
-import os
 from concurrent.futures import as_completed, Future
 from typing import Any, Dict, Generator, Iterable, List, Optional, TypeVar
 
@@ -20,7 +19,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from common.output.console import console
+from common.output.console import console, is_subprocess
 
 # Phase constants for consistent naming
 PHASE_PREPROCESS = "Preprocess"
@@ -30,18 +29,6 @@ PHASE_CATALOG = "Catalog"
 PHASE_DEDUP = "Dedup"
 
 T = TypeVar("T")
-
-
-def _is_subprocess() -> bool:
-    """Check if we're running in a subprocess worker.
-
-    Subprocess workers set _MEMORIA_SUBPROCESS=1 to signal that progress bars
-    should be disabled to prevent interleaved output.
-
-    Returns:
-        True if running in a subprocess worker, False otherwise.
-    """
-    return os.environ.get("_MEMORIA_SUBPROCESS") == "1"
 
 
 def _create_progress() -> Progress:
@@ -62,7 +49,7 @@ def _create_progress() -> Progress:
         TimeRemainingColumn(),
         console=console,
         transient=False,
-        disable=_is_subprocess(),
+        disable=is_subprocess(),
     )
 
 
@@ -71,7 +58,7 @@ def progress_bar(
     phase: str,
     action: str,
     total: Optional[int] = None,
-    unit: str = "file",
+    unit: str = "file",  # noqa: ARG001 - kept for API compatibility
 ) -> Generator[T, None, None]:
     """Wrap iterable with standardized progress bar.
 
@@ -105,7 +92,7 @@ def futures_progress(
     futures_dict: Dict[Future, Any],
     phase: str,
     action: str,
-    unit: str = "item",
+    unit: str = "item",  # noqa: ARG001 - kept for API compatibility
 ) -> Generator[Future, None, None]:
     """Progress bar for concurrent.futures.as_completed pattern.
 
@@ -133,7 +120,7 @@ def chunked_progress(
     chunk_size: int,
     phase: str,
     action: str,
-    unit: str = "batch",
+    unit: str = "batch",  # noqa: ARG001 - kept for API compatibility
 ) -> Generator[List[T], None, None]:
     """Yield chunks with progress bar for batch processing.
 

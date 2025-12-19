@@ -16,6 +16,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.dedup.catalog import catalog_media_files
+from common.dedup.description import (
+    SourceEntry,
+    build_description,
+    PLATFORM_INSTAGRAM,
+    SERVICE_STORIES,
+    SERVICE_POSTS,
+    SERVICE_REELS,
+)
 from common.dedup.service import is_file_primary_by_hash
 from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.files.utils import batch_correct_extensions
@@ -136,7 +144,7 @@ class InstagramPublicMediaProcessor(ProcessorBase):
         return True
 
     @staticmethod
-    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
+    def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata."""
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
@@ -160,7 +168,7 @@ class InstagramPublicMediaProcessor(ProcessorBase):
 
         media_files = list(media_files_set)
 
-        return catalog_media_files(
+        yield from catalog_media_files(
             processor_name="Instagram Public Media",
             input_path=input_path,
             media_files=media_files,
@@ -256,8 +264,23 @@ def _build_metadata_requests(
                 ("ModifyDate", exif_date),
             ]
 
-        # Build description
-        default_description = f"Source: Instagram/{export_username}&#xa;Type: {media_type}"
+        # Build description using unified format
+        # Map media_type to service name (story->stories, post->posts, reel->reels)
+        service_map = {
+            "story": SERVICE_STORIES,
+            "stories": SERVICE_STORIES,
+            "post": SERVICE_POSTS,
+            "posts": SERVICE_POSTS,
+            "reel": SERVICE_REELS,
+            "reels": SERVICE_REELS,
+        }
+        service = service_map.get(media_type.lower(), media_type)
+        entry = SourceEntry(
+            processor=PLATFORM_INSTAGRAM,
+            username=export_username,
+            service=service,
+        )
+        default_description = build_description(entry)
 
         requests.append(
             MetadataWriteRequest(
@@ -332,8 +355,7 @@ def process_media_batch(batch_args):
         # Update file_paths and file_info with corrected paths
         file_paths = [corrections.get(p, p) for p in file_paths]
         file_info = [
-            (corrections.get(fp, fp), pd, eu, mt)
-            for fp, pd, eu, mt in file_info
+            (corrections.get(fp, fp), pd, eu, mt) for fp, pd, eu, mt in file_info
         ]
 
     # Phase 3: Update timestamps and compile results

@@ -10,11 +10,16 @@ import logging
 import os
 import re
 import shutil
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.dedup.catalog import catalog_media_files
+from common.dedup.description import (
+    SourceEntry,
+    build_description,
+    PLATFORM_INSTAGRAM,
+    SERVICE_MESSAGES,
+)
 from common.dedup.service import is_file_primary_by_hash
 from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.files.utils import batch_correct_extensions
@@ -123,7 +128,7 @@ class InstagramMessagesProcessor(ProcessorBase):
         return True
 
     @staticmethod
-    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
+    def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata.
 
         Scans all media files in the Instagram Messages export, computes hashes,
@@ -154,18 +159,14 @@ class InstagramMessagesProcessor(ProcessorBase):
 
         if not inbox_dir or not inbox_dir.exists():
             logger.warning(f"No inbox directory found in: {input_path}")
-            return {
-                "processor": "Instagram Messages",
-                "input_dir": str(input_path),
-                "files": [],
-            }
+            return
 
         media_files = []
         for file_path in inbox_dir.rglob("*"):
             if file_path.is_file() and file_path.suffix.lower() in ALL_MEDIA_EXTENSIONS:
                 media_files.append(file_path)
 
-        return catalog_media_files(
+        yield from catalog_media_files(
             processor_name="Instagram Messages",
             input_path=input_path,
             media_files=media_files,
@@ -260,8 +261,15 @@ def _build_metadata_requests(
                 ("ModifyDate", exif_date),
             ]
 
-        # Build description
-        default_description = f"Source: Instagram Messages/{export_username}&#xa;Conversation: \"{conversation_title}\"&#xa;Sender: \"{message_data['sender']}\""
+        # Build description using unified format
+        entry = SourceEntry(
+            processor=PLATFORM_INSTAGRAM,
+            username=export_username,
+            service=SERVICE_MESSAGES,
+            sender=message_data["sender"],
+            conversation=conversation_title,
+        )
+        default_description = build_description(entry)
 
         requests.append(
             MetadataWriteRequest(
@@ -337,8 +345,7 @@ def process_media_batch(batch_args):
         # Update file_paths and file_info with corrected paths
         file_paths = [corrections.get(p, p) for p in file_paths]
         file_info = [
-            (corrections.get(fp, fp), md, ct, eu)
-            for fp, md, ct, eu in file_info
+            (corrections.get(fp, fp), md, ct, eu) for fp, md, ct, eu in file_info
         ]
 
     # Phase 3: Update timestamps and compile results
@@ -348,7 +355,11 @@ def process_media_batch(batch_args):
         if timestamp_str:
             update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
         results.append(
-            (True, output_path, (output_path, message_data, conversation_title, export_username))
+            (
+                True,
+                output_path,
+                (output_path, message_data, conversation_title, export_username),
+            )
         )
 
     return results

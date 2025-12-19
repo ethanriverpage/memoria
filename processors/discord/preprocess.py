@@ -28,11 +28,14 @@ from common.files.filter import BannedFilesFilter
 from common.dedup.hashing import compute_content_hash
 from common.utils import default_worker_count, extract_username_from_export_dir
 from common.failure_tracker import FailureTracker
+from common.output.logging import get_processor_logger
 from common.processing import print_preprocessing_stats
 from common.output.progress import PHASE_PREPROCESS, futures_progress
 
-# Set up logging
+# Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
+# Standardized processor logger for consistent output
+log = get_processor_logger(__name__)
 
 
 # Custom exception so callers can handle failures without killing the process
@@ -132,8 +135,19 @@ class DiscordPreprocessor:
         self.servers_dir = self.export_path / "Servers"
         self.index_file = self.messages_dir / "index.json"
 
-        # Output directories
-        output_base = Path(output_dir) if output_dir else self.export_path
+        # Output directories - require explicit output_dir to prevent writing to exports
+        if output_dir is None:
+            raise ValueError(
+                "output_dir is required. Preprocessors must not write to the export "
+                "directory. Use a temp directory or specify an explicit output path."
+            )
+        output_base = Path(output_dir)
+        # Safety check: never write to the export directory
+        if output_base.resolve() == self.export_path.resolve():
+            raise ValueError(
+                f"output_dir cannot be the same as export_path ({self.export_path}). "
+                "This would corrupt the original export."
+            )
         self.output_dir = output_base
         self.media_output_dir = output_base / "media"
         self.metadata_file = output_base / "metadata.json"
@@ -225,9 +239,9 @@ class DiscordPreprocessor:
 
                 f.write(f"\nTotal logged issues: {len(self.log_entries)}\n")
 
-            logger.info("Saved preprocessing log to %s", self.log_file)
+            log.saved_log(str(self.log_file))
         except Exception as e:
-            logger.warning("Failed to save log file: %s", e)
+            log.logger.warning("Failed to save log file: %s", e)
 
     def validate_export(self) -> bool:
         """Validate that export directory has required Discord structure.
@@ -236,15 +250,15 @@ class DiscordPreprocessor:
             True if valid Discord export, False otherwise
         """
         if not self.export_path.exists():
-            logger.error("Export path does not exist: %s", self.export_path)
+            log.file_not_found(str(self.export_path), "Export path")
             return False
 
         if not self.messages_dir.exists():
-            logger.error("Messages directory not found: %s", self.messages_dir)
+            log.file_not_found(str(self.messages_dir), "Messages directory")
             return False
 
         if not self.index_file.exists():
-            logger.error("Messages index.json not found: %s", self.index_file)
+            log.file_not_found(str(self.index_file), "Messages index.json")
             return False
 
         # Check for at least one channel folder
@@ -254,7 +268,7 @@ class DiscordPreprocessor:
             if d.is_dir() and d.name.startswith("c")
         ]
         if not channel_folders:
-            logger.error("No channel folders found in %s", self.messages_dir)
+            log.logger.error("No channel folders found in %s", self.messages_dir)
             return False
 
         return True
@@ -268,10 +282,10 @@ class DiscordPreprocessor:
         try:
             with open(self.index_file, "r", encoding="utf-8") as f:
                 self.channel_index = json.load(f)
-            logger.info(f"Loaded {len(self.channel_index)} channel mappings")
+            log.loaded_mappings(len(self.channel_index), "channel")
             return self.channel_index
         except Exception as e:
-            logger.error(f"Failed to load channel index: {e}")
+            log.logger.error("Failed to load channel index: %s", e)
             return {}
 
     def load_server_index(self) -> Dict[str, str]:
@@ -287,10 +301,10 @@ class DiscordPreprocessor:
         try:
             with open(server_index_file, "r", encoding="utf-8") as f:
                 self.server_index = json.load(f)
-            logger.info(f"Loaded {len(self.server_index)} server mappings")
+            log.loaded_mappings(len(self.server_index), "server")
             return self.server_index
         except Exception as e:
-            logger.warning(f"Failed to load server index: {e}")
+            log.logger.warning("Failed to load server index: %s", e)
             return {}
 
     def parse_channel_json(self, channel_dir: Path) -> Optional[Dict]:
@@ -348,7 +362,7 @@ class DiscordPreprocessor:
             }
 
         except Exception as e:
-            logger.warning(f"Failed to parse channel.json in {channel_dir}: {e}")
+            log.parse_error(str(channel_dir / "channel.json"), e)
             return None
 
     def parse_messages_json(self, channel_dir: Path) -> List[Dict]:
@@ -369,13 +383,13 @@ class DiscordPreprocessor:
                 messages = json.load(f)
 
             if not isinstance(messages, list):
-                logger.warning(f"messages.json is not a list in {channel_dir}")
+                log.logger.warning("messages.json is not a list in %s", channel_dir)
                 return []
 
             return messages
 
         except Exception as e:
-            logger.warning(f"Failed to parse messages.json in {channel_dir}: {e}")
+            log.parse_error(str(channel_dir / "messages.json"), e)
             return []
 
     def generate_unique_filename(self, original_filename: str, message_id: int) -> str:
@@ -568,7 +582,7 @@ class DiscordPreprocessor:
         try:
             content_hash = self._compute_file_hash(output_path)
         except Exception as e:
-            logger.warning(f"Failed to hash {output_path}: {e}")
+            log.logger.warning("Failed to hash %s: %s", output_path, e)
             # Continue without deduplication if hashing fails
             with self.stats_lock:
                 self.stats["downloads_successful"] += 1
@@ -675,7 +689,9 @@ class DiscordPreprocessor:
         metadata = {
             "export_info": {
                 "export_path": str(self.export_path),
-                "export_username": extract_username_from_export_dir(str(self.export_path), "discord"),
+                "export_username": extract_username_from_export_dir(
+                    str(self.export_path), "discord"
+                ),
                 "processed_date": datetime.now().isoformat(),
             },
             "conversations": {},
@@ -776,7 +792,7 @@ class DiscordPreprocessor:
         # Create media output directory
         self.media_output_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info("Downloading %d attachments...", len(download_tasks))
+        log.downloading(len(download_tasks), "attachments")
 
         # Map to track downloaded files per message
         message_files: Dict[Tuple[str, int], List[str]] = {}
@@ -865,9 +881,9 @@ class DiscordPreprocessor:
             with open(self.metadata_file, "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-            logger.info("Saved metadata to %s", self.metadata_file)
+            log.saved_metadata(str(self.metadata_file))
         except Exception as e:
-            logger.error(f"Failed to save metadata: {e}")
+            log.logger.error("Failed to save metadata: %s", e)
             raise PreprocessingError(f"Failed to save metadata: {e}")
 
     def print_statistics(self) -> None:
@@ -888,9 +904,7 @@ class DiscordPreprocessor:
 
     def process(self) -> None:
         """Main processing pipeline."""
-        logger.info("Starting Discord Export Preprocessing")
-        logger.info("Export path: %s", self.export_path)
-        logger.info("Output path: %s", self.output_dir)
+        log.preprocessor_start("Discord", str(self.export_path), str(self.output_dir))
 
         # Validate export structure
         if not self.validate_export():
@@ -901,12 +915,12 @@ class DiscordPreprocessor:
         self.load_server_index()
 
         # Scan channel directories
-        logger.info("Scanning channel directories...")
+        log.logger.info("Scanning channel directories...")
         channel_dirs = self.scan_channels()
-        logger.info("Found %d channels with messages", len(channel_dirs))
+        log.found_items(len(channel_dirs), "channels with messages")
 
         # Build metadata and collect download tasks
-        logger.info("Parsing messages...")
+        log.parsing("messages")
         metadata, download_tasks = self.build_metadata(channel_dirs)
 
         # Download attachments
@@ -927,7 +941,7 @@ class DiscordPreprocessor:
         # Print statistics
         self.print_statistics()
 
-        logger.info("Preprocessing complete!")
+        log.preprocessing_complete()
 
 
 def main():
@@ -960,8 +974,8 @@ Examples:
         "-o",
         "--output",
         type=str,
-        help="Optional output directory (default: creates folders in export directory)",
-        default=None,
+        required=True,
+        help="Output directory for preprocessed files (required to prevent writing to exports)",
     )
 
     parser.add_argument(

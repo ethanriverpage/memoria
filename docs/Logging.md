@@ -41,6 +41,103 @@ Memoria supports tiered verbosity with `-v` flags:
 - **Verbose (`-v`)**: Troubleshooting, understanding what processors are running
 - **Debug (`-vv`)**: Investigating specific file matching or metadata issues
 
+## Standardized Logging with ProcessorLogger
+
+All processors and preprocessors use the `ProcessorLogger` class for consistent logging output. This ensures uniform log messages across the codebase.
+
+### Using ProcessorLogger
+
+```python
+from common.output.logging import get_processor_logger
+
+# Get a processor logger (at module level)
+log = get_processor_logger(__name__)
+
+# Use standardized methods
+log.processor_start("Google Photos Processor")
+log.loading_metadata("/path/to/metadata.json")
+log.found_files(150, "media")
+log.processing_start("/output/photos")
+log.copied_files(145, 5)
+log.exif_batch_start()
+log.exif_written(145)
+```
+
+### Available Methods
+
+#### Header/Phase Markers
+- `processor_start(name)` - Log processor start with separator
+- `preprocessor_start(name, export_path, output_path)` - Log preprocessor start
+- `phase_separator()` - Log a separator line
+
+#### Metadata and Scanning
+- `loading_metadata(path)` - Log metadata loading
+- `export_username(username)` - Log detected username
+- `scanning_directory(path)` - Log directory scan
+- `found_files(count, file_type)` - Log files found
+- `found_items(count, item_type)` - Log items found (generic)
+
+#### Matching and Processing
+- `building_index(index_type)` - Log index building
+- `matched_files(matched, unmatched)` - Log matching results
+- `skipped_secondary(count)` - Log dedup skipped files
+- `processing_start(output_dir)` - Log processing phase start
+- `using_workers(count)` - Log worker count (DEBUG level)
+- `copied_files(success, failed)` - Log copy results
+- `created_files(success, needs_exif)` - Log file creation results
+
+#### EXIF Operations
+- `exif_batch_start()` - Log EXIF batch start
+- `exif_rebuilding(count)` - Log EXIF rebuild
+- `exif_written(count)` - Log EXIF write completion
+
+#### Preprocessor Operations
+- `downloading(count, item_type)` - Log download start
+- `parsing(item_type)` - Log parsing phase
+- `loaded_mappings(count, mapping_type)` - Log loaded mappings
+- `saved_metadata(path)` - Log metadata save
+- `preprocessing_complete()` - Log preprocessing done
+
+#### Directory Detection
+- `using_preprocessed(path)` - Log using preprocessed export
+- `using_cache(path)` - Log using cache
+- `running_preprocessing()` - Log preprocessing start
+- `preprocessing_to(path)` - Log preprocessing output path
+- `preprocessing_done(path)` - Log preprocessing completion
+- `raw_export_detected(path)` - Log raw export detection
+- `already_preprocessed(path)` - Log already preprocessed
+
+#### Errors and Warnings
+- `file_not_found(path, file_type)` - Log file not found
+- `processing_error(filename, error)` - Log processing error
+- `copy_error(filename, error)` - Log copy error
+- `parse_error(filename, error)` - Log parse error
+- `missing_file(filename, context)` - Log missing file warning
+- `no_metadata_for_file(filename)` - Log no metadata warning
+
+#### Debug Level
+- `detection_failed(processor_name, error)` - Log detection failure
+- `generating_filenames()` - Log filename pre-generation
+- `file_operation(operation, source, dest)` - Log file operations
+
+### Accessing the Underlying Logger
+
+For custom logging needs, access the standard logger via the `logger` property:
+
+```python
+log.logger.info("Custom message: %s", value)
+log.logger.debug("Detailed info: %s", details)
+```
+
+### Log Level Guidelines
+
+| Level | Use Case |
+|-------|----------|
+| DEBUG | File-level operations, worker counts, internal state |
+| INFO | Phase transitions, summary counts, high-level progress |
+| WARNING | Recoverable issues, skipped files, missing optional data |
+| ERROR | Failures that stop processing or require user attention |
+
 ## Visual Elements
 
 ### Progress Bars
@@ -105,6 +202,23 @@ All logs are stored in the `logs/` directory, created automatically in the proje
 File logging is enabled when using `-v` or `-vv` flags:
 - Main log file: `logs/media_processor_YYYYMMDD_HHMMSS.log`
 - Per-export logs: `logs/log-{export-name}_YYYYMMDD_HHMMSS.log` (when using `--originals`)
+
+### File Log Level
+
+By default, file logging captures DEBUG level (all details). For smaller log files, use the `--file-log-level` option:
+
+```bash
+# Default: full DEBUG logging (can produce large files)
+./memoria.py /path/to/export -v
+
+# Smaller logs: INFO level only (phase summaries, no file-level operations)
+./memoria.py /path/to/export -v --file-log-level info
+```
+
+| Level | Contents | Typical Size |
+|-------|----------|--------------|
+| `debug` (default) | All details including file operations | Large (100K+ lines for big exports) |
+| `info` | Phase summaries, counts, and warnings only | Much smaller (100-1000 lines) |
 
 ## Parallel Processing
 

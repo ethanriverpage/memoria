@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.dedup.catalog import catalog_media_files
+from common.dedup.description import (
+    SourceEntry,
+    build_description,
+    PLATFORM_GOOGLE,
+    SERVICE_PHOTOS,
+)
 from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.files.utils import batch_correct_extensions
 from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
@@ -28,6 +34,7 @@ from common.media.exiftool import (
     MetadataWriteRequest,
     PREAMBLE_WITH_IGNORE_ERRORS,
 )
+from common.output.logging import get_processor_logger
 from common.processing import (
     process_batches_parallel,
     print_processing_summary,
@@ -44,7 +51,10 @@ from common.utils import (
 from processors.base import ProcessorBase
 from processors.google_photos.preprocess import GooglePhotosPreprocessor
 
+# Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
+# Standardized processor logger for consistent output
+log = get_processor_logger(__name__)
 
 
 def detect(input_path: Path) -> bool:
@@ -63,7 +73,7 @@ def detect(input_path: Path) -> bool:
         return len(albums) > 0
 
     except Exception as e:
-        logger.debug(f"Detection failed for Google Photos: {e}")
+        log.detection_failed("Google Photos", e)
         return False
 
 
@@ -87,19 +97,17 @@ class GooglePhotosProcessor(ProcessorBase):
         return True
 
     @staticmethod
-    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
+    def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata."""
         input_path = Path(input_dir)
         photos_dir = input_path / "Google Photos"
         workers = kwargs.get("workers", 4)
 
         if not photos_dir.exists():
-            logger.warning(f"Google Photos directory not found: {photos_dir}")
-            return {
-                "processor": "Google Photos",
-                "input_dir": str(input_path),
-                "files": [],
-            }
+            log.logger.warning(
+                "Google Photos directory not found: %s", photos_dir
+            )
+            return
 
         # Collect all media files
         live_photo_videos = set()  # Track videos that are part of Live Photo pairs
@@ -132,9 +140,10 @@ class GooglePhotosProcessor(ProcessorBase):
         # Third pass: filter out Live Photo videos (they'll be cataloged with their image)
         media_files = [f for f in all_files if f not in live_photo_videos]
 
-        logger.info(
-            f"Found {len(media_files)} media files to catalog "
-            f"({len(live_photo_videos)} Live Photo videos grouped with images)"
+        log.logger.info(
+            "Found %d media files to catalog (%d Live Photo videos grouped with images)",
+            len(media_files),
+            len(live_photo_videos),
         )
 
         def extract_google_photos_metadata(file_path: Path) -> Dict[str, Any]:
@@ -196,7 +205,7 @@ class GooglePhotosProcessor(ProcessorBase):
 
             return metadata
 
-        return catalog_media_files(
+        yield from catalog_media_files(
             processor_name="Google Photos",
             input_path=input_path,
             media_files=media_files,
@@ -236,7 +245,7 @@ class GooglePhotosProcessor(ProcessorBase):
             return True
 
         except Exception as e:
-            logger.error(f"Error in GooglePhotosProcessor: {e}")
+            log.logger.error("Error in GooglePhotosProcessor: %s", e)
             return False
 
 
@@ -298,8 +307,13 @@ def _build_metadata_requests(
                 altitude=float(altitude) if altitude != 0.0 else None,
             )
 
-        # Build description
-        default_description = f"Source: Google Photos/{export_username}"
+        # Build description using unified format
+        entry = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username=export_username,
+            service=SERVICE_PHOTOS,
+        )
+        default_description = build_description(entry)
 
         requests.append(
             MetadataWriteRequest(
@@ -340,7 +354,7 @@ def process_media_batch(batch_args):
         output_path = os.path.join(output_dir, output_filename)
 
         if not os.path.exists(media_path):
-            logger.warning(f"Media file not found: {media_path}")
+            log.missing_file(media_path)
             results.append((False, None, None))
             continue
 
@@ -349,7 +363,7 @@ def process_media_batch(batch_args):
             file_paths.append(output_path)
             file_info.append((output_path, media_data, album_name, export_username))
         except Exception as e:
-            logger.error(f"Failed to copy {media_file}: {e}")
+            log.copy_error(media_file, e)
             results.append((False, None, None))
 
     if not file_paths:
@@ -361,8 +375,7 @@ def process_media_batch(batch_args):
         # Update file_paths and file_info with corrected paths
         file_paths = [corrections.get(p, p) for p in file_paths]
         file_info = [
-            (corrections.get(fp, fp), md, an, eu)
-            for fp, md, an, eu in file_info
+            (corrections.get(fp, fp), md, an, eu) for fp, md, an, eu in file_info
         ]
 
     # Phase 3: Update timestamps and compile results
@@ -382,7 +395,7 @@ def process_logic(
     input_dir,
     output_dir="final_googlephotos",
     temp_dir="../pre",
-    verbose=False,
+    verbose=False,  # noqa: ARG001
     workers=None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ):
@@ -393,20 +406,19 @@ def process_logic(
         print_exiftool_error()
         return
 
-    logger.info("Google Photos Media Processor")
-    logger.info("=" * 50)
+    log.processor_start("Google Photos Media Processor")
 
     # Check if input is already preprocessed
     if is_preprocessed_directory(input_dir):
-        logger.info(f"Input directory is already preprocessed: {input_dir}")
+        log.already_preprocessed(input_dir)
         _process_working_directory(input_dir, output_dir, workers, dedup_manifest)
     else:
-        logger.info(f"Input directory is raw export: {input_dir}")
-        logger.info("Running preprocessing...")
+        log.raw_export_detected(input_dir)
+        log.running_preprocessing()
 
         # Use context manager for temp directory with automatic cleanup
         with temp_processing_directory(temp_dir, "gphotos") as temp_dir_path:
-            logger.info(f"Preprocessing to: {temp_dir_path}")
+            log.preprocessing_to(str(temp_dir_path))
 
             # Run preprocessing with final output directory for failure tracking
             final_output_path = Path(output_dir)
@@ -418,7 +430,7 @@ def process_logic(
             )
             preprocessor.process()
 
-            logger.info(f"Preprocessing complete. Using: {temp_dir_path}")
+            log.preprocessing_done(str(temp_dir_path))
             _process_working_directory(
                 str(temp_dir_path), output_dir, workers, dedup_manifest
             )
@@ -437,16 +449,16 @@ def _process_working_directory(
 
     # Check for metadata file (should exist after preprocessing or if already preprocessed)
     if not os.path.exists(metadata_file):
-        logger.error(f"Metadata file not found: {metadata_file}")
+        log.file_not_found(metadata_file, "Metadata file")
         return
 
     # Check for media directory
     if not os.path.exists(media_dir):
-        logger.error(f"Media directory not found: {media_dir}")
+        log.file_not_found(media_dir, "Media directory")
         return
 
     # Load metadata
-    logger.info(f"Loading metadata from {metadata_file}...")
+    log.loading_metadata(metadata_file)
     with open(metadata_file, "r", encoding="utf-8") as f:
         metadata_json = json.load(f)
 
@@ -456,7 +468,7 @@ def _process_working_directory(
     # Count total media files
     total_media_files = len(media_files)
 
-    logger.info("Found %d media files to process", total_media_files)
+    log.found_files(total_media_files, "media")
 
     # Filter out secondary files based on dedup manifest (using hash-based lookup)
     skipped_secondary_files = []
@@ -476,25 +488,24 @@ def _process_working_directory(
                     skipped_secondary_files.append(full_path)
         media_files = filtered_media_files
         skipped_count = original_count - len(media_files)
-        if skipped_count > 0:
-            logger.info(f"Skipped {skipped_count} secondary files (dedup)")
+        log.skipped_secondary(skipped_count)
 
     # Extract export username from export_name
     # Pattern: "google-{username}-{date}" (date can be YYYYMMDD or YYYY-MM-DD)
     export_name = export_info.get("export_name", "")
     export_username = extract_username_from_export_dir(export_name, "google")
 
-    logger.info(f"Export username: {export_username}")
+    log.export_username(export_username)
 
     # Create output directory
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # Determine number of workers
     num_workers = workers if workers is not None else default_worker_count()
-    logger.debug(f"Using {num_workers} parallel workers")
+    log.using_workers(num_workers)
 
     # Pre-generate all output filenames to avoid race conditions
-    logger.debug("Pre-generating filenames...")
+    log.generating_filenames()
 
     # First pass: Group live photos together
     # Live photo pairs (image + video with same timestamp/filename) need the same sequence
@@ -543,7 +554,9 @@ def _process_working_directory(
             # If this is first file in a live photo pair, record base for second file
             if is_live_photo_pair:
                 # Extract base without extension for reuse
-                base = output_filename[: -len(file_ext)] if file_ext else output_filename
+                base = (
+                    output_filename[: -len(file_ext)] if file_ext else output_filename
+                )
                 live_photo_bases[live_photo_key] = base
 
         # Get primary album name for metadata (use first album in list)
@@ -564,8 +577,7 @@ def _process_working_directory(
         )
 
     # Process media files in parallel
-    logger.info("Processing media files to %s/", output_dir)
-    logger.info("=" * 50)
+    log.processing_start(output_dir)
 
     # Use shared batch processing utility (copy files only)
     results = process_batches_parallel(
@@ -590,19 +602,17 @@ def _process_working_directory(
         else:
             failed_count += 1
 
-    logger.info(f"Copied {success_count} files ({failed_count} failed)")
+    log.copied_files(success_count, failed_count)
 
     # Consolidated EXIF processing
     exif_rebuilt_count = 0
     if file_paths:
-        logger.info("Batch processing EXIF metadata...")
+        log.exif_batch_start()
 
         # Validate and rebuild corrupted EXIF
         corrupted_files = batch_validate_exif(file_paths)
         if corrupted_files:
-            logger.info(
-                f"Rebuilding {len(corrupted_files)} corrupted EXIF structures..."
-            )
+            log.exif_rebuilding(len(corrupted_files))
             batch_rebuild_exif(list(corrupted_files))
             exif_rebuilt_count = len(corrupted_files)
 
@@ -610,7 +620,7 @@ def _process_working_directory(
         existing_metadata_map = batch_read_existing_metadata(file_paths)
         requests = _build_metadata_requests(file_info)
         batch_write_metadata_requests(requests, existing_metadata_map)
-        logger.info(f"EXIF metadata written for {len(file_info)} files")
+        log.exif_written(len(file_info))
 
     # Save dedup references for skipped secondary files
     if dedup_manifest and skipped_secondary_files:

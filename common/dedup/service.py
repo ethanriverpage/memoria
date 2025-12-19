@@ -150,6 +150,224 @@ class DeduplicationService:
 
         return manifest
 
+    def analyze_from_db(self, run_id: str) -> Dict[str, Any]:
+        """Analyze catalog entries from database to identify duplicates.
+
+        Memory-efficient alternative to analyze() that reads entries from
+        the database instead of in-memory catalogs. Use this when catalog
+        entries have been written to the database via streaming.
+
+        Args:
+            run_id: Processing run identifier used when writing catalog entries.
+
+        Returns:
+            Deduplication manifest with same structure as analyze().
+        """
+        # Get run statistics
+        stats = self.db.get_run_statistics(run_id)
+        total_files = stats.get("total_files", 0)
+
+        logger.info(f"Analyzing {total_files} files from database (run: {run_id})")
+
+        # Get duplicate content hashes using SQL GROUP BY
+        duplicate_hashes = self.db.get_duplicate_content_hashes(run_id)
+        logger.info(f"Exact hash groups with duplicates: {len(duplicate_hashes)}")
+
+        # Build exact groups by fetching entries for each duplicate hash
+        exact_groups: Dict[str, List[Dict[str, Any]]] = {}
+        for content_hash in progress_bar(
+            duplicate_hashes, PHASE_DEDUP, "Loading duplicate groups", unit="group"
+        ):
+            entries = self.db.get_entries_by_hash(run_id, content_hash)
+            if len(entries) > 1:
+                exact_groups[content_hash] = entries
+
+        # Register files in the persistent database for future lookups
+        # (iterate in batches to avoid loading all files at once)
+        for entry in progress_bar(
+            self.db.iter_all_entries(run_id, batch_size=1000),
+            PHASE_DEDUP,
+            "Registering files",
+            total=total_files,
+            unit="file",
+        ):
+            self.db.register(
+                content_hash=entry.get("content_hash", ""),
+                processor=entry.get("_processor", "Unknown"),
+                source_path=entry.get("source_path", ""),
+                perceptual_hash=entry.get("perceptual_hash"),
+                file_size=entry.get("file_size"),
+                dimensions=entry.get("dimensions"),
+                metadata=entry.get("metadata"),
+            )
+
+        # Group remaining by perceptual hash (if enabled)
+        perceptual_groups: Dict[str, List[Dict[str, Any]]] = {}
+        if self.config.use_perceptual:
+            # Get files not in exact groups that have perceptual hashes
+            grouped_hashes = set(exact_groups.keys())
+            ungrouped = list(
+                progress_bar(
+                    self.db.iter_entries_with_perceptual_hash(
+                        run_id, exclude_hashes=grouped_hashes, batch_size=1000
+                    ),
+                    PHASE_DEDUP,
+                    "Loading perceptual hashes",
+                    unit="file",
+                )
+            )
+            if ungrouped:
+                perceptual_groups = self._group_by_perceptual_hash(ungrouped)
+                logger.info(
+                    f"Perceptual hash groups with duplicates: {len(perceptual_groups)}"
+                )
+
+        # Build manifest - we need all_files count for statistics
+        # But we don't need all files in memory, just the groups
+        manifest = self._build_manifest_from_groups(
+            total_files=total_files,
+            exact_groups=exact_groups,
+            perceptual_groups=perceptual_groups,
+        )
+
+        return manifest
+
+    def _build_manifest_from_groups(
+        self,
+        total_files: int,
+        exact_groups: Dict[str, List[Dict[str, Any]]],
+        perceptual_groups: Dict[str, List[Dict[str, Any]]],
+    ) -> Dict[str, Any]:
+        """Build manifest from pre-computed groups without all_files list.
+
+        Memory-efficient version of _build_manifest that doesn't require
+        holding all files in memory.
+
+        Args:
+            total_files: Total number of files in the run.
+            exact_groups: Groups from exact hash matching.
+            perceptual_groups: Groups from perceptual hash matching.
+
+        Returns:
+            Complete manifest dictionary.
+        """
+        duplicates = {}
+        total_duplicates = 0
+        space_saved = 0
+
+        # Process exact hash groups
+        for content_hash, files in progress_bar(
+            exact_groups.items(),
+            PHASE_DEDUP,
+            "Building manifest (exact)",
+            total=len(exact_groups),
+            unit="group",
+        ):
+            best = self._select_best_file(files)
+            primary = self._determine_primary_source(files)
+            merged = self._merge_metadata(files)
+
+            duplicates[content_hash] = {
+                "match_type": "exact",
+                "primary": {
+                    "processor": primary.get("_processor"),
+                    "source_path": primary.get("source_path"),
+                    "content_hash": content_hash,
+                    "file_size": primary.get("file_size"),
+                },
+                "best_quality": {
+                    "processor": best.get("_processor"),
+                    "source_path": best.get("source_path"),
+                    "content_hash": content_hash,
+                    "file_size": best.get("file_size"),
+                },
+                "secondary": [
+                    {
+                        "processor": f.get("_processor"),
+                        "source_path": f.get("source_path"),
+                        "content_hash": f.get("content_hash"),
+                        "context": f.get("metadata", {}),
+                    }
+                    for f in files
+                    if f.get("source_path") != primary.get("source_path")
+                ],
+                "merged_metadata": merged,
+            }
+
+            total_duplicates += len(files) - 1
+            file_size = best.get("file_size", 0)
+            space_saved += file_size * (len(files) - 1)
+
+        # Process perceptual hash groups
+        for group_id, files in progress_bar(
+            perceptual_groups.items(),
+            PHASE_DEDUP,
+            "Building manifest (perceptual)",
+            total=len(perceptual_groups),
+            unit="group",
+        ):
+            best = self._select_best_file(files)
+            primary = self._determine_primary_source(files)
+            merged = self._merge_metadata(files)
+
+            # Use best file's content hash as key
+            key = f"perceptual_{best.get('content_hash', group_id)}"
+
+            duplicates[key] = {
+                "match_type": "perceptual",
+                "primary": {
+                    "processor": primary.get("_processor"),
+                    "source_path": primary.get("source_path"),
+                    "content_hash": primary.get("content_hash"),
+                    "file_size": primary.get("file_size"),
+                },
+                "best_quality": {
+                    "processor": best.get("_processor"),
+                    "source_path": best.get("source_path"),
+                    "content_hash": best.get("content_hash"),
+                    "file_size": best.get("file_size"),
+                },
+                "secondary": [
+                    {
+                        "processor": f.get("_processor"),
+                        "source_path": f.get("source_path"),
+                        "content_hash": f.get("content_hash"),
+                        "context": f.get("metadata", {}),
+                    }
+                    for f in files
+                    if f.get("source_path") != primary.get("source_path")
+                ],
+                "merged_metadata": merged,
+            }
+
+            total_duplicates += len(files) - 1
+            file_size = best.get("file_size", 0)
+            space_saved += file_size * (len(files) - 1)
+
+        # Build statistics
+        unique_files = total_files - total_duplicates
+
+        manifest = {
+            "version": "1.0",
+            "created": datetime.now(timezone.utc).isoformat(),
+            "statistics": {
+                "total_files_scanned": total_files,
+                "unique_files": unique_files,
+                "duplicate_groups": len(duplicates),
+                "duplicates_found": total_duplicates,
+                "space_saved_bytes": space_saved,
+            },
+            "duplicates": duplicates,
+        }
+
+        logger.info(
+            f"Manifest built: {unique_files} unique, "
+            f"{total_duplicates} duplicates, "
+            f"{space_saved / (1024 * 1024):.1f} MB saved"
+        )
+
+        return manifest
+
     def _register_files(self, files: List[Dict[str, Any]]) -> None:
         """Register all files in the hash database.
 
@@ -299,6 +517,10 @@ class DeduplicationService:
         Distributes hash comparisons across multiple processes for better
         CPU utilization on large datasets.
 
+        Memory-efficient implementation: generates pairs in streaming chunks
+        rather than building all pairs upfront. This keeps memory usage bounded
+        regardless of dataset size.
+
         Args:
             hashable: List of file entries with perceptual hashes.
             threshold: Minimum similarity threshold.
@@ -313,64 +535,126 @@ class DeduplicationService:
 
         logger.info(
             f"Parallel perceptual hash comparison: {num_files} files, "
-            f"{num_pairs} pairs"
+            f"{num_pairs:,} pairs"
         )
 
-        # Build all comparison pairs (indices and hashes only for pickling)
-        pairs = []
-        for i in range(num_files):
-            hash1 = hashable[i].get("perceptual_hash")
-            for j in range(i + 1, num_files):
-                hash2 = hashable[j].get("perceptual_hash")
-                if hash1 and hash2:
-                    pairs.append((i, j, hash1, hash2))
+        # Extract hashes once for efficient access
+        hashes = [f.get("perceptual_hash") for f in hashable]
 
-        if not pairs:
-            return {}
-
-        # Chunk pairs for parallel processing
-        # Use smaller chunks for better load balancing
+        # Determine chunking parameters
         num_workers = min(multiprocessing.cpu_count(), 12)
-        chunk_size = max(1000, len(pairs) // (num_workers * 4))
-        chunks = [pairs[i : i + chunk_size] for i in range(0, len(pairs), chunk_size)]
+        # Use smaller chunks to keep memory bounded (each chunk ~50K pairs max)
+        chunk_size = 50000
+        total_chunks = (num_pairs + chunk_size - 1) // chunk_size
 
-        logger.info(f"Processing {len(chunks)} chunks with {num_workers} workers")
+        logger.info(
+            f"Processing ~{total_chunks:,} chunks with {num_workers} workers "
+            f"(streaming, memory-efficient)"
+        )
 
-        # Process chunks in parallel
-        all_matches = []
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            chunk_args = [(chunk, threshold) for chunk in chunks]
-            for chunk_matches in progress_bar(
-                executor.map(_compare_hash_chunk, chunk_args),
-                PHASE_DEDUP,
-                "Comparing perceptual hashes",
-                total=len(chunks),
-                unit="chunk",
-            ):
-                all_matches.extend(chunk_matches)
-
-        if not all_matches:
-            return {}
-
-        logger.info(f"Found {len(all_matches)} potential matches, building groups")
-
-        # Build groups using Union-Find for clustering
+        # Union-Find structure for clustering (memory: O(n) where n=num_files)
         parent = list(range(num_files))
+        rank = [0] * num_files  # For union by rank optimization
 
         def find(x: int) -> int:
+            # Path compression
             if parent[x] != x:
                 parent[x] = find(parent[x])
             return parent[x]
 
         def union(x: int, y: int) -> None:
+            # Union by rank
             px, py = find(x), find(y)
             if px != py:
-                parent[px] = py
+                if rank[px] < rank[py]:
+                    px, py = py, px
+                parent[py] = px
+                if rank[px] == rank[py]:
+                    rank[px] += 1
 
-        # First pass: union all matching pairs (validated by metadata)
-        for i, j, _similarity in all_matches:
-            if self._validate_duplicate_pair(hashable[i], hashable[j]):
-                union(i, j)
+        # Process pairs in streaming chunks to avoid memory explosion
+        matches_found = 0
+        chunks_processed = 0
+
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            # Generator that yields chunks of pairs (memory-efficient)
+            def generate_pair_chunks():
+                chunk = []
+                for i in range(num_files):
+                    hash1 = hashes[i]
+                    if not hash1:
+                        continue
+                    for j in range(i + 1, num_files):
+                        hash2 = hashes[j]
+                        if not hash2:
+                            continue
+                        chunk.append((i, j, hash1, hash2))
+                        if len(chunk) >= chunk_size:
+                            yield chunk
+                            chunk = []
+                if chunk:
+                    yield chunk
+
+            # Submit chunks as they're generated (bounded memory)
+            # Use a sliding window of pending futures to limit memory
+            max_pending = num_workers * 2
+            pending_futures = []
+            chunk_generator = generate_pair_chunks()
+
+            def submit_next_chunk():
+                try:
+                    chunk = next(chunk_generator)
+                    future = executor.submit(_compare_hash_chunk, (chunk, threshold))
+                    pending_futures.append(future)
+                    return True
+                except StopIteration:
+                    return False
+
+            # Prime the pipeline
+            for _ in range(max_pending):
+                if not submit_next_chunk():
+                    break
+
+            # Process results as they complete
+            for _ in progress_bar(
+                range(total_chunks),
+                PHASE_DEDUP,
+                "Comparing perceptual hashes",
+                unit="chunk",
+            ):
+                if not pending_futures:
+                    break
+
+                # Wait for the oldest future to complete
+                future = pending_futures.pop(0)
+                chunk_matches = future.result()
+                chunks_processed += 1
+
+                # Process matches immediately (union into groups)
+                for i, j, _similarity in chunk_matches:
+                    if self._validate_duplicate_pair(hashable[i], hashable[j]):
+                        union(i, j)
+                        matches_found += 1
+
+                # Submit next chunk to keep pipeline full
+                submit_next_chunk()
+
+            # Drain any remaining futures
+            for future in pending_futures:
+                chunk_matches = future.result()
+                chunks_processed += 1
+                for i, j, _similarity in chunk_matches:
+                    if self._validate_duplicate_pair(hashable[i], hashable[j]):
+                        union(i, j)
+                        matches_found += 1
+
+        if matches_found == 0:
+            logger.info("No perceptual matches found")
+            return {}
+
+        logger.info(
+            f"Found {matches_found:,} validated matches in {chunks_processed:,} chunks"
+        )
 
         # Build groups from union-find structure
         group_members: Dict[int, List[int]] = defaultdict(list)
@@ -436,18 +720,11 @@ class DeduplicationService:
                 )
                 return False
 
-        # Check timestamp delta
-        ts1 = self._extract_timestamp(file1)
-        ts2 = self._extract_timestamp(file2)
-
-        if ts1 and ts2:
-            delta = abs((ts1 - ts2).total_seconds())
-            if delta > self.config.validate_timestamp_delta:
-                logger.debug(
-                    f"Timestamp delta too large: {delta:.0f}s > "
-                    f"{self.config.validate_timestamp_delta}s"
-                )
-                return False
+        # NOTE: Timestamp validation intentionally removed.
+        # Different processors use different timestamp semantics (capture time vs send time).
+        # A photo taken in 2018 and sent via messaging in 2024 would have a 6-year delta
+        # but is still the same image. The perceptual hash threshold (0.92) and other
+        # validations (GPS, aspect ratio) are sufficient to prevent false positives.
 
         # Check aspect ratio
         dims1 = file1.get("dimensions")
@@ -460,10 +737,8 @@ class DeduplicationService:
             if ratio1 > 0 and ratio2 > 0:
                 ratio_diff = abs(ratio1 - ratio2) / max(ratio1, ratio2)
                 if ratio_diff > self.config.validate_aspect_ratio:
-                    logger.debug(
-                        f"Aspect ratio difference too large: {ratio_diff:.2f} > "
-                        f"{self.config.validate_aspect_ratio}"
-                    )
+                    # Aspect ratio mismatch is expected behavior during dedup validation
+                    # Not logged to avoid noise (thousands of comparisons per run)
                     return False
 
         return True
@@ -986,7 +1261,7 @@ def filter_primary_files(
         return files, 0
 
     filtered = []
-    for f in files:
+    for f in progress_bar(files, PHASE_DEDUP, "Filtering duplicates", unit="file"):
         content_hash = compute_content_hash(f)
         if is_file_primary_by_hash(dedup_manifest, content_hash, processor_name):
             filtered.append(f)

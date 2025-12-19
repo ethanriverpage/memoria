@@ -48,13 +48,15 @@ if PERCEPTION_AVAILABLE:
         # Older versions may not have set_backend or may use different config
         pass
 
+from common.files.utils import short_path
+
 logger = logging.getLogger(__name__)
 
 # Default dhash size (16x16 grid = 256-bit hash)
 DEFAULT_HASH_SIZE = 16
 
 # Import extension definitions from utils.py (single source of truth)
-from common.utils import (
+from common.utils import (  # noqa: E402
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
     LIVE_PHOTO_IMAGE_EXTENSIONS,
@@ -203,7 +205,7 @@ def compute_image_hash(
             return hash_bytes.hex()
 
     except Exception as e:
-        logger.debug(f"Failed to compute perceptual hash for {image_path}: {e}")
+        logger.debug(f"Phash failed: {short_path(image_path)}: {e}")
         return None
 
 
@@ -278,7 +280,7 @@ def compute_image_hash_with_dims(
             return (hash_bytes.hex(), original_dimensions)
 
     except Exception as e:
-        logger.debug(f"Failed to compute perceptual hash for {image_path}: {e}")
+        logger.debug(f"Phash failed: {short_path(image_path)}: {e}")
         return (None, None)
 
 
@@ -343,7 +345,7 @@ def _get_video_info(video_path: Path) -> Optional[VideoInfo]:
         return VideoInfo(has_video=True, width=width, height=height)
 
     except Exception as e:
-        logger.debug(f"Failed to get video info for {video_path}: {e}")
+        logger.debug(f"Video info failed: {short_path(video_path)}: {e}")
         return None
 
 
@@ -394,10 +396,14 @@ def _extract_frame_unchecked(
         )
 
         if result.returncode != 0:
-            logger.debug(
-                f"ffmpeg frame extraction failed for {video_path}: "
-                f"{result.stderr.decode()[:200]}"
-            )
+            # Extract just the error line, skipping ffmpeg version banner
+            stderr_text = result.stderr.decode()
+            error_lines = [
+                line for line in stderr_text.split("\n")
+                if line.strip() and not line.startswith(("ffmpeg version", "  ", "lib"))
+            ]
+            error_msg = error_lines[-1] if error_lines else "unknown error"
+            logger.debug(f"Frame extract failed: {short_path(video_path)}: {error_msg}")
             try:
                 frame_path.unlink()
             except Exception:
@@ -406,7 +412,7 @@ def _extract_frame_unchecked(
 
         # Verify frame was created
         if not frame_path.exists() or frame_path.stat().st_size == 0:
-            logger.debug(f"Frame extraction produced no output for {video_path}")
+            logger.debug(f"No frame output: {short_path(video_path)}")
             try:
                 frame_path.unlink()
             except Exception:
@@ -422,7 +428,7 @@ def _extract_frame_unchecked(
         logger.warning("ffmpeg not found, cannot extract video frames")
         return None
     except Exception as e:
-        logger.debug(f"Failed to extract frame from {video_path}: {e}")
+        logger.debug(f"Frame failed: {short_path(video_path)}: {e}")
         return None
 
 
@@ -600,7 +606,7 @@ def get_image_dimensions(file_path: Path) -> Optional[Tuple[int, int]]:
         with Image.open(file_path) as img:
             return img.size
     except Exception as e:
-        logger.debug(f"Failed to get dimensions for {file_path}: {e}")
+        logger.debug(f"Dims failed: {short_path(file_path)}: {e}")
         return None
 
 
@@ -651,7 +657,7 @@ def get_video_dimensions(video_path: Path) -> Optional[Tuple[int, int]]:
                             pass  # Fall through to return None
 
     except Exception as e:
-        logger.debug(f"Failed to get video dimensions for {video_path}: {e}")
+        logger.debug(f"Video dims failed: {short_path(video_path)}: {e}")
 
     return None
 

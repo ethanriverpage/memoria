@@ -12,7 +12,7 @@ import logging
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, Iterator, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,69 @@ class HashDatabase:
                 """
                 CREATE INDEX IF NOT EXISTS idx_processor 
                 ON files(processor)
+            """
+            )
+
+            # Create catalog_entries table for streaming catalog writes
+            # This table stores catalog entries during a processing run,
+            # enabling memory-efficient deduplication across large export sets
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS catalog_entries (
+                    id INTEGER PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    export_name TEXT NOT NULL,
+                    processor TEXT NOT NULL,
+                    source_path TEXT NOT NULL,
+                    relative_path TEXT,
+                    content_hash TEXT NOT NULL,
+                    perceptual_hash TEXT,
+                    file_size INTEGER,
+                    dimensions TEXT,
+                    timestamp TEXT,
+                    metadata JSON,
+                    UNIQUE(run_id, source_path)
+                )
+            """
+            )
+
+            # Create indexes for catalog queries
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_catalog_run_hash 
+                ON catalog_entries(run_id, content_hash)
+            """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_catalog_run 
+                ON catalog_entries(run_id)
+            """
+            )
+
+            # Create hash_cache table for caching computed hashes across runs
+            # Cache key is (source_path, file_size, mtime) to detect file changes
+            # This avoids recomputing expensive hashes for unchanged files
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS hash_cache (
+                    id INTEGER PRIMARY KEY,
+                    source_path TEXT NOT NULL UNIQUE,
+                    file_size INTEGER NOT NULL,
+                    mtime REAL NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    perceptual_hash TEXT,
+                    dimensions TEXT,
+                    cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """
+            )
+
+            # Create index for fast cache lookups by path
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_hash_cache_path 
+                ON hash_cache(source_path)
             """
             )
 
@@ -440,6 +503,396 @@ class HashDatabase:
             logger.info(f"Cleared {deleted} entries for processor: {processor}")
             return deleted
 
+    # =========================================================================
+    # Catalog Entry Methods (Streaming Architecture)
+    # =========================================================================
+
+    def write_catalog_entry(
+        self,
+        run_id: str,
+        export_name: str,
+        entry: Dict[str, Any],
+    ) -> bool:
+        """Write a single catalog entry to the database.
+
+        Called from worker processes during streaming catalog building.
+        Uses INSERT OR REPLACE to handle duplicate source paths.
+
+        Args:
+            run_id: Unique identifier for this processing run.
+            export_name: Name of the export directory.
+            entry: Catalog entry dict with file information.
+
+        Returns:
+            True if written successfully, False on error.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Extract and serialize fields
+            dimensions = entry.get("dimensions")
+            dimensions_str = json.dumps(dimensions) if dimensions else None
+            metadata = entry.get("metadata")
+            metadata_str = json.dumps(metadata) if metadata else None
+
+            try:
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO catalog_entries (
+                        run_id, export_name, processor, source_path, relative_path,
+                        content_hash, perceptual_hash, file_size, dimensions,
+                        timestamp, metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        export_name,
+                        entry.get("_processor", "Unknown"),
+                        entry.get("source_path", ""),
+                        entry.get("relative_path", ""),
+                        entry.get("content_hash", ""),
+                        entry.get("perceptual_hash"),
+                        entry.get("file_size"),
+                        dimensions_str,
+                        entry.get("timestamp"),
+                        metadata_str,
+                    ),
+                )
+                conn.commit()
+                return True
+            except sqlite3.Error as e:
+                logger.error(f"Failed to write catalog entry: {e}")
+                return False
+
+    def write_catalog_entries_batch(
+        self,
+        run_id: str,
+        export_name: str,
+        entries: List[Dict[str, Any]],
+    ) -> int:
+        """Write multiple catalog entries in a single transaction.
+
+        More efficient than individual writes for bulk operations.
+
+        Args:
+            run_id: Unique identifier for this processing run.
+            export_name: Name of the export directory.
+            entries: List of catalog entry dicts.
+
+        Returns:
+            Number of entries written successfully.
+        """
+        if not entries:
+            return 0
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            written = 0
+
+            try:
+                for entry in entries:
+                    dimensions = entry.get("dimensions")
+                    dimensions_str = json.dumps(dimensions) if dimensions else None
+                    metadata = entry.get("metadata")
+                    metadata_str = json.dumps(metadata) if metadata else None
+
+                    cursor.execute(
+                        """
+                        INSERT OR REPLACE INTO catalog_entries (
+                            run_id, export_name, processor, source_path, relative_path,
+                            content_hash, perceptual_hash, file_size, dimensions,
+                            timestamp, metadata
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            run_id,
+                            export_name,
+                            entry.get("_processor", "Unknown"),
+                            entry.get("source_path", ""),
+                            entry.get("relative_path", ""),
+                            entry.get("content_hash", ""),
+                            entry.get("perceptual_hash"),
+                            entry.get("file_size"),
+                            dimensions_str,
+                            entry.get("timestamp"),
+                            metadata_str,
+                        ),
+                    )
+                    written += 1
+
+                conn.commit()
+                return written
+            except sqlite3.Error as e:
+                logger.error(f"Failed to write catalog entries batch: {e}")
+                conn.rollback()
+                return written
+
+    def get_duplicate_content_hashes(self, run_id: str) -> List[str]:
+        """Get content hashes that appear more than once in a run.
+
+        Uses SQL GROUP BY for memory-efficient duplicate detection.
+
+        Args:
+            run_id: Processing run identifier.
+
+        Returns:
+            List of content hash strings with duplicates.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT content_hash FROM catalog_entries
+                WHERE run_id = ?
+                GROUP BY content_hash
+                HAVING COUNT(*) > 1
+                """,
+                (run_id,),
+            )
+            return [row[0] for row in cursor.fetchall()]
+
+    def get_entries_by_hash(
+        self,
+        run_id: str,
+        content_hash: str,
+    ) -> List[Dict[str, Any]]:
+        """Get all catalog entries with a specific content hash.
+
+        Args:
+            run_id: Processing run identifier.
+            content_hash: Content hash to search for.
+
+        Returns:
+            List of catalog entry dicts.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, run_id, export_name, processor, source_path, relative_path,
+                       content_hash, perceptual_hash, file_size, dimensions,
+                       timestamp, metadata
+                FROM catalog_entries
+                WHERE run_id = ? AND content_hash = ?
+                """,
+                (run_id, content_hash),
+            )
+            return [self._catalog_row_to_dict(row) for row in cursor.fetchall()]
+
+    def iter_all_entries(
+        self,
+        run_id: str,
+        batch_size: int = 1000,
+    ) -> Iterator[Dict[str, Any]]:
+        """Iterate over all catalog entries for a run.
+
+        Memory-efficient generator that fetches entries in batches.
+
+        Args:
+            run_id: Processing run identifier.
+            batch_size: Number of entries to fetch per batch.
+
+        Yields:
+            Catalog entry dicts one at a time.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, run_id, export_name, processor, source_path, relative_path,
+                       content_hash, perceptual_hash, file_size, dimensions,
+                       timestamp, metadata
+                FROM catalog_entries
+                WHERE run_id = ?
+                ORDER BY id
+                """,
+                (run_id,),
+            )
+
+            while True:
+                rows = cursor.fetchmany(batch_size)
+                if not rows:
+                    break
+                for row in rows:
+                    yield self._catalog_row_to_dict(row)
+
+    def iter_entries_with_perceptual_hash(
+        self,
+        run_id: str,
+        exclude_hashes: Optional[set] = None,
+        batch_size: int = 1000,
+    ) -> Iterator[Dict[str, Any]]:
+        """Iterate over entries with perceptual hashes, optionally excluding some content hashes.
+
+        Used for perceptual duplicate detection after exact hash grouping.
+
+        Args:
+            run_id: Processing run identifier.
+            exclude_hashes: Set of content hashes to exclude (already grouped).
+            batch_size: Number of entries to fetch per batch.
+
+        Yields:
+            Catalog entry dicts with perceptual hashes.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            if exclude_hashes:
+                # Build placeholders for IN clause - this is safe as placeholders
+                # are generated programmatically (not from user input) and values
+                # are passed as parameters
+                placeholders = ",".join("?" * len(exclude_hashes))
+                query = f"""
+                    SELECT id, run_id, export_name, processor, source_path, relative_path,
+                           content_hash, perceptual_hash, file_size, dimensions,
+                           timestamp, metadata
+                    FROM catalog_entries
+                    WHERE run_id = ? 
+                      AND perceptual_hash IS NOT NULL
+                      AND content_hash NOT IN ({placeholders})
+                    ORDER BY id
+                    """  # nosec B608 - placeholders are safe (generated ? marks)
+                cursor.execute(query, (run_id, *exclude_hashes))
+            else:
+                cursor.execute(
+                    """
+                    SELECT id, run_id, export_name, processor, source_path, relative_path,
+                           content_hash, perceptual_hash, file_size, dimensions,
+                           timestamp, metadata
+                    FROM catalog_entries
+                    WHERE run_id = ? AND perceptual_hash IS NOT NULL
+                    ORDER BY id
+                    """,
+                    (run_id,),
+                )
+
+            while True:
+                rows = cursor.fetchmany(batch_size)
+                if not rows:
+                    break
+                for row in rows:
+                    yield self._catalog_row_to_dict(row)
+
+    def get_run_statistics(self, run_id: str) -> Dict[str, Any]:
+        """Get statistics for a specific processing run.
+
+        Args:
+            run_id: Processing run identifier.
+
+        Returns:
+            Dict with total files, unique hashes, duplicate groups, etc.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "SELECT COUNT(*) FROM catalog_entries WHERE run_id = ?",
+                (run_id,),
+            )
+            total_files = cursor.fetchone()[0]
+
+            cursor.execute(
+                "SELECT COUNT(DISTINCT content_hash) FROM catalog_entries WHERE run_id = ?",
+                (run_id,),
+            )
+            unique_hashes = cursor.fetchone()[0]
+
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM (
+                    SELECT content_hash FROM catalog_entries
+                    WHERE run_id = ?
+                    GROUP BY content_hash HAVING COUNT(*) > 1
+                )
+                """,
+                (run_id,),
+            )
+            duplicate_groups = cursor.fetchone()[0]
+
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM catalog_entries 
+                WHERE run_id = ? AND perceptual_hash IS NOT NULL
+                """,
+                (run_id,),
+            )
+            with_perceptual = cursor.fetchone()[0]
+
+            cursor.execute(
+                "SELECT DISTINCT processor FROM catalog_entries WHERE run_id = ?",
+                (run_id,),
+            )
+            processors = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute(
+                "SELECT DISTINCT export_name FROM catalog_entries WHERE run_id = ?",
+                (run_id,),
+            )
+            exports = [row[0] for row in cursor.fetchall()]
+
+            return {
+                "run_id": run_id,
+                "total_files": total_files,
+                "unique_content_hashes": unique_hashes,
+                "duplicate_groups": duplicate_groups,
+                "files_with_perceptual_hash": with_perceptual,
+                "processors": processors,
+                "exports": exports,
+            }
+
+    def clear_run(self, run_id: str) -> int:
+        """Clear all catalog entries for a specific run.
+
+        Args:
+            run_id: Processing run identifier to clear.
+
+        Returns:
+            Number of entries deleted.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM catalog_entries WHERE run_id = ?",
+                (run_id,),
+            )
+            conn.commit()
+            deleted = cursor.rowcount
+            logger.debug(f"Cleared {deleted} catalog entries for run: {run_id}")
+            return deleted
+
+    def _catalog_row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+        """Convert a catalog_entries row to a dictionary.
+
+        Args:
+            row: sqlite3.Row object from catalog_entries table.
+
+        Returns:
+            Dict with catalog entry information, formatted for dedup service.
+        """
+        result = {
+            "source_path": row["source_path"],
+            "relative_path": row["relative_path"],
+            "content_hash": row["content_hash"],
+            "perceptual_hash": row["perceptual_hash"],
+            "file_size": row["file_size"],
+            "timestamp": row["timestamp"],
+            "_processor": row["processor"],
+            "_export_name": row["export_name"],
+        }
+
+        # Parse JSON fields
+        if row["dimensions"]:
+            result["dimensions"] = json.loads(row["dimensions"])
+        else:
+            result["dimensions"] = None
+
+        if row["metadata"]:
+            result["metadata"] = json.loads(row["metadata"])
+        else:
+            result["metadata"] = {}
+
+        return result
+
     def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         """Convert a database row to a dictionary.
 
@@ -458,6 +911,258 @@ class HashDatabase:
             result["metadata"] = json.loads(result["metadata"])
 
         return result
+
+    # =========================================================================
+    # Hash Cache Methods (Caching for Repeated Runs)
+    # =========================================================================
+
+    def get_cached_hashes(
+        self,
+        source_path: str,
+        file_size: int,
+        mtime: float,
+    ) -> Optional[Dict[str, Any]]:
+        """Look up cached hashes for a file.
+
+        Returns cached hashes only if the file hasn't changed (same size and mtime).
+        This avoids recomputing expensive hashes for unchanged files.
+
+        Args:
+            source_path: Absolute path to the file.
+            file_size: Current file size in bytes.
+            mtime: Current file modification time (from os.stat().st_mtime).
+
+        Returns:
+            Dict with cached hash data if found and valid, None otherwise.
+            Structure: {
+                "content_hash": str,
+                "perceptual_hash": str | None,
+                "dimensions": tuple | None,
+            }
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT content_hash, perceptual_hash, dimensions
+                FROM hash_cache
+                WHERE source_path = ? AND file_size = ? AND mtime = ?
+                """,
+                (source_path, file_size, mtime),
+            )
+            row = cursor.fetchone()
+
+            if row is None:
+                return None
+
+            result = {
+                "content_hash": row["content_hash"],
+                "perceptual_hash": row["perceptual_hash"],
+                "dimensions": None,
+            }
+
+            if row["dimensions"]:
+                result["dimensions"] = json.loads(row["dimensions"])
+
+            return result
+
+    def cache_hashes(
+        self,
+        source_path: str,
+        file_size: int,
+        mtime: float,
+        content_hash: str,
+        perceptual_hash: Optional[str] = None,
+        dimensions: Optional[tuple] = None,
+    ) -> bool:
+        """Store computed hashes in the cache.
+
+        Uses INSERT OR REPLACE to update existing entries when file changes.
+
+        Args:
+            source_path: Absolute path to the file.
+            file_size: File size in bytes.
+            mtime: File modification time (from os.stat().st_mtime).
+            content_hash: Computed xxHash64 hex digest.
+            perceptual_hash: Optional computed perceptual hash.
+            dimensions: Optional (width, height) tuple.
+
+        Returns:
+            True if cached successfully, False on error.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            dimensions_str = json.dumps(dimensions) if dimensions else None
+
+            try:
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO hash_cache (
+                        source_path, file_size, mtime, content_hash,
+                        perceptual_hash, dimensions, cached_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (
+                        source_path,
+                        file_size,
+                        mtime,
+                        content_hash,
+                        perceptual_hash,
+                        dimensions_str,
+                    ),
+                )
+                conn.commit()
+                return True
+            except sqlite3.Error as e:
+                logger.error(f"Failed to cache hashes for {source_path}: {e}")
+                return False
+
+    def cache_hashes_batch(
+        self,
+        entries: List[Dict[str, Any]],
+    ) -> int:
+        """Store multiple hash entries in the cache in a single transaction.
+
+        More efficient than individual cache_hashes() calls for bulk operations.
+
+        Args:
+            entries: List of dicts with keys:
+                - source_path: str
+                - file_size: int
+                - mtime: float
+                - content_hash: str
+                - perceptual_hash: str | None
+                - dimensions: tuple | None
+
+        Returns:
+            Number of entries cached successfully.
+        """
+        if not entries:
+            return 0
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cached = 0
+
+            try:
+                for entry in entries:
+                    dimensions = entry.get("dimensions")
+                    dimensions_str = json.dumps(dimensions) if dimensions else None
+
+                    cursor.execute(
+                        """
+                        INSERT OR REPLACE INTO hash_cache (
+                            source_path, file_size, mtime, content_hash,
+                            perceptual_hash, dimensions, cached_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        """,
+                        (
+                            entry["source_path"],
+                            entry["file_size"],
+                            entry["mtime"],
+                            entry["content_hash"],
+                            entry.get("perceptual_hash"),
+                            dimensions_str,
+                        ),
+                    )
+                    cached += 1
+
+                conn.commit()
+                return cached
+            except sqlite3.Error as e:
+                logger.error(f"Failed to cache hashes batch: {e}")
+                conn.rollback()
+                return cached
+
+    def get_hash_cache_statistics(self) -> Dict[str, Any]:
+        """Get statistics about the hash cache.
+
+        Returns:
+            Dict with cache statistics:
+            - total_entries: Total cached files
+            - with_perceptual: Files with perceptual hashes
+            - cache_size_bytes: Approximate database size for cache
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT COUNT(*) FROM hash_cache")
+            total_entries = cursor.fetchone()[0]
+
+            cursor.execute(
+                "SELECT COUNT(*) FROM hash_cache WHERE perceptual_hash IS NOT NULL"
+            )
+            with_perceptual = cursor.fetchone()[0]
+
+            return {
+                "total_entries": total_entries,
+                "with_perceptual_hash": with_perceptual,
+            }
+
+    def clear_hash_cache(self) -> int:
+        """Clear all entries from the hash cache.
+
+        Returns:
+            Number of entries deleted.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM hash_cache")
+            conn.commit()
+            deleted = cursor.rowcount
+            logger.info(f"Cleared {deleted} entries from hash cache")
+            return deleted
+
+    def prune_hash_cache(self, valid_paths: Optional[set] = None) -> int:
+        """Remove cache entries for files that no longer exist.
+
+        Args:
+            valid_paths: Optional set of valid paths to keep. If None,
+                         checks filesystem for each cached path.
+
+        Returns:
+            Number of stale entries removed.
+        """
+        import os
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            if valid_paths is not None:
+                # Remove entries not in valid_paths set
+                cursor.execute("SELECT id, source_path FROM hash_cache")
+                to_delete = []
+                for row in cursor.fetchall():
+                    if row["source_path"] not in valid_paths:
+                        to_delete.append(row["id"])
+
+                if to_delete:
+                    placeholders = ",".join("?" * len(to_delete))
+                    cursor.execute(
+                        f"DELETE FROM hash_cache WHERE id IN ({placeholders})",
+                        to_delete,
+                    )
+                    conn.commit()
+                    return len(to_delete)
+                return 0
+            else:
+                # Check filesystem for each path
+                cursor.execute("SELECT id, source_path FROM hash_cache")
+                to_delete = []
+                for row in cursor.fetchall():
+                    if not os.path.exists(row["source_path"]):
+                        to_delete.append(row["id"])
+
+                if to_delete:
+                    placeholders = ",".join("?" * len(to_delete))
+                    cursor.execute(
+                        f"DELETE FROM hash_cache WHERE id IN ({placeholders})",
+                        to_delete,
+                    )
+                    conn.commit()
+                    logger.info(f"Pruned {len(to_delete)} stale cache entries")
+                    return len(to_delete)
+                return 0
 
     @staticmethod
     def _hex_to_bits(hex_string: str) -> str:

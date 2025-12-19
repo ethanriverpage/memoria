@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.dedup.catalog import catalog_media_files
+from common.dedup.description import (
+    SourceEntry,
+    build_source_line,
+    build_message_context,
+    PLATFORM_IMESSAGE,
+)
 from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
 from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.files.utils import batch_correct_extensions
@@ -29,6 +35,7 @@ from common.media.exiftool import (
     DescriptionWriteSpec,
     MetadataWriteRequest,
 )
+from common.output.logging import get_processor_logger
 from common.processing import print_processing_summary
 from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import (
@@ -41,7 +48,10 @@ from common.utils import (
 from processors.base import ProcessorBase
 from processors.imessage_imazing.preprocess import ImazingPreprocessor
 
+# Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
+# Standardized processor logger for consistent output
+log = get_processor_logger(__name__)
 
 
 def detect(input_path: Path) -> bool:
@@ -102,7 +112,7 @@ def detect(input_path: Path) -> bool:
         return False
 
     except Exception as e:
-        logger.debug(f"Detection failed for iMazing: {e}")
+        log.detection_failed("iMazing", e)
         return False
 
 
@@ -130,7 +140,7 @@ class ImazingProcessor(ProcessorBase):
         return True
 
     @staticmethod
-    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
+    def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata."""
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
@@ -168,9 +178,10 @@ class ImazingProcessor(ProcessorBase):
         # Filter out Live Photo videos
         media_files = [f for f in all_files if f not in live_photo_videos]
 
-        logger.info(
-            f"Found {len(media_files)} media files to catalog "
-            f"({len(live_photo_videos)} Live Photo videos grouped with images)"
+        log.logger.info(
+            "Found %d media files to catalog (%d Live Photo videos grouped with images)",
+            len(media_files),
+            len(live_photo_videos),
         )
 
         def extract_live_photo_metadata(file_path: Path) -> Dict[str, Any]:
@@ -187,7 +198,7 @@ class ImazingProcessor(ProcessorBase):
                         break
             return metadata
 
-        return catalog_media_files(
+        yield from catalog_media_files(
             processor_name="iMessage-iMazing",
             input_path=input_path,
             media_files=media_files,
@@ -230,7 +241,7 @@ def _extract_device_from_source_export(source_export: str) -> str:
 
 
 def _build_description(message: dict, export_username: str) -> str:
-    """Build the description string for an iMessage."""
+    """Build the description string for an iMessage using unified format."""
     is_merged = "messages" in message and isinstance(message["messages"], list)
 
     # Determine the correct source device identifier
@@ -268,7 +279,13 @@ def _build_description(message: dict, export_username: str) -> str:
         else:
             source_device = export_username
 
-    description_parts = [f"Source: iMessage/{source_device}"]
+    # Build source line using unified format
+    source_entry = SourceEntry(
+        processor=PLATFORM_IMESSAGE,
+        username=source_device,
+    )
+    source_line = build_source_line(source_entry)
+    description_parts = [source_line]
 
     if is_merged:
         seen_lines: set = set()
@@ -285,14 +302,16 @@ def _build_description(message: dict, export_username: str) -> str:
             else:
                 conv_name = conv_title or "Unknown"
 
-            msg_line = f'  - {sender} in "{conv_name}"'
-            if content:
-                content = content.replace("\n", " ")
-                if len(content) > 100:
-                    content = content[:97] + "..."
-                msg_line += f': "{content}"'
+            # Use unified message context format
+            msg_entry = SourceEntry(
+                processor=PLATFORM_IMESSAGE,
+                sender=sender,
+                conversation=conv_name,
+                content=content,
+            )
+            msg_line = build_message_context(msg_entry)
 
-            if msg_line not in seen_lines:
+            if msg_line and msg_line not in seen_lines:
                 seen_lines.add(msg_line)
                 description_parts.append(msg_line)
 
@@ -310,14 +329,17 @@ def _build_description(message: dict, export_username: str) -> str:
         else:
             conv_name = conv_title or "Unknown"
 
-        msg_line = f'  - {sender} in "{conv_name}"'
-        if content:
-            content = content.replace("\n", " ")
-            if len(content) > 100:
-                content = content[:97] + "..."
-            msg_line += f': "{content}"'
+        # Use unified message context format
+        msg_entry = SourceEntry(
+            processor=PLATFORM_IMESSAGE,
+            sender=sender,
+            conversation=conv_name,
+            content=content,
+        )
+        msg_line = build_message_context(msg_entry)
+        if msg_line:
+            description_parts.append(msg_line)
 
-        description_parts.append(msg_line)
         source_description = "&#xa;".join(description_parts)
 
     if message.get("is_live_photo_video"):
@@ -465,7 +487,7 @@ def _process_file_worker(args_tuple):
         return (True, str(output_path), message, export_username)
 
     except Exception as e:
-        logger.error(f"Error processing {media_path.name}: {e}")
+        log.processing_error(media_path.name, e)
         return (False, None, message, export_username)
 
 
@@ -483,8 +505,7 @@ def process_logic(
         print_exiftool_error()
         return False
 
-    logger.info("iMazing iMessage Processor")
-    logger.info("=" * 50)
+    log.processor_start("iMazing iMessage Processor")
 
     input_path = Path(input_dir)
 
@@ -507,10 +528,10 @@ def process_logic(
         if already_preprocessed:
             # Use preprocessed export directly
             working_dir = input_path
-            logger.info(f"Using preprocessed export: {working_dir}")
+            log.using_preprocessed(str(working_dir))
         else:
             # Need to run preprocessing
-            logger.info("Running preprocessing...")
+            log.running_preprocessing()
 
             # Create temp directory
             temp_base = Path(temp_dir).resolve()
@@ -521,7 +542,7 @@ def process_logic(
             temp_dir_created = temp_base / f"imazing_temp_{timestamp}_{unique_id}"
             temp_dir_created.mkdir(parents=True, exist_ok=True)
 
-            logger.info(f"Preprocessing to: {temp_dir_created}")
+            log.preprocessing_to(str(temp_dir_created))
 
             # Run preprocessor
             preprocessor = ImazingPreprocessor(
@@ -531,40 +552,40 @@ def process_logic(
             )
 
             if not preprocessor.process():
-                logger.error("Preprocessing failed")
+                log.logger.error("Preprocessing failed")
                 return False
 
             working_dir = temp_dir_created
-            logger.info(f"Preprocessing complete. Using: {working_dir}")
+            log.preprocessing_done(str(working_dir))
 
         # Load metadata
         metadata_file = working_dir / "metadata.json"
         media_dir = working_dir / "media"
 
         if not metadata_file.exists():
-            logger.error(f"Metadata file not found: {metadata_file}")
+            log.file_not_found(str(metadata_file), "Metadata file")
             return False
 
         if not media_dir.exists():
-            logger.error(f"Media directory not found: {media_dir}")
+            log.file_not_found(str(media_dir), "Media directory")
             return False
 
-        logger.info(f"Loading metadata from {metadata_file}...")
+        log.loading_metadata(str(metadata_file))
         metadata = load_metadata(metadata_file)
 
         export_username = metadata.get("export_info", {}).get(
             "export_username", "unknown"
         )
-        logger.info(f"Export identifier: {export_username}")
+        log.export_username(export_username)
 
         # Build filename index
         filename_index = build_filename_index(metadata)
-        logger.info(f"Found {len(filename_index)} media files to process")
+        log.found_items(len(filename_index), "media files to process")
 
         # Scan media directory
         media_files = list(media_dir.iterdir())
         media_files = [f for f in media_files if f.is_file()]
-        logger.info(f"Found {len(media_files)} files in media directory")
+        log.found_files(len(media_files), "files in media directory")
 
         # Filter out secondary files based on dedup manifest (using hash-based lookup)
         skipped_secondary_files = []
@@ -581,11 +602,10 @@ def process_logic(
                     skipped_secondary_files.append(str(f))
             media_files = filtered_files
             skipped_count = original_count - len(media_files)
-            if skipped_count > 0:
-                logger.info(f"Skipped {skipped_count} secondary files (dedup)")
+            log.skipped_secondary(skipped_count)
 
         # Match files to messages and pre-generate filenames
-        logger.info("Matching files and generating filenames...")
+        log.logger.info("Matching files and generating filenames...")
         filename_gen = FilenameGenerator(
             "imessage", timestamp_format="%Y-%m-%d %H:%M:%S UTC"
         )
@@ -602,16 +622,15 @@ def process_logic(
                 output_filename = filename_gen.generate(timestamp, identifier, file_ext)
                 matched_files.append((media_file, message, output_filename))
             else:
-                logger.warning(f"No metadata for file: {media_file.name}")
+                log.no_metadata_for_file(media_file.name)
 
-        logger.info(f"Matched {len(matched_files)} files")
+        log.matched_files(len(matched_files))
 
         # Process files
-        logger.info(f"Processing files to {messages_output_dir}/")
-        logger.info("=" * 50)
+        log.processing_start(str(messages_output_dir))
 
         num_workers = workers if workers is not None else default_worker_count()
-        logger.info(f"Using {num_workers} workers")
+        log.using_workers(num_workers)
 
         # Prepare arguments
         process_args = [
@@ -649,7 +668,7 @@ def process_logic(
             else:
                 failed_count += 1
 
-        logger.info(f"Copied {success_count} files ({failed_count} failed)")
+        log.copied_files(success_count, failed_count)
 
         # Phase 2: Correct file extensions based on actual content
         if file_paths:
@@ -664,14 +683,12 @@ def process_logic(
         # Phase 3: Batch EXIF processing
         exif_rebuilt_count = 0
         if file_paths:
-            logger.info("Batch processing EXIF metadata...")
+            log.exif_batch_start()
 
             # Validate and rebuild corrupted EXIF
             corrupted_files = batch_validate_exif(file_paths)
             if corrupted_files:
-                logger.info(
-                    f"Rebuilding {len(corrupted_files)} corrupted EXIF structures..."
-                )
+                log.exif_rebuilding(len(corrupted_files))
                 batch_rebuild_exif(list(corrupted_files))
                 exif_rebuilt_count = len(corrupted_files)
 
@@ -679,7 +696,7 @@ def process_logic(
             existing_metadata_map = batch_read_existing_metadata(file_paths)
             requests = _build_metadata_requests(file_info)
             batch_write_metadata_requests(requests, existing_metadata_map)
-            logger.info(f"EXIF metadata written for {len(file_info)} files")
+            log.exif_written(len(file_info))
 
         # Print summary using shared utility
         print_processing_summary(
@@ -707,9 +724,11 @@ def process_logic(
             from common.utils import should_cleanup_temp
 
             if should_cleanup_temp():
-                logger.info(f"Cleaning up temporary directory: {temp_dir_created}")
+                log.logger.info(
+                    "Cleaning up temporary directory: %s", temp_dir_created
+                )
                 shutil.rmtree(temp_dir_created)
             else:
-                logger.info(
-                    f"Temp cleanup disabled. Directory preserved: {temp_dir_created}"
+                log.logger.info(
+                    "Temp cleanup disabled. Directory preserved: %s", temp_dir_created
                 )

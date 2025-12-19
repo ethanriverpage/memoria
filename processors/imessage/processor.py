@@ -14,7 +14,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.dedup.catalog import catalog_media_files
+from common.dedup.description import (
+    SourceEntry,
+    build_description,
+    build_source_line,
+    build_message_context,
+    PLATFORM_IMESSAGE,
+)
 from common.dependency_checker import check_exiftool, print_exiftool_error
+from common.files.utils import batch_correct_extensions
 from common.dedup.service import is_file_primary_by_hash
 from common.dedup.hashing import compute_content_hash
 from common.media.exiftool import (
@@ -139,7 +147,7 @@ class IMessageProcessor(ProcessorBase):
         return True
 
     @staticmethod
-    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
+    def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata.
 
         Scans all media files in the iMessage export, computes hashes,
@@ -167,18 +175,14 @@ class IMessageProcessor(ProcessorBase):
 
         if not attachments_dir or not attachments_dir.exists():
             logger.warning(f"Attachments directory not found in: {input_path}")
-            return {
-                "processor": "iMessage",
-                "input_dir": str(input_path),
-                "files": [],
-            }
+            return
 
         media_files = []
         for file_path in attachments_dir.rglob("*"):
             if file_path.is_file() and file_path.suffix.lower() in ALL_MEDIA_EXTENSIONS:
                 media_files.append(file_path)
 
-        return catalog_media_files(
+        yield from catalog_media_files(
             processor_name="iMessage",
             input_path=input_path,
             media_files=media_files,
@@ -287,7 +291,7 @@ def _extract_device_from_source_export(source_export: str) -> str:
 
 
 def _build_description(message: dict, export_username: str) -> str:
-    """Build the description string for an iMessage.
+    """Build the description string for an iMessage using unified format.
 
     Args:
         message: Message data dictionary.
@@ -336,8 +340,13 @@ def _build_description(message: dict, export_username: str) -> str:
         else:
             source_device = export_username
 
-    # Build source description
-    description_parts = [f"Source: iMessage/{source_device}"]
+    # Build source line using unified format
+    source_entry = SourceEntry(
+        processor=PLATFORM_IMESSAGE,
+        username=source_device,
+    )
+    source_line = build_source_line(source_entry)
+    description_parts = [source_line]
 
     if is_merged:
         # Merged message - list all conversations, deduplicating identical lines
@@ -355,14 +364,16 @@ def _build_description(message: dict, export_username: str) -> str:
             else:
                 conv_name = conv_title or "Unknown"
 
-            msg_line = f'  - {sender} in "{conv_name}"'
-            if content:
-                content = content.replace("\n", " ")
-                if len(content) > 100:
-                    content = content[:97] + "..."
-                msg_line += f': "{content}"'
+            # Use unified message context format
+            msg_entry = SourceEntry(
+                processor=PLATFORM_IMESSAGE,
+                sender=sender,
+                conversation=conv_name,
+                content=content,
+            )
+            msg_line = build_message_context(msg_entry)
 
-            if msg_line not in seen_lines:
+            if msg_line and msg_line not in seen_lines:
                 seen_lines.add(msg_line)
                 description_parts.append(msg_line)
 
@@ -380,14 +391,17 @@ def _build_description(message: dict, export_username: str) -> str:
         else:
             conv_name = conv_title or "Unknown"
 
-        msg_line = f'  - {sender} in "{conv_name}"'
-        if content:
-            content = content.replace("\n", " ")
-            if len(content) > 100:
-                content = content[:97] + "..."
-            msg_line += f': "{content}"'
+        # Use unified message context format
+        msg_entry = SourceEntry(
+            processor=PLATFORM_IMESSAGE,
+            sender=sender,
+            conversation=conv_name,
+            content=content,
+        )
+        msg_line = build_message_context(msg_entry)
+        if msg_line:
+            description_parts.append(msg_line)
 
-        description_parts.append(msg_line)
         source_description = "&#xa;".join(description_parts)
 
     # Add Live Photo marker if applicable
@@ -734,7 +748,9 @@ def _process_working_directory(
 
     # Match files to messages and pre-generate filenames
     logger.info("Matching files and generating filenames...")
-    filename_gen = FilenameGenerator("imessage", timestamp_format="%Y-%m-%d %H:%M:%S UTC")
+    filename_gen = FilenameGenerator(
+        "imessage", timestamp_format="%Y-%m-%d %H:%M:%S UTC"
+    )
     matched_files = []
 
     for media_file in media_files:
@@ -804,8 +820,7 @@ def _process_working_directory(
             # Update file_paths and file_info with corrected paths
             file_paths = [corrections.get(p, p) for p in file_paths]
             file_info = [
-                (corrections.get(fp, fp), msg, eu)
-                for fp, msg, eu in file_info
+                (corrections.get(fp, fp), msg, eu) for fp, msg, eu in file_info
             ]
 
     # Phase 3: Batch EXIF processing

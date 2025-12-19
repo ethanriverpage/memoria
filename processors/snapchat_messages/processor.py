@@ -9,6 +9,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.dedup.catalog import catalog_media_files
+from common.dedup.description import (
+    SourceEntry,
+    build_description,
+    build_source_line,
+    build_message_context,
+    PLATFORM_SNAPCHAT,
+    SERVICE_MESSAGES,
+)
 from common.dedup.service import is_file_primary_by_hash
 from common.files.utils import batch_correct_extensions
 from common.dedup.hashing import compute_content_hash
@@ -150,16 +158,10 @@ class SnapchatMessagesProcessor(ProcessorBase):
         return True
 
     @staticmethod
-    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
-        """Build catalog of files with hashes and metadata."""
+    def build_catalog(input_dir: str, **kwargs):
+        """Build catalog of files with hashes and metadata (generator)."""
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
-
-        empty_catalog = {
-            "processor": "Snapchat Messages",
-            "input_dir": str(input_path),
-            "files": [],
-        }
 
         # Determine the working directory for cataloging
         # Check for preprocessed export first (has media/ directory)
@@ -198,7 +200,7 @@ class SnapchatMessagesProcessor(ProcessorBase):
 
             if raw_export_dir is None:
                 logger.warning(f"No media directory found in: {input_path}")
-                return empty_catalog
+                return
 
             # Check for existing preprocessing cache
             cache_path = get_preprocessing_cache_path(input_path, "Snapchat Messages")
@@ -230,7 +232,7 @@ class SnapchatMessagesProcessor(ProcessorBase):
                     preprocessor.process()
                 except PreprocessingError as e:
                     logger.error(f"Preprocessing failed: {e}")
-                    return empty_catalog
+                    return
 
                 working_dir = cache_path
 
@@ -240,13 +242,13 @@ class SnapchatMessagesProcessor(ProcessorBase):
             logger.warning(
                 f"No media directory found after preprocessing: {working_dir}"
             )
-            return empty_catalog
+            return
 
         media_files = [
             f for f in media_dir.iterdir() if f.is_file() and get_media_type(f)
         ]
 
-        return catalog_media_files(
+        yield from catalog_media_files(
             processor_name="Snapchat Messages",
             input_path=working_dir,
             media_files=media_files,
@@ -326,9 +328,17 @@ def get_processor():
 
 
 def _build_description(message: dict, export_username: str) -> str:
-    """Build the description string for a Snapchat message."""
+    """Build the description string for a Snapchat message using unified format."""
     is_merged = "messages" in message and isinstance(message["messages"], list)
-    description_parts = [f"Source: Snapchat/{export_username}/messages"]
+
+    # Build source line using unified format
+    source_entry = SourceEntry(
+        processor=PLATFORM_SNAPCHAT,
+        username=export_username,
+        service=SERVICE_MESSAGES,
+    )
+    source_line = build_source_line(source_entry)
+    description_parts = [source_line]
 
     if is_merged:
         # Merged message - list all conversations in unified format
@@ -344,14 +354,16 @@ def _build_description(message: dict, export_username: str) -> str:
                 else:
                     conv_name = msg.get("conversation_title", "Unknown Group")
 
-                # Replace newlines in content with space
-                if content:
-                    content = content.replace("\n", " ")
-                    description_parts.append(
-                        f'  - {sender} in "{conv_name}": "{content}"'
-                    )
-                else:
-                    description_parts.append(f'  - {sender} in "{conv_name}"')
+                # Use unified message context format
+                msg_entry = SourceEntry(
+                    processor=PLATFORM_SNAPCHAT,
+                    sender=sender,
+                    conversation=conv_name,
+                    content=content,
+                )
+                msg_line = build_message_context(msg_entry)
+                if msg_line:
+                    description_parts.append(msg_line)
 
         return "&#xa;".join(description_parts)
     else:
@@ -361,7 +373,7 @@ def _build_description(message: dict, export_username: str) -> str:
 
         if conv_id is None or conv_type is None:
             # Orphaned media - minimal metadata
-            return f"Source: Snapchat/{export_username}/messages"
+            return build_description(source_entry)
         else:
             # Normal message with unified format
             if conv_type == "dm":
@@ -372,12 +384,16 @@ def _build_description(message: dict, export_username: str) -> str:
             sender = message.get("sender", "unknown")
             content = message.get("content", "")
 
-            # Replace newlines in content with space
-            if content:
-                content = content.replace("\n", " ")
-                description_parts.append(f'  - {sender} in "{conv_name}": "{content}"')
-            else:
-                description_parts.append(f'  - {sender} in "{conv_name}"')
+            # Use unified message context format
+            msg_entry = SourceEntry(
+                processor=PLATFORM_SNAPCHAT,
+                sender=sender,
+                conversation=conv_name,
+                content=content,
+            )
+            msg_line = build_message_context(msg_entry)
+            if msg_line:
+                description_parts.append(msg_line)
 
             return "&#xa;".join(description_parts)
 

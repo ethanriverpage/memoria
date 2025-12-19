@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from common.output.progress import PHASE_EXIF, chunked_progress
 from common.utils import get_media_type, get_gps_format
+from common.files.utils import short_path
 
 logger = logging.getLogger(__name__)
 
@@ -253,8 +254,9 @@ def batch_validate_exif(file_paths: List[str]) -> Set[str]:
 
                 # Check for warnings indicating corruption
                 if current_file and ("Warning" in line or "minor" in line.lower()):
-                    corrupted_files.add(current_file)
-                    logger.debug(f"Detected corrupted EXIF in {current_file}")
+                    if current_file not in corrupted_files:
+                        corrupted_files.add(current_file)
+                        logger.debug(f"Corrupted EXIF: {short_path(current_file)}")
 
         except Exception as e:
             logger.warning(f"Failed to batch validate EXIF for chunk: {e}")
@@ -375,7 +377,7 @@ def batch_read_existing_metadata(file_paths: List[str]) -> Dict[str, Dict[str, b
                     individual_result = _read_metadata_batch([file_path])
                     metadata_map.update(individual_result)
                 except Exception as individual_error:
-                    logger.debug(f"Failed to read {file_path}: {individual_error}")
+                    logger.debug(f"Read failed: {short_path(file_path)}: {individual_error}")
                     continue
 
     return metadata_map

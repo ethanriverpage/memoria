@@ -67,8 +67,19 @@ class InstagramPreprocessor:
             self.html_dir = new_format_html_dir
             self.is_legacy_format = False
 
-        # Output directories
-        output_base = Path(output_dir) if output_dir else self.export_path
+        # Output directories - require explicit output_dir to prevent writing to exports
+        if output_dir is None:
+            raise ValueError(
+                "output_dir is required. Preprocessors must not write to the export "
+                "directory. Use a temp directory or specify an explicit output path."
+            )
+        output_base = Path(output_dir)
+        # Safety check: never write to the export directory
+        if output_base.resolve() == self.export_path.resolve():
+            raise ValueError(
+                f"output_dir cannot be the same as export_path ({self.export_path}). "
+                "This would corrupt the original export."
+            )
         self.output_dir = output_base
         self.media_output_dir = output_base / "media"
         self.metadata_file = output_base / "metadata.json"
@@ -700,8 +711,8 @@ Examples:
         "-o",
         "--output",
         type=str,
-        help="Optional output directory (default: creates folders in export directory)",
-        default=None,
+        required=True,
+        help="Output directory for preprocessed files (required to prevent writing to exports)",
     )
 
     parser.add_argument(

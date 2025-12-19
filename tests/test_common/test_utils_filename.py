@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for FilenameGenerator class in common/utils.py."""
 
-import pytest
 
 from common.utils import FilenameGenerator
 
@@ -149,3 +148,29 @@ class TestFilenameGenerator:
 
         assert result == "instagram-messages-user-john-doe-chat-20240115.jpg"
 
+    def test_empty_extension_no_error(self):
+        """Test that empty extension does not cause ValueError (empty separator bug)."""
+        gen = FilenameGenerator("insta")
+
+        # First file with no extension
+        result1 = gen.generate("2024-01-15 10:30:00", "user", "")
+        assert result1 == "insta-user-20240115"
+
+        # Second file with no extension - should get sequence number, not crash
+        result2 = gen.generate("2024-01-15 10:30:00", "user", "")
+        assert result2 == "insta-user-20240115_2"
+
+        # Third file with no extension
+        result3 = gen.generate("2024-01-15 10:30:00", "user", "")
+        assert result3 == "insta-user-20240115_3"
+
+    def test_empty_extension_uniqueness(self):
+        """Test that files with and without extensions are tracked separately."""
+        gen = FilenameGenerator("insta")
+
+        result1 = gen.generate("2024-01-15 10:30:00", "user", ".jpg")
+        result2 = gen.generate("2024-01-15 10:30:00", "user", "")
+
+        assert result1 == "insta-user-20240115.jpg"
+        assert result2 == "insta-user-20240115"
+        # Both should be unique (different because one has extension, one doesn't)

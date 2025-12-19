@@ -185,7 +185,12 @@ class FilenameGenerator:
             self.used_filenames.add(base)
             return base
 
-        stem = base.rsplit(extension, 1)[0]
+        # Handle empty extension case to avoid "empty separator" ValueError
+        if extension:
+            stem = base.rsplit(extension, 1)[0]
+        else:
+            stem = base
+
         sequence = self.sequence_start
         while True:
             candidate = f"{stem}_{sequence}{extension}"

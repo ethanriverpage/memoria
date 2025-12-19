@@ -5,7 +5,6 @@ Tests the batch_correct_extensions function which detects and corrects
 file extensions based on actual file content using python-magic.
 """
 
-import pytest
 from pathlib import Path
 
 from common.files.utils import batch_correct_extensions
@@ -151,4 +150,3 @@ class TestBatchCorrectExtensions:
             new_path = result[old_path]
             # Should be corrected to a video extension
             assert new_path.endswith(".mp4") or new_path.endswith(".mov")
-

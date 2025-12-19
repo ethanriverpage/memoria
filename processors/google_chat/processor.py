@@ -9,13 +9,17 @@ import json
 import logging
 import os
 import shutil
-from concurrent.futures import ThreadPoolExecutor
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.dedup.catalog import catalog_media_files
-from common.dedup.service import filter_primary_files
+from common.dedup.description import (
+    SourceEntry,
+    build_description,
+    PLATFORM_GOOGLE,
+    SERVICE_CHAT,
+)
 from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.files.utils import batch_correct_extensions
 from common.dedup.hashing import compute_content_hash
@@ -124,7 +128,7 @@ class GoogleChatProcessor(ProcessorBase):
         return True
 
     @staticmethod
-    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
+    def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata.
 
         Scans all media files in the Google Chat export, computes hashes,
@@ -143,11 +147,7 @@ class GoogleChatProcessor(ProcessorBase):
         # Find media in Google Chat structure
         chat_dir = input_path / "Google Chat"
         if not chat_dir.exists():
-            return {
-                "processor": "Google Chat",
-                "input_dir": str(input_path),
-                "files": [],
-            }
+            return
 
         media_files = []
         for subdir in ["Groups", "Users"]:
@@ -160,7 +160,7 @@ class GoogleChatProcessor(ProcessorBase):
                     ):
                         media_files.append(file_path)
 
-        return catalog_media_files(
+        yield from catalog_media_files(
             processor_name="Google Chat",
             input_path=input_path,
             media_files=media_files,
@@ -255,8 +255,15 @@ def _build_metadata_requests(
                 ("ModifyDate", exif_date),
             ]
 
-        # Build description
-        default_description = f"Source: Google Chat/{export_username}&#xa;Conversation: \"{conversation_name}\"&#xa;Sender: \"{message_data['sender']}\""
+        # Build description using unified format
+        entry = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username=export_username,
+            service=SERVICE_CHAT,
+            sender=message_data["sender"],
+            conversation=conversation_name,
+        )
+        default_description = build_description(entry)
 
         requests.append(
             MetadataWriteRequest(
@@ -332,8 +339,7 @@ def process_media_batch(batch_args):
         # Update file_paths and file_info with corrected paths
         file_paths = [corrections.get(p, p) for p in file_paths]
         file_info = [
-            (corrections.get(fp, fp), md, cn, eu)
-            for fp, md, cn, eu in file_info
+            (corrections.get(fp, fp), md, cn, eu) for fp, md, cn, eu in file_info
         ]
 
     # Phase 3: Update timestamps and compile results
@@ -343,7 +349,11 @@ def process_media_batch(batch_args):
         if timestamp_str:
             update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
         results.append(
-            (True, output_path, (output_path, message_data, conversation_name, export_username))
+            (
+                True,
+                output_path,
+                (output_path, message_data, conversation_name, export_username),
+            )
         )
 
     return results

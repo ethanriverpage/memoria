@@ -3,7 +3,7 @@
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 
 class ProcessorBase(ABC):
@@ -59,8 +59,20 @@ class ProcessorBase(ABC):
         return False
 
     @staticmethod
-    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
-        """Build catalog of files with hashes and metadata."""
+    def build_catalog(input_dir: str, **kwargs) -> Iterator[Dict[str, Any]]:
+        """Build catalog by yielding entries one at a time (memory-efficient).
+
+        Yields catalog entries as they are computed, allowing the caller to
+        write them to a database incrementally without holding all entries
+        in memory.
+
+        Args:
+            input_dir: Path to input directory.
+            **kwargs: Additional arguments (verbose, workers).
+
+        Yields:
+            Catalog entry dictionaries with hashes and metadata.
+        """
         raise NotImplementedError(
             "Processor declares supports_dedup=True "
             "but does not implement build_catalog()"

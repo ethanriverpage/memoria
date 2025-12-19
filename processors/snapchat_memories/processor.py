@@ -14,6 +14,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.dedup.catalog import catalog_media_files
+from common.dedup.description import (
+    SourceEntry,
+    build_description,
+    PLATFORM_SNAPCHAT,
+    SERVICE_MEMORIES,
+)
 from common.dedup.service import is_file_primary_by_hash
 from common.files.utils import batch_correct_extensions
 from common.dedup.hashing import compute_content_hash
@@ -162,7 +168,7 @@ class SnapchatMemoriesProcessor(ProcessorBase):
         return True
 
     @staticmethod
-    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
+    def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata."""
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
@@ -176,17 +182,13 @@ class SnapchatMemoriesProcessor(ProcessorBase):
 
         if not media_dir or not media_dir.exists():
             logger.warning(f"No media directory found in: {input_path}")
-            return {
-                "processor": "Snapchat Memories",
-                "input_dir": str(input_path),
-                "files": [],
-            }
+            return
 
         media_files = [
             f for f in media_dir.iterdir() if f.is_file() and get_media_type(f)
         ]
 
-        return catalog_media_files(
+        yield from catalog_media_files(
             processor_name="Snapchat Memories",
             input_path=input_path,
             media_files=media_files,
@@ -328,8 +330,13 @@ def _build_metadata_requests(
                 longitude=float(memory_data["longitude"]),
             )
 
-        # Build description
-        default_description = f"Source: Snapchat/{export_username}/memories"
+        # Build description using unified format
+        entry = SourceEntry(
+            processor=PLATFORM_SNAPCHAT,
+            username=export_username,
+            service=SERVICE_MEMORIES,
+        )
+        default_description = build_description(entry)
 
         requests.append(
             MetadataWriteRequest(
@@ -688,8 +695,7 @@ def process_logic(
             # Update file_paths and file_info with corrected paths
             file_paths = [corrections.get(p, p) for p in file_paths]
             file_info = [
-                (corrections.get(fp, fp), mem, eu)
-                for fp, mem, eu in file_info
+                (corrections.get(fp, fp), mem, eu) for fp, mem, eu in file_info
             ]
 
     # Phase 4: Batch process EXIF operations on non-MKV files

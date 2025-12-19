@@ -8,7 +8,12 @@ This package provides:
 - Metadata merging and description building
 """
 
-from common.dedup.config import DedupConfig, get_dedup_config, is_dedup_enabled, reset_config
+from common.dedup.config import (
+    DedupConfig,
+    get_dedup_config,
+    is_dedup_enabled,
+    reset_config,
+)
 from common.dedup.database import HashDatabase
 from common.dedup.hashing import (
     compute_content_hash,
@@ -36,8 +41,28 @@ from common.dedup.hashing import (
 )
 from common.dedup.catalog import catalog_media_files
 from common.dedup.description import (
+    # Constants
+    PLATFORM_GOOGLE,
+    PLATFORM_INSTAGRAM,
+    PLATFORM_SNAPCHAT,
+    PLATFORM_DISCORD,
+    PLATFORM_IMESSAGE,
+    SERVICE_PHOTOS,
+    SERVICE_CHAT,
+    SERVICE_VOICE,
+    SERVICE_MESSAGES,
+    SERVICE_MEMORIES,
+    SERVICE_STORIES,
+    SERVICE_POSTS,
+    SERVICE_REELS,
+    # Data structures
     SourceEntry,
+    # Core building functions
+    build_source_line,
+    build_message_context,
+    build_description,
     build_image_description,
+    # Helper functions
     create_source_entry,
     truncate_text,
     format_timestamp,
@@ -93,9 +118,28 @@ __all__ = [
     "DEFAULT_HASH_SIZE",
     # Catalog
     "catalog_media_files",
-    # Description
+    # Description - Constants
+    "PLATFORM_GOOGLE",
+    "PLATFORM_INSTAGRAM",
+    "PLATFORM_SNAPCHAT",
+    "PLATFORM_DISCORD",
+    "PLATFORM_IMESSAGE",
+    "SERVICE_PHOTOS",
+    "SERVICE_CHAT",
+    "SERVICE_VOICE",
+    "SERVICE_MESSAGES",
+    "SERVICE_MEMORIES",
+    "SERVICE_STORIES",
+    "SERVICE_POSTS",
+    "SERVICE_REELS",
+    # Description - Data structures
     "SourceEntry",
+    # Description - Core building functions
+    "build_source_line",
+    "build_message_context",
+    "build_description",
     "build_image_description",
+    # Description - Helper functions
     "create_source_entry",
     "truncate_text",
     "format_timestamp",

@@ -25,11 +25,15 @@ from typing import Dict, List, Optional, Tuple
 from common.failure_tracker import FailureTracker
 from common.files.filter import BannedFilesFilter
 from common.dedup.hashing import compute_content_hash
+from common.output.logging import get_processor_logger
 from common.processing import print_preprocessing_stats
 from common.utils import default_worker_count
 from common.output.progress import PHASE_PREPROCESS, progress_bar
 
+# Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
+# Standardized processor logger for consistent output
+log = get_processor_logger(__name__)
 
 # Media file extensions to process
 IMAGE_EXTENSIONS = {
@@ -212,7 +216,9 @@ class ImazingPreprocessor:
                 if match:
                     return match.group(1).strip()
             except Exception as e:
-                logger.debug(f"Failed to extract device name from {device_info}: {e}")
+                log.logger.debug(
+                    "Failed to extract device name from %s: %s", device_info, e
+                )
 
         # Fallback: extract from directory name
         dir_name = self.export_path.name
@@ -381,12 +387,12 @@ class ImazingPreprocessor:
                 file_path, file_hash, parsed = future.result()
 
                 if file_hash and parsed:
-                    file_info = {
+                    file_info_item = {
                         "path": file_path,
                         "hash": file_hash,
                         "parsed": parsed,
                     }
-                    hash_to_files.setdefault(file_hash, []).append(file_info)
+                    hash_to_files.setdefault(file_hash, []).append(file_info_item)
 
         return hash_to_files
 
@@ -655,20 +661,22 @@ class ImazingPreprocessor:
         Returns:
             True if processing succeeded
         """
-        logger.info(f"Starting iMazing iMessage preprocessing for {self.export_path}")
+        log.preprocessor_start(
+            "iMazing iMessage", str(self.export_path), str(self.output_dir)
+        )
 
         # Phase 1: Load CSV message data for cross-reference
-        logger.info("Loading CSV message data...")
+        log.logger.info("Loading CSV message data...")
         self._load_csv_messages()
 
         # Phase 2: Scan for media files
-        logger.info("Scanning for media files...")
+        log.logger.info("Scanning for media files...")
         media_files = self._scan_media_files()
         self.stats["media_files_found"] = len(media_files)
-        logger.info(f"Found {len(media_files)} media files")
+        log.found_files(len(media_files), "media")
 
         if not media_files:
-            logger.warning("No media files found to process")
+            log.logger.warning("No media files found to process")
             # Still create output structure
             self.output_dir.mkdir(parents=True, exist_ok=True)
             self.media_dir.mkdir(parents=True, exist_ok=True)
@@ -678,21 +686,22 @@ class ImazingPreprocessor:
             return True
 
         # Phase 3: Hash files for deduplication
-        logger.info("Hashing files for deduplication...")
+        log.logger.info("Hashing files for deduplication...")
         hash_to_files = self._compute_hashes_parallel(media_files)
-        logger.info(f"Found {len(hash_to_files)} unique files")
+        log.found_items(len(hash_to_files), "unique files")
 
         # Phase 4: Build conversations and copy files
-        logger.info("Building conversations and copying files...")
+        log.logger.info("Building conversations and copying files...")
         conversations, orphaned_media = self._build_conversations(hash_to_files)
-        logger.info(
-            f"Organized into {len(conversations)} conversations, "
-            f"{self.stats['unique_files']} unique files "
-            f"({self.stats['duplicate_files']} duplicates removed)"
+        log.logger.info(
+            "Organized into %d conversations, %d unique files (%d duplicates removed)",
+            len(conversations),
+            self.stats["unique_files"],
+            self.stats["duplicate_files"],
         )
 
         # Phase 5: Generate metadata
-        logger.info("Generating metadata.json")
+        log.logger.info("Generating metadata.json")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         metadata = self._generate_metadata(conversations, orphaned_media)
 
@@ -702,7 +711,7 @@ class ImazingPreprocessor:
         # Handle failures
         self.failure_tracker.handle_failures(self.output_dir)
 
-        logger.info(f"Preprocessing complete. Output: {self.output_dir}")
+        log.preprocessing_done(str(self.output_dir))
         self._print_statistics()
 
         return True

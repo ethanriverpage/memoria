@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional
 
-from common.output.console import console
+from common.output.console import console, is_subprocess
 from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import should_cleanup_temp
 
@@ -189,7 +189,15 @@ def print_preprocessing_stats(
     stats: Dict[str, int],
     show_zero: bool = False,
 ) -> None:
-    """Print preprocessing statistics as a compact Rich table."""
+    """Print preprocessing statistics as a compact Rich table.
+
+    Note: This function is a no-op when called from subprocess workers
+    to prevent interleaved/corrupted terminal output.
+    """
+    # Skip console output in subprocess workers to avoid terminal corruption
+    if is_subprocess():
+        return
+
     from rich.table import Table
 
     table = Table(title=title, show_header=False, box=None, padding=(0, 1))

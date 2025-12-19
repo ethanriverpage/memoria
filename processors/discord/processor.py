@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.dedup.catalog import catalog_media_files
+from common.dedup.description import (
+    SourceEntry,
+    build_description,
+    PLATFORM_DISCORD,
+)
 from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
 from common.files.utils import batch_correct_extensions
 from common.dedup.hashing import compute_content_hash
@@ -31,6 +36,7 @@ from common.media.exiftool import (
     DescriptionWriteSpec,
     MetadataWriteRequest,
 )
+from common.output.logging import get_processor_logger
 from common.processing import (
     get_preprocessing_cache_path,
     is_preprocessing_cache_valid,
@@ -49,7 +55,10 @@ from common.utils import (
 from processors.base import ProcessorBase
 from processors.discord.preprocess import DiscordPreprocessor
 
+# Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
+# Standardized processor logger for consistent output
+log = get_processor_logger(__name__)
 
 
 def detect(input_path: Path) -> bool:
@@ -103,7 +112,7 @@ def detect(input_path: Path) -> bool:
         return False
 
     except Exception as e:
-        logger.debug(f"Detection failed for Discord: {e}")
+        log.detection_failed("Discord", e)
         return False
 
 
@@ -127,16 +136,10 @@ class DiscordProcessor(ProcessorBase):
         return True
 
     @staticmethod
-    def build_catalog(input_dir: str, **kwargs) -> Dict[str, Any]:
-        """Build catalog of files with hashes and metadata."""
+    def build_catalog(input_dir: str, **kwargs):
+        """Build catalog of files with hashes and metadata (generator)."""
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
-
-        empty_catalog = {
-            "processor": "Discord",
-            "input_dir": str(input_path),
-            "files": [],
-        }
 
         # Determine the working directory for cataloging
         working_dir = None
@@ -153,14 +156,15 @@ class DiscordProcessor(ProcessorBase):
                 cache_path = get_preprocessing_cache_path(input_path, "Discord")
 
                 if is_preprocessing_cache_valid(cache_path):
-                    logger.info(f"Using preprocessing cache: {cache_path}")
+                    log.using_cache(str(cache_path))
                     working_dir = cache_path
                 else:
                     # Auto-preprocess to cache directory (downloads attachments)
-                    logger.info(
-                        f"Raw Discord export detected, preprocessing to cache: {cache_path}"
+                    log.logger.info(
+                        "Raw Discord export detected, preprocessing to cache: %s",
+                        cache_path,
                     )
-                    logger.info("This will download attachments from Discord CDN...")
+                    log.logger.info("This will download attachments from Discord CDN...")
                     cache_path.mkdir(parents=True, exist_ok=True)
 
                     preprocessor = DiscordPreprocessor(
@@ -172,26 +176,26 @@ class DiscordProcessor(ProcessorBase):
 
                     working_dir = cache_path
             else:
-                logger.warning(f"No media directory found in: {input_path}")
-                return empty_catalog
+                log.logger.warning("No media directory found in: %s", input_path)
+                return
 
         if working_dir is None:
-            return empty_catalog
+            return
 
         # Now catalog from the working directory
         media_dir = working_dir / "media"
         if not media_dir.exists():
-            logger.warning(
-                f"No media directory found after preprocessing: {working_dir}"
+            log.logger.warning(
+                "No media directory found after preprocessing: %s", working_dir
             )
-            return empty_catalog
+            return
 
         # Collect all media files
         media_files = [
             f for f in media_dir.iterdir() if f.is_file() and get_media_type(f)
         ]
 
-        return catalog_media_files(
+        yield from catalog_media_files(
             processor_name="Discord",
             input_path=working_dir,
             media_files=media_files,
@@ -240,13 +244,11 @@ def get_processor():
 
 
 def _build_description(message_info: dict, export_username: str) -> str:
-    """Build the description string for a Discord message."""
+    """Build the description string for a Discord message using unified format."""
     message = message_info.get("message", {})
     channel_type = message_info.get("channel_type", "unknown")
     channel_title = message_info.get("channel_title", "Unknown")
     guild_name = message_info.get("guild_name")
-
-    description_parts = [f"Source: Discord/{export_username}"]
 
     # Build conversation name based on channel type
     if channel_type == "dm":
@@ -269,17 +271,14 @@ def _build_description(message_info: dict, export_username: str) -> str:
     else:
         conv_name = channel_title
 
-    # Add conversation context with message content
-    content = message.get("content", "")
-    if content:
-        content = content.replace("\n", " ")
-        if len(content) > 100:
-            content = content[:97] + "..."
-        description_parts.append(f'  - in "{conv_name}": "{content}"')
-    else:
-        description_parts.append(f'  - in "{conv_name}"')
-
-    return "&#xa;".join(description_parts)
+    # Build description using unified format
+    entry = SourceEntry(
+        processor=PLATFORM_DISCORD,
+        username=export_username,
+        conversation=conv_name,
+        content=message.get("content", ""),
+    )
+    return build_description(entry)
 
 
 def _build_metadata_requests(
@@ -404,7 +403,7 @@ def process_logic(
     input_dir: str,
     output_dir: str = "processed_discord",
     temp_dir: str = "../pre",
-    verbose: bool = False,
+    verbose: bool = False,  # noqa: ARG001
     workers: Optional[int] = None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ):
@@ -412,7 +411,7 @@ def process_logic(
     # Validate input directory exists
     input_path = Path(input_dir)
     if not input_path.exists():
-        logger.error(f"Input directory not found: {input_path}")
+        log.file_not_found(str(input_path), "Input directory")
         return
 
     # Check for required tools
@@ -420,30 +419,29 @@ def process_logic(
         print_exiftool_error()
         return
 
-    logger.info("Discord Processor")
-    logger.info("=" * 50)
+    log.processor_start("Discord Processor")
 
     # Determine if input needs preprocessing
     output_path = Path(output_dir)
 
     # Check if input is already preprocessed
     if is_preprocessed_directory(str(input_path)):
-        logger.info(f"Input directory is already preprocessed: {input_path}")
+        log.already_preprocessed(str(input_path))
         _process_working_directory(input_path, output_path, workers, dedup_manifest)
     else:
         # Check for preprocessing cache from catalog phase
         cache_path = get_preprocessing_cache_path(input_path, "Discord")
 
         if is_preprocessing_cache_valid(cache_path):
-            logger.info(f"Using preprocessing cache from catalog phase: {cache_path}")
+            log.using_cache(str(cache_path))
             _process_working_directory(cache_path, output_path, workers, dedup_manifest)
         else:
-            logger.info(f"Input directory is raw export: {input_path}")
-            logger.info("Running preprocessing (downloading attachments)...")
+            log.raw_export_detected(str(input_path))
+            log.logger.info("Running preprocessing (downloading attachments)...")
 
             # Use context manager for temp directory with automatic cleanup
             with temp_processing_directory(temp_dir, "discord") as temp_dir_path:
-                logger.info(f"Preprocessing to: {temp_dir_path}")
+                log.preprocessing_to(str(temp_dir_path))
 
                 # Run preprocessing
                 # Note: output_dir already has /messages appended by the caller (process method)
@@ -455,7 +453,7 @@ def process_logic(
                 )
                 preprocessor.process()
 
-                logger.info(f"Preprocessing complete. Using: {temp_dir_path}")
+                log.preprocessing_done(str(temp_dir_path))
                 _process_working_directory(
                     temp_dir_path, output_path, workers, dedup_manifest
                 )
@@ -474,32 +472,32 @@ def _process_working_directory(
 
     # Check for metadata file
     if not metadata_file.exists():
-        logger.error(f"Metadata file not found: {metadata_file}")
+        log.file_not_found(str(metadata_file), "Metadata file")
         return
 
     # Check for media directory
     if not media_dir.exists():
-        logger.warning(f"Media directory not found: {media_dir}")
-        logger.warning("No media files to process.")
+        log.file_not_found(str(media_dir), "Media directory")
+        log.logger.warning("No media files to process.")
         return
 
     # Load metadata
-    logger.info(f"Loading metadata from {metadata_file}...")
+    log.loading_metadata(str(metadata_file))
     metadata = load_metadata(metadata_file)
 
     export_username = metadata.get("export_info", {}).get("export_username", "unknown")
-    logger.info(f"Export username: {export_username}")
+    log.export_username(export_username)
 
     # Build filename index
-    logger.info("Building filename index...")
+    log.building_index("filename")
     filename_index = build_filename_index(metadata)
-    logger.info(f"Found {len(filename_index)} media files in metadata")
+    log.found_items(len(filename_index), "media files in metadata")
 
     # Scan media directory for actual files
-    logger.info(f"Scanning media directory: {media_dir}")
+    log.scanning_directory(str(media_dir))
     media_files = list(media_dir.glob("*"))
     media_files = [f for f in media_files if f.is_file() and get_media_type(f)]
-    logger.info(f"Found {len(media_files)} media files on disk")
+    log.found_files(len(media_files), "media")
 
     # Filter out secondary files based on dedup manifest (using hash-based lookup)
     skipped_secondary_files = []
@@ -514,18 +512,17 @@ def _process_working_directory(
                 skipped_secondary_files.append(str(f))
         media_files = filtered_files
         skipped_count = original_count - len(media_files)
-        if skipped_count > 0:
-            logger.info(f"Skipped {skipped_count} secondary files (dedup)")
+        log.skipped_secondary(skipped_count)
 
     if not media_files:
-        logger.warning("No media files found to process.")
+        log.logger.warning("No media files found to process.")
         return
 
     # Create output directory (subdirectory already set by caller)
     output_dir.mkdir(exist_ok=True, parents=True)
 
     # Match files to metadata and generate output filenames
-    logger.info("Matching files to metadata...")
+    log.logger.info("Matching files to metadata...")
     matched_files = []
     unmatched_files = []
     filename_gen = FilenameGenerator("discord", timestamp_format="%Y-%m-%d %H:%M:%S")
@@ -544,16 +541,15 @@ def _process_working_directory(
         else:
             unmatched_files.append(media_file)
 
-    logger.info(f"Matched {len(matched_files)} files")
-    logger.info(f"Unmatched {len(unmatched_files)} files")
+    log.matched_files(len(matched_files), len(unmatched_files))
 
     # Process matched files
-    logger.info(f"Processing {len(matched_files)} files to {output_dir}/")
-    logger.info("=" * 50)
+    log.logger.info("Processing %d files to %s/", len(matched_files), output_dir)
+    log.phase_separator()
 
     # Determine number of workers
     num_workers = workers if workers is not None else default_worker_count()
-    logger.info(f"Using {num_workers} parallel workers")
+    log.using_workers(num_workers)
 
     # Prepare arguments for parallel processing
     process_args = []
@@ -600,9 +596,7 @@ def _process_working_directory(
         else:
             failed_count += 1
 
-    logger.info(
-        f"\nCopied {success_count} files ({len(file_info)} for EXIF processing)"
-    )
+    log.copied_files(success_count, failed_count)
 
     # Correct file extensions based on actual content
     if file_paths:
@@ -615,14 +609,12 @@ def _process_working_directory(
     # Batch process EXIF operations
     exif_rebuilt_count = 0
     if file_paths:
-        logger.info("Batch processing EXIF metadata...")
+        log.exif_batch_start()
 
         # Batch validate and rebuild
         corrupted_files = batch_validate_exif(file_paths)
         if corrupted_files:
-            logger.info(
-                f"Rebuilding {len(corrupted_files)} corrupted EXIF structures..."
-            )
+            log.exif_rebuilding(len(corrupted_files))
             batch_rebuild_exif(list(corrupted_files))
             exif_rebuilt_count = len(corrupted_files)
 
@@ -633,7 +625,7 @@ def _process_working_directory(
 
     # Handle unmatched files
     if unmatched_files:
-        logger.info(f"Processing {len(unmatched_files)} unmatched files...")
+        log.logger.info("Processing %d unmatched files...", len(unmatched_files))
         failed_matching_dir = output_dir / "issues" / "failed-matching" / "media"
         failed_matching_dir.mkdir(exist_ok=True, parents=True)
 
@@ -641,7 +633,7 @@ def _process_working_directory(
             try:
                 shutil.copy2(media_file, failed_matching_dir / media_file.name)
             except Exception as e:
-                logger.error(f"Error copying unmatched file {media_file.name}: {e}")
+                log.copy_error(media_file.name, e)
 
     # Save dedup references for skipped secondary files
     if dedup_manifest and skipped_secondary_files:
@@ -665,6 +657,7 @@ def _process_working_directory(
     )
 
     if unmatched_files:
-        logger.info(
-            f"Unmatched files saved to: {(output_dir / 'issues' / 'failed-matching' / 'media').absolute()}"
+        log.logger.info(
+            "Unmatched files saved to: %s",
+            (output_dir / "issues" / "failed-matching" / "media").absolute(),
         )
