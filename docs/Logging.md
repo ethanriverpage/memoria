@@ -63,6 +63,8 @@ log.exif_batch_start()
 log.exif_written(145)
 ```
 
+**Module Location:** The logging utilities are in `common/output/logging.py`. The `get_processor_logger()` function returns a `ProcessorLogger` instance that wraps standard Python logging with semantic methods for common operations.
+
 ### Available Methods
 
 #### Header/Phase Markers

@@ -249,7 +249,54 @@ Each processor:
 - Provides `detect()`, `get_name()`, `get_priority()`, and `process()` methods
 - Exports `get_processor()` function for auto-discovery
 
+Many processors also have a preprocessor that extends `PreprocessorBase`, providing:
+
+- Built-in deduplication via `copy_with_dedup()`
+- Context merging for duplicate metadata
+- Hash caching for performance
+- Thread-safe logging and failure tracking
+
 **Related:** See [Adding Processors](Adding-Processors) for development guide.
+
+## Common Module Organization
+
+**Decision:** The `common` package is organized into focused subpackages rather than a flat structure.
+
+**Rationale:**
+
+- Clear separation of concerns (dedup, media, files, output, upload)
+- Easier to navigate and understand codebase
+- Reduces import conflicts and circular dependencies
+- Makes it clear which utilities belong together
+- Easier to test in isolation
+
+**Structure:**
+
+```
+common/
+├── dedup/      # Deduplication (hashing, database, service, catalog)
+├── media/      # Media processing (exiftool, overlay, encoder)
+├── files/      # File operations (scanner, filter, utils)
+├── config/     # Configuration (processor, env)
+├── output/     # Output utilities (console, logging, progress, paths)
+├── upload/     # Upload utilities (immich, targets)
+└── preprocess/ # Preprocessing utilities (context_mergers)
+```
+
+**Trade-offs:**
+
+- Longer import paths (e.g., `from common.dedup.hashing import compute_content_hash`)
+- Need to update imports when reorganizing
+
+**Why subpackages:**
+
+The flat structure became unwieldy with 20+ modules. Grouping by functionality:
+
+- Makes it obvious where to find things
+- Enables `from common.dedup import ...` style imports
+- Supports re-exports from subpackage `__init__.py` for convenience
+
+**Related:** See [Adding Processors](Adding-Processors) for import examples.
 
 ## Priority-Based Processor Ordering
 

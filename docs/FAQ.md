@@ -42,10 +42,12 @@ See: [Common Gotchas](Common-Gotchas#album-folders-are-not-preserved)
 
 ### Why are some of my photos missing?
 
-They're not missing - they're deduplicated. When the same photo appears in multiple albums, Memoria keeps only one copy. Check the deduplication summary at the end of processing:
+They're not missing - they're deduplicated. When the same photo appears in multiple albums or conversations, Memoria keeps only one copy. Check the deduplication summary at the end of processing:
 
 - "Media files copied" shows unique files processed
 - "Deduplicated files (not copied)" shows duplicate instances skipped
+
+Within-processor deduplication is built into the `PreprocessorBase` class and happens automatically during preprocessing. All metadata from duplicate occurrences is merged into the primary file.
 
 See: [Deduplication](Deduplication)
 

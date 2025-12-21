@@ -23,6 +23,63 @@ Memoria supports two levels of deduplication:
 - **iMessage**: Deduplicates across conversations and exports
 - **Discord**: Deduplicates attachments across channels and DMs
 - **Instagram Messages**: Deduplicates media across conversations
+- **Snapchat Messages**: Deduplicates media across conversations
+
+---
+
+## Implementation: PreprocessorBase
+
+Within-processor deduplication is implemented via the `PreprocessorBase` class in `processors/preprocess_base.py`. All preprocessors that extend this base class automatically get:
+
+- **Content-based hashing**: xxHash64 for fast, reliable duplicate detection
+- **Hash caching**: File hashes are cached in SQLite for faster repeated processing
+- **Context merging**: When duplicates are found, metadata from all occurrences is merged
+- **Thread-safe operations**: Safe for parallel processing
+
+### Key Methods
+
+```python
+from processors.preprocess_base import PreprocessorBase, CopyTask, CopyResult
+
+class MyPreprocessor(PreprocessorBase):
+    def process(self) -> bool:
+        # Build copy tasks with context
+        tasks = [
+            CopyTask(
+                source_path=file_path,
+                dest_filename="output_name.jpg",
+                context={"conversation": "Group Chat", "sender": "user"}
+            )
+            for file_path in media_files
+        ]
+        
+        # Set context merger for handling duplicates
+        self.set_context_merger(self._merge_message_context)
+        
+        # Copy with automatic deduplication
+        results = self.copy_with_dedup(tasks)
+        
+        # Results map source_path -> CopyResult with:
+        # - dest_filename: actual filename used
+        # - content_hash: xxHash64 of file
+        # - is_duplicate: True if this was a duplicate
+        # - primary_source: source path of the copied file
+```
+
+### Context Merging
+
+When duplicates are found, the context merger function combines metadata:
+
+```python
+def _merge_message_context(self, existing: Dict, new: Dict) -> None:
+    """Merge metadata from duplicate into existing context."""
+    # Accumulate messages list for multi-occurrence tracking
+    if "messages" not in existing:
+        existing["messages"] = []
+    existing["messages"].append(new)
+```
+
+This ensures that when the same file appears in multiple conversations, all conversation contexts are preserved in the metadata.
 
 ---
 
@@ -152,18 +209,17 @@ See [iMessage Export Guide](iMessage-Export#deduplication) for details.
 
 ## Discord
 
-The Discord preprocessor implements deduplication during attachment downloads. When the same file is shared across multiple channels or DMs, it is downloaded and stored only once.
+The Discord preprocessor implements deduplication during attachment downloads using the `PreprocessorBase.register_downloaded_file()` method. When the same file is shared across multiple channels or DMs, it is downloaded and stored only once.
 
 ### How It Works
 
 1. Download attachment from Discord CDN
-2. Compute xxHash64 of the downloaded file
-3. If hash already exists:
-   - Delete the duplicate file
-   - Reference the existing file in metadata
-4. If unique:
-   - Keep the file
-   - Register the hash for future duplicate detection
+2. Call `register_downloaded_file()` which:
+   - Computes xxHash64 of the downloaded file
+   - Checks the hash registry for duplicates
+   - If duplicate: deletes the file and merges metadata into the existing entry
+   - If unique: registers the file and its metadata
+3. Build final metadata with deduplicated file references
 
 ### Expected Results
 
@@ -219,15 +275,17 @@ Both messages reference the same file because they have identical content.
 
 ## Instagram Messages
 
-The Instagram Messages preprocessor implements deduplication during media file copying. When the same image is shared across multiple conversations, it is copied only once.
+The Instagram Messages preprocessor implements deduplication using `PreprocessorBase.copy_with_dedup()`. When the same image is shared across multiple conversations, it is copied only once.
 
 ### How It Works
 
-1. Build catalog of all media files in the export
-2. For each referenced media file:
-   - Compute xxHash64 of the source file
-   - If hash already exists: reference the existing file
-   - If unique: copy the file and register the hash
+1. Build catalog of all media files in the export with conversation context
+2. Create `CopyTask` objects for each file with metadata
+3. Call `copy_with_dedup()` which:
+   - Hashes all files in parallel using xxHash64
+   - Groups files by content hash
+   - Merges conversation metadata for duplicates
+   - Copies only unique files
 
 ### Expected Results
 
@@ -381,6 +439,7 @@ The system uses a hybrid matching strategy:
 | Discord | Yes |
 | Instagram Messages | Yes |
 | Instagram Public Media | Yes |
+| Instaloader | Yes |
 | Snapchat Memories | Yes |
 | Snapchat Messages | Yes |
 | Google Chat | No |
@@ -438,6 +497,7 @@ Source: Google/johndoe | Vacation 2023, Summer Highlights
 | ffmpeg frame extract | ~50-100 ms |
 
 For 10,000 files (~100GB):
+
 - Catalog phase: ~70 seconds
 - Analysis phase: ~10-30 seconds
 
@@ -451,14 +511,17 @@ For 10,000 files (~100GB):
 ### Troubleshooting Cross-Processor Deduplication
 
 **"No dedup-capable processors found"**
+
 - Ensure exports are from supported platforms
 - Check that export directories are detected correctly
 
 **High false positive rate**
+
 - Lower `DEDUP_PERCEPTUAL_THRESHOLD` (e.g., 0.95)
 - Increase validation thresholds for GPS/timestamp
 
 **Missing duplicates**
+
 - Enable perceptual hashing: `DEDUP_USE_PERCEPTUAL=true`
 - Lower threshold if files are similar but not identical
 

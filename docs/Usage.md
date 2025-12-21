@@ -186,17 +186,20 @@ Output example:
 
 ```
 Available processors:
-  - Snapchat Messages (priority: 85)
-  - iMessage-iMazing (priority: 85)
-  - iMessage (priority: 80)
-  - Snapchat Memories (priority: 80)
-  - Discord (priority: 70)
-  - Instagram Messages (priority: 70)
-  - Instagram Public Media (priority: 60)
-  - Google Photos (priority: 50)
-  - Google Chat (priority: 50)
-  - Google Voice (priority: 50)
-  - Instaloader (priority: 30)
+
+  iMessage-iMazing               (priority: 85)
+  Snapchat Messages              (priority: 85)
+  iMessage                       (priority: 80)
+  Snapchat Memories              (priority: 80)
+  Discord                        (priority: 70)
+  Instagram Messages             (priority: 70)
+  Instagram Public Media         (priority: 60)
+  Google Chat                    (priority: 50)
+  Google Photos                  (priority: 50)
+  Google Voice                   (priority: 50)
+  Instaloader                    (priority: 30)
+
+Total: 11 processor(s)
 ```
 
 ### Upload-Only Mode

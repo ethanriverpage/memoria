@@ -49,9 +49,66 @@ See [Deduplication](Deduplication) for details on cross-processor deduplication.
 
 Look at existing processors as references:
 
-- `processors/google_photos/` - Complex with preprocessing and deduplication
+- `processors/google_photos/` - Complex with preprocessing and cross-processor deduplication
+- `processors/discord/` - CDN attachment downloading with PreprocessorBase
 - `processors/instagram_messages/` - HTML parsing and conversation handling
 - `processors/snapchat_memories/` - Overlay embedding and media matching
+
+### PreprocessorBase for Preprocessing
+
+Many processors use a two-phase architecture:
+
+1. **Preprocessing**: Downloads/organizes files, extracts metadata, handles internal deduplication
+2. **Processing**: Embeds EXIF metadata, generates final filenames, uploads
+
+For preprocessing, extend the `PreprocessorBase` class from `processors/preprocess_base.py`:
+
+```python
+from processors.preprocess_base import PreprocessorBase, CopyTask
+
+class MyPlatformPreprocessor(PreprocessorBase):
+    """Preprocessor for MyPlatform exports."""
+    
+    def __init__(self, export_path: Path, output_dir: Path, **kwargs):
+        super().__init__(
+            processor_name="MyPlatform",
+            export_path=export_path,
+            output_dir=output_dir,
+            **kwargs
+        )
+    
+    def validate_export(self) -> bool:
+        """Validate export directory structure."""
+        # Check for required files/directories
+        return (self.export_path / "required_file.json").exists()
+    
+    def detect_username(self) -> DetectionResult:
+        """Detect the export owner's username."""
+        # Try various detection methods
+        return resolve_username(self.export_path, platform="myplatform")
+    
+    def process(self) -> bool:
+        """Run the preprocessing pipeline."""
+        # 1. Parse metadata
+        # 2. Build copy tasks with deduplication
+        # 3. Save metadata.json
+        return True
+    
+    def print_statistics(self) -> None:
+        """Print preprocessing statistics."""
+        # Display summary of processed files
+        pass
+```
+
+**Key PreprocessorBase Features:**
+
+- **Built-in deduplication**: Use `copy_with_dedup()` for batch copying with automatic content-based deduplication
+- **Context merging**: Set `set_context_merger()` to merge metadata when duplicates are found
+- **Hash caching**: File hashes are cached in SQLite for faster repeated processing
+- **Thread-safe logging**: Use `log_message()` for thread-safe log entries
+- **Failure tracking**: Built-in `FailureTracker` for tracking processing failures
+
+See `processors/discord/preprocess.py` or `processors/instagram_messages/preprocess.py` for complete examples.
 
 ### Testing Your Processor
 
@@ -166,15 +223,28 @@ def process(
 
 ### Helper Functions
 
-Use these utilities from `common/dedup/`:
+Use these utilities from the `common` subpackages:
 
 ```python
+# Deduplication utilities
 from common.dedup.config import get_dedup_config
 from common.dedup.service import is_file_primary_by_hash
 from common.dedup.hashing import (
     compute_content_hash,
     compute_perceptual_hash_with_dims,
 )
+
+# Media processing
+from common.media.exiftool import batch_write_metadata_requests, MetadataWriteRequest
+
+# Logging
+from common.output.logging import get_processor_logger
+
+# Progress bars
+from common.output.progress import PHASE_PROCESS, progress_bar
+
+# File utilities
+from common.files.utils import short_path, batch_correct_extensions
 
 # Get dedup configuration
 config = get_dedup_config()
@@ -189,6 +259,17 @@ content_hash = compute_content_hash(file_path)
 if is_file_primary_by_hash(dedup_manifest, content_hash, "YourProcessorName"):
     # Copy and process file
 ```
+
+**Module Structure:**
+
+The `common` package is organized into subpackages:
+
+- `common.dedup` - Deduplication (hashing, database, service, catalog)
+- `common.media` - Media processing (exiftool, overlay, encoder)
+- `common.files` - File operations (scanner, filter, utils)
+- `common.config` - Configuration (processor, env)
+- `common.output` - Output utilities (console, logging, progress, paths)
+- `common.upload` - Upload utilities (immich, targets)
 
 **Note:** The hash-based lookup (`is_file_primary_by_hash`) is preferred over path-based lookup (`is_file_primary`) because it works correctly even when files are preprocessed to temporary directories before processing.
 
