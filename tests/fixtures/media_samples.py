@@ -144,7 +144,8 @@ def create_imessage_chat_db(db_path: Path) -> Path:
         filename TEXT,
         mime_type TEXT,
         transfer_name TEXT,
-        created_date INTEGER
+        created_date INTEGER,
+        total_bytes INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS message_attachment_join (

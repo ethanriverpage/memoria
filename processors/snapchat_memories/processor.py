@@ -301,7 +301,7 @@ def get_processor():
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[str, dict, str]],
+    file_info: List[Tuple[Optional[str], dict, str]],
 ) -> List[MetadataWriteRequest]:
     """Build MetadataWriteRequest objects for Snapchat Memories files.
 
@@ -316,6 +316,8 @@ def _build_metadata_requests(
     requests: List[MetadataWriteRequest] = []
 
     for file_path, memory_data, export_username in file_info:
+        if file_path is None:
+            continue
         # Skip MKV files (they already have metadata from overlay creation)
         if file_path.endswith(".mkv"):
             continue
@@ -582,8 +584,8 @@ def process_logic(
                     )
 
     # Create output directory (subdirectory already set by caller)
-    output_path = Path(output_dir)
-    output_path.mkdir(exist_ok=True, parents=True)
+    output_base_path = Path(output_dir)
+    output_base_path.mkdir(exist_ok=True, parents=True)
 
     # Determine number of workers
     num_workers = workers if workers is not None else default_worker_count()
@@ -642,7 +644,7 @@ def process_logic(
 
         # Create task tuple for worker
         processing_tasks.append(
-            (memory, output_filename, raw_dir, output_path, export_username)
+            (memory, output_filename, raw_dir, output_base_path, export_username)
         )
 
     if skipped_dedup > 0:
@@ -653,7 +655,9 @@ def process_logic(
         logger.info(f"Skipped {skipped_count} banned files")
 
     # Phase 1: Create all files with overlays in parallel
-    logger.info("Processing %d memories to %s/", len(processing_tasks), output_path)
+    logger.info(
+        "Processing %d memories to %s/", len(processing_tasks), output_base_path
+    )
     logger.info("=" * 50)
 
     success_count = 0
@@ -727,14 +731,14 @@ def process_logic(
         batch_write_metadata_requests(requests, existing_metadata_map)
 
     # Handle failures - copy orphaned files and generate report
-    failure_tracker.handle_failures(output_path)
+    failure_tracker.handle_failures(output_base_path)
 
     # Print summary using shared utility
     print_processing_summary(
         success=success_count,
         failed=failed_count,
         total=success_count + failed_count,
-        output_dir=str(output_path),
+        output_dir=str(output_base_path),
         extra_stats={
             "EXIF structures rebuilt": exif_rebuilt_count,
             "Skipped (banned files)": skipped_count,

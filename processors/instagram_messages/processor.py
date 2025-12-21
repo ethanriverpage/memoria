@@ -499,7 +499,7 @@ def _process_working_directory(
 
     # Pre-generate all output filenames to avoid race conditions
     logger.debug("Pre-generating filenames...")
-    filename_gen = FilenameGenerator("instagram-messages")
+    filename_gen = FilenameGenerator("insta-messages")
     processing_tasks = []
 
     skipped_dedup = 0

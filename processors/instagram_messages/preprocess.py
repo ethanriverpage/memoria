@@ -10,23 +10,18 @@ Organizes Instagram message export files and creates cleaned metadata:
 
 import json
 import logging
-import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import argparse
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
 
-from common.files.filter import BannedFilesFilter
-from common.dedup.hashing import compute_content_hash
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
-from common.utils import default_worker_count
 from common.output.logging import get_processor_logger
 from common.processing import print_preprocessing_stats
 from common.output.progress import PHASE_PREPROCESS, futures_progress
-from common.failure_tracker import FailureTracker
+from processors.preprocess_base import PreprocessorBase, CopyTask
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -34,7 +29,7 @@ logger = logging.getLogger(__name__)
 log = get_processor_logger(__name__)
 
 
-class InstagramMessagesPreprocessor:
+class InstagramMessagesPreprocessor(PreprocessorBase):
     """Preprocesses Instagram message export by organizing files and cleaning metadata"""
 
     def __init__(
@@ -44,7 +39,13 @@ class InstagramMessagesPreprocessor:
         workers: Optional[int] = None,
         final_output_dir: Optional[Path] = None,
     ):
-        self.export_path = Path(export_path)
+        super().__init__(
+            processor_name="Instagram Messages",
+            export_path=export_path,
+            output_dir=output_dir,
+            workers=workers,
+            final_output_dir=final_output_dir,
+        )
 
         # Detect export format: new (2025+) vs legacy (2022)
         new_format_inbox = (
@@ -63,52 +64,10 @@ class InstagramMessagesPreprocessor:
             self.messages_dir = new_format_inbox
             self.is_legacy_format = False
 
-        # Output directories - require explicit output_dir to prevent writing to exports
-        if output_dir is None:
-            raise ValueError(
-                "output_dir is required. Preprocessors must not write to the export "
-                "directory. Use a temp directory or specify an explicit output path."
-            )
-        output_base = Path(output_dir)
-        # Safety check: never write to the export directory
-        if output_base.resolve() == self.export_path.resolve():
-            raise ValueError(
-                f"output_dir cannot be the same as export_path ({self.export_path}). "
-                "This would corrupt the original export."
-            )
-        self.output_dir = output_base
-        self.media_output_dir = output_base / "media"
-        self.metadata_file = output_base / "metadata.json"
-        self.log_file = output_base / "preprocessing.log"
+        # No context merger needed - first occurrence wins
+        # (no accumulating fields like albums)
 
-        # Final output directory for processor (for failure tracking)
-        self.final_output_dir = (
-            Path(final_output_dir) if final_output_dir else output_base
-        )
-
-        # Initialize banned files filter
-        self.banned_filter = BannedFilesFilter()
-
-        # Initialize failure tracker
-        self.failure_tracker = FailureTracker(
-            processor_name="Instagram Messages",
-            export_directory=str(export_path),
-        )
-
-        # Threading configuration
-        self.workers = workers if workers is not None else default_worker_count()
-
-        # Thread-safe locks for shared data structures
-        self.stats_lock = Lock()
-        self.log_lock = Lock()
-        self.destination_lock = Lock()
-        self.dedup_lock = Lock()
-
-        # Content hash registry for deduplication
-        # Maps content_hash -> {filename, first_occurrence: {conversation_id, timestamp, sender}}
-        self.content_hashes: Dict[str, Dict] = {}
-
-        # Statistics
+        # Statistics specific to this preprocessor
         self.stats = {
             "total_conversations": 0,
             "total_messages_with_media": 0,
@@ -121,43 +80,12 @@ class InstagramMessagesPreprocessor:
             "duplicate_files": 0,
         }
 
-        # Log entries
-        self.log_entries = []
-
         # Deleted user counter
         self.deleted_user_counter = 0
         self.deleted_user_mapping = {}
 
-    def log_message(self, category: str, message: str, details: str = "") -> None:
-        """Add a log entry (thread-safe)"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        entry = f"[{timestamp}] {category}: {message}"
-        if details:
-            entry += f" ({details})"
-        with self.log_lock:
-            self.log_entries.append(entry)
-
-    def save_log(self) -> None:
-        """Save log entries to log file"""
-        if not self.log_entries:
-            return
-
-        try:
-            with open(self.log_file, "w", encoding="utf-8") as f:
-                f.write("Instagram Messages Preprocessing Log\n")
-                f.write("=" * 80 + "\n")
-                f.write(f"Export: {self.export_path}\n")
-                f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write("=" * 80 + "\n\n")
-
-                for entry in self.log_entries:
-                    f.write(entry + "\n")
-
-                f.write(f"\nTotal logged issues: {len(self.log_entries)}\n")
-
-            log.saved_log(str(self.log_file))
-        except Exception as e:
-            log.logger.warning("Failed to save log file: %s", e)
+        # Track which files were referenced in messages
+        self._referenced_files: set = set()
 
     def validate_export(self) -> bool:
         """Validate that export directory has required structure"""
@@ -243,17 +171,6 @@ class InstagramMessagesPreprocessor:
                 ("dirname", detect_from_dirname_instagram),
             ],
         )
-
-    def _compute_file_hash(self, file_path: Path) -> str:
-        """Compute xxHash64 of file for deduplication.
-
-        Args:
-            file_path: Path to file
-
-        Returns:
-            Hexadecimal hash digest
-        """
-        return compute_content_hash(file_path)
 
     def parse_timestamp(self, timestamp_str: str) -> Optional[str]:
         """
@@ -353,10 +270,12 @@ class InstagramMessagesPreprocessor:
 
         return media_paths
 
-    def parse_html_file(self, html_path: Path, conversation_id: str) -> List[Dict]:
+    def parse_html_file(self, html_path: Path, _conversation_id: str) -> List[Dict]:
         """
-        Parse an HTML file and extract messages with media
-        Returns list of message dictionaries (only messages with media)
+        Parse an HTML file and extract messages with media.
+        Returns list of message dictionaries (only messages with media).
+
+        Note: _conversation_id is accepted for API consistency but not used here.
         """
         messages = []
 
@@ -529,150 +448,6 @@ class InstagramMessagesPreprocessor:
 
         return catalog
 
-    def copy_media_files(
-        self, conversations: List[Dict], file_catalog: Dict[str, Path]
-    ) -> None:
-        """Copy media files referenced in metadata to output directory.
-
-        Implements content-based deduplication using xxHash64. Files with
-        identical content are only copied once, with subsequent references
-        pointing to the same file.
-        """
-        # Create output media directory
-        self.media_output_dir.mkdir(parents=True, exist_ok=True)
-
-        logger.info("Copying media files (with deduplication)...")
-
-        matched_files = set()
-
-        for conversation in conversations:
-            for message in conversation["messages"]:
-                media_paths = message.get("media_paths", [])
-                copied_files = []
-
-                for media_path in media_paths:
-                    # Extract filename from path
-                    filename = Path(media_path).name
-
-                    if filename in file_catalog:
-                        source_path = file_catalog[filename]
-
-                        # Compute content hash for deduplication
-                        try:
-                            content_hash = self._compute_file_hash(source_path)
-                        except Exception as e:
-                            logger.warning(f"Failed to hash {source_path}: {e}")
-                            # Fall back to copying without deduplication
-                            dest_path = self.media_output_dir / filename
-                            try:
-                                shutil.copy2(source_path, dest_path)
-                                copied_files.append(filename)
-                                matched_files.add(filename)
-                                self.stats["media_copied"] += 1
-                                self.stats["unique_files"] += 1
-                            except Exception as copy_err:
-                                self.log_message(
-                                    "COPY_ERROR",
-                                    f"Failed to copy {filename}",
-                                    str(copy_err),
-                                )
-                                logger.error(
-                                    "Failed to copy %s: %s", filename, copy_err
-                                )
-                            continue
-
-                        # Check for duplicate using content hash
-                        with self.dedup_lock:
-                            if content_hash in self.content_hashes:
-                                # Duplicate found - use existing file
-                                existing_info = self.content_hashes[content_hash]
-                                existing_filename = existing_info["filename"]
-                                copied_files.append(existing_filename)
-                                matched_files.add(filename)
-                                self.stats["duplicate_files"] += 1
-                            else:
-                                # New unique file - copy and register it
-                                dest_path = self.media_output_dir / filename
-                                try:
-                                    shutil.copy2(source_path, dest_path)
-                                    copied_files.append(filename)
-                                    matched_files.add(filename)
-                                    self.stats["media_copied"] += 1
-                                    self.stats["unique_files"] += 1
-
-                                    # Register in hash registry
-                                    self.content_hashes[content_hash] = {
-                                        "filename": filename,
-                                        "first_occurrence": {
-                                            "conversation_id": conversation[
-                                                "conversation_id"
-                                            ],
-                                            "timestamp": message.get("timestamp"),
-                                            "sender": message.get("sender"),
-                                        },
-                                    }
-                                except Exception as e:
-                                    self.log_message(
-                                        "COPY_ERROR",
-                                        f"Failed to copy {filename}",
-                                        str(e),
-                                    )
-                                    log.copy_error(filename, e)
-                    else:
-                        self.log_message(
-                            "MISSING_FILE",
-                            f"File referenced in HTML not found: {filename}",
-                            f"from path: {media_path}",
-                        )
-                        self.stats["missing_files"] += 1
-
-                        # Track orphaned metadata
-                        self.failure_tracker.add_orphaned_metadata(
-                            metadata_entry={
-                                "conversation_id": conversation["conversation_id"],
-                                "conversation_title": conversation[
-                                    "conversation_title"
-                                ],
-                                "media_path": media_path,
-                                "message_timestamp": message.get("timestamp"),
-                                "sender": message.get("sender"),
-                            },
-                            reason="Media file not found in filesystem",
-                            context={
-                                "expected_filename": filename,
-                            },
-                        )
-
-                # Update message with just filenames (not full paths)
-                message["media_files"] = copied_files
-                # Remove media_paths as it's no longer needed
-                del message["media_paths"]
-
-        # Report orphaned files (in filesystem but not referenced in HTML)
-        orphaned = set(file_catalog.keys()) - matched_files
-        self.stats["orphaned_files"] = len(orphaned)
-        for filename in orphaned:
-            self.log_message(
-                "ORPHANED_FILE",
-                f"File in filesystem not referenced in any HTML: {filename}",
-            )
-
-            # Track orphaned media
-            source_path = file_catalog[filename]
-            self.failure_tracker.add_orphaned_media(
-                media_path=source_path,
-                reason="No matching metadata found",
-                context={
-                    "original_location": str(source_path),
-                },
-            )
-
-        log.logger.info("   Copied %d files", self.stats["media_copied"])
-        log.logger.info("   Unique files copied: %d", self.stats["unique_files"])
-        log.logger.info("   Duplicates skipped: %d", self.stats["duplicate_files"])
-        log.logger.info("   Missing files: %d", self.stats["missing_files"])
-        log.logger.info("   Orphaned files: %d", self.stats["orphaned_files"])
-
     def _process_single_conversation(
         self, conversation_tuple: Tuple[str, Path]
     ) -> Optional[Dict]:
@@ -770,6 +545,136 @@ class InstagramMessagesPreprocessor:
         )
 
         return all_conversations
+
+    def copy_media_files(
+        self, conversations: List[Dict], file_catalog: Dict[str, Path]
+    ) -> None:
+        """Copy media files referenced in metadata to output directory.
+
+        Uses batch copy_with_dedup for content-based deduplication.
+        """
+        # Create output media directory
+        self.media_output_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info("Copying media files (with deduplication)...")
+
+        # Collect all copy tasks from all conversations
+        copy_tasks: List[CopyTask] = []
+        # Map source_path -> list of (conversation, message) for updating later
+        path_to_messages: Dict[str, List[Tuple[Dict, Dict, str]]] = {}
+
+        for conversation in conversations:
+            for message in conversation["messages"]:
+                media_paths = message.get("media_paths", [])
+
+                for media_path in media_paths:
+                    # Extract filename from path
+                    filename = Path(media_path).name
+
+                    if filename in file_catalog:
+                        source_path = file_catalog[filename]
+                        self._referenced_files.add(filename)
+
+                        # Create copy task with context
+                        context = {
+                            "conversation_id": conversation["conversation_id"],
+                            "timestamp": message.get("timestamp"),
+                            "sender": message.get("sender"),
+                        }
+                        copy_tasks.append(
+                            CopyTask(
+                                source_path=source_path,
+                                dest_filename=filename,
+                                context=context,
+                            )
+                        )
+
+                        # Track for updating message later
+                        path_key = str(source_path)
+                        if path_key not in path_to_messages:
+                            path_to_messages[path_key] = []
+                        path_to_messages[path_key].append(
+                            (conversation, message, media_path)
+                        )
+                    else:
+                        self.log_message(
+                            "MISSING_FILE",
+                            f"File referenced in HTML not found: {filename}",
+                            f"from path: {media_path}",
+                        )
+                        self.stats["missing_files"] += 1
+
+                        # Track orphaned metadata
+                        self.failure_tracker.add_orphaned_metadata(
+                            metadata_entry={
+                                "conversation_id": conversation["conversation_id"],
+                                "conversation_title": conversation[
+                                    "conversation_title"
+                                ],
+                                "media_path": media_path,
+                                "message_timestamp": message.get("timestamp"),
+                                "sender": message.get("sender"),
+                            },
+                            reason="Media file not found in filesystem",
+                            context={
+                                "expected_filename": filename,
+                            },
+                        )
+
+        # Execute batch copy with deduplication
+        if copy_tasks:
+            results = self.copy_with_dedup(copy_tasks)
+
+            # Update messages with copied filenames
+            for task in copy_tasks:
+                result = results.get(task.source_path)
+                if result:
+                    path_key = str(task.source_path)
+                    if path_key in path_to_messages:
+                        for conv, msg, media_path in path_to_messages[path_key]:
+                            # Replace media_path with dest_filename in message
+                            if "media_files" not in msg:
+                                msg["media_files"] = []
+                            if result.dest_filename not in msg["media_files"]:
+                                msg["media_files"].append(result.dest_filename)
+
+            # Update stats
+            unique_files = sum(1 for r in results.values() if not r.is_duplicate)
+            duplicate_files = sum(1 for r in results.values() if r.is_duplicate)
+            self.stats["media_copied"] = len(copy_tasks)
+            self.stats["unique_files"] = unique_files
+            self.stats["duplicate_files"] = duplicate_files
+
+        # Clean up media_paths from messages (no longer needed)
+        for conversation in conversations:
+            for message in conversation["messages"]:
+                if "media_paths" in message:
+                    del message["media_paths"]
+
+        # Report orphaned files (in filesystem but not referenced in HTML)
+        orphaned = set(file_catalog.keys()) - self._referenced_files
+        self.stats["orphaned_files"] = len(orphaned)
+        for filename in orphaned:
+            self.log_message(
+                "ORPHANED_FILE",
+                f"File in filesystem not referenced in any HTML: {filename}",
+            )
+
+            # Track orphaned media
+            source_path = file_catalog[filename]
+            self.failure_tracker.add_orphaned_media(
+                media_path=source_path,
+                reason="No matching metadata found",
+                context={
+                    "original_location": str(source_path),
+                },
+            )
+
+        log.logger.info("   Copied %d files", self.stats["media_copied"])
+        log.logger.info("   Unique files copied: %d", self.stats["unique_files"])
+        log.logger.info("   Duplicates skipped: %d", self.stats["duplicate_files"])
+        log.logger.info("   Missing files: %d", self.stats["missing_files"])
+        log.logger.info("   Orphaned files: %d", self.stats["orphaned_files"])
 
     def save_metadata(self, conversations: List[Dict]) -> None:
         """Save cleaned metadata to metadata.json"""

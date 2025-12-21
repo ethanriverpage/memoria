@@ -295,12 +295,14 @@ def _build_description(message_info: dict, export_username: str) -> str:
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[str, dict, str]],
+    file_info: List[Tuple[Optional[str], dict, str]],
 ) -> List[MetadataWriteRequest]:
     """Build MetadataWriteRequest objects for Discord files."""
     requests: List[MetadataWriteRequest] = []
 
     for file_path, message_info, export_username in file_info:
+        if file_path is None:
+            continue
         message = message_info.get("message", {})
 
         # Build datetime tags

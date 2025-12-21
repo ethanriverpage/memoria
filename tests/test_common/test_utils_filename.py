@@ -143,10 +143,10 @@ class TestFilenameGenerator:
 
     def test_complex_identifier(self):
         """Test with complex identifier containing hyphens."""
-        gen = FilenameGenerator("instagram-messages")
+        gen = FilenameGenerator("insta-messages")
         result = gen.generate("2024-01-15 10:30:00", "user-john-doe-chat", ".jpg")
 
-        assert result == "instagram-messages-user-john-doe-chat-20240115.jpg"
+        assert result == "insta-messages-user-john-doe-chat-20240115.jpg"
 
     def test_empty_extension_no_error(self):
         """Test that empty extension does not cause ValueError (empty separator bug)."""

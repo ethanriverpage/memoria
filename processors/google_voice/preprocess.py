@@ -11,7 +11,6 @@ Organizes Google Voice message export files and creates cleaned metadata:
 import json
 import logging
 import re
-import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
@@ -19,13 +18,12 @@ import sys
 import argparse
 from collections import defaultdict
 from html.parser import HTMLParser
-from threading import Lock
 
+from common.preprocess.context_mergers import merge_first_occurrence
 from common.processing import print_preprocessing_stats
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
-from common.utils import ALL_MEDIA_EXTENSIONS, default_worker_count
-from common.files.filter import BannedFilesFilter
-from common.failure_tracker import FailureTracker
+from common.utils import ALL_MEDIA_EXTENSIONS
+from processors.preprocess_base import CopyTask, PreprocessorBase
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -136,7 +134,7 @@ class VoiceHTMLParser(HTMLParser):
                 self.current_message["sender"] = data
 
 
-class GoogleVoicePreprocessor:
+class GoogleVoicePreprocessor(PreprocessorBase):
     """Preprocesses Google Voice message export by organizing files and cleaning metadata"""
 
     def __init__(
@@ -146,53 +144,20 @@ class GoogleVoicePreprocessor:
         workers: Optional[int] = None,
         final_output_dir: Optional[Path] = None,
     ):
-        self.export_path = Path(export_path)
-        self.voice_dir = self.export_path / "Voice" / "Calls"
-
-        # Output directories - require explicit output_dir to prevent writing to exports
-        if output_dir is None:
-            raise ValueError(
-                "output_dir is required. Preprocessors must not write to the export "
-                "directory. Use a temp directory or specify an explicit output path."
-            )
-        output_base = Path(output_dir)
-        # Safety check: never write to the export directory
-        if output_base.resolve() == self.export_path.resolve():
-            raise ValueError(
-                f"output_dir cannot be the same as export_path ({self.export_path}). "
-                "This would corrupt the original export."
-            )
-        self.output_dir = output_base
-        self.media_output_dir = output_base / "media"
-        self.metadata_file = output_base / "metadata.json"
-        self.log_file = output_base / "preprocessing.log"
-
-        # Final output directory for processor (for failure tracking)
-        self.final_output_dir = (
-            Path(final_output_dir) if final_output_dir else output_base
+        super().__init__(
+            processor_name="Google Voice",
+            export_path=export_path,
+            output_dir=output_dir,
+            workers=workers,
+            final_output_dir=final_output_dir,
         )
+
+        self.voice_dir = self.export_path / "Voice" / "Calls"
 
         # Export username (detected from directory name)
         self.export_username = None
 
-        # Initialize banned files filter
-        self.banned_filter = BannedFilesFilter()
-
-        # Initialize failure tracker
-        self.failure_tracker = FailureTracker(
-            processor_name="Google Voice",
-            export_directory=str(export_path),
-        )
-
-        # Threading configuration
-        self.workers = workers if workers is not None else default_worker_count()
-
-        # Thread-safe locks for shared data structures
-        self.stats_lock = Lock()
-        self.log_lock = Lock()
-        self.destination_lock = Lock()
-
-        # Statistics
+        # Statistics specific to this preprocessor
         self.stats = {
             "total_conversations": 0,
             "total_messages_with_media": 0,
@@ -203,45 +168,14 @@ class GoogleVoicePreprocessor:
             "banned_files_skipped": 0,
         }
 
-        # Log entries
-        self.log_entries = []
-
         # Track used files for duplicate handling
         self.used_files = defaultdict(int)
 
         # Track which media files were copied (for orphaned media detection)
         self.copied_media_paths = set()
 
-    def log_message(self, category: str, message: str, details: str = "") -> None:
-        """Add a log entry (thread-safe)"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        entry = f"[{timestamp}] {category}: {message}"
-        if details:
-            entry += f" ({details})"
-        with self.log_lock:
-            self.log_entries.append(entry)
-
-    def save_log(self) -> None:
-        """Save log entries to log file"""
-        if not self.log_entries:
-            return
-
-        try:
-            with open(self.log_file, "w", encoding="utf-8") as f:
-                f.write("Google Voice Messages Preprocessing Log\n")
-                f.write("=" * 80 + "\n")
-                f.write(f"Export: {self.export_path}\n")
-                f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write("=" * 80 + "\n\n")
-
-                for entry in self.log_entries:
-                    f.write(entry + "\n")
-
-                f.write(f"\nTotal logged issues: {len(self.log_entries)}\n")
-
-            logger.info("Saved preprocessing log to %s", self.log_file)
-        except Exception as e:
-            logger.warning("Failed to save log file: %s", e)
+        # Set context merger for deduplication (first occurrence wins)
+        self._context_merger = merge_first_occurrence
 
     def validate_export(self) -> bool:
         """Validate that export directory has required structure"""
@@ -279,8 +213,6 @@ class GoogleVoicePreprocessor:
             if not profile_path.exists():
                 return None
             try:
-                import json
-
                 with open(profile_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 # Get first email and strip @gmail.com
@@ -302,8 +234,6 @@ class GoogleVoicePreprocessor:
             if not users_dir.exists():
                 return None
             try:
-                import json
-
                 user_dirs = [d for d in users_dir.iterdir() if d.is_dir()]
                 if not user_dirs:
                     return None
@@ -331,25 +261,6 @@ class GoogleVoicePreprocessor:
                 ("dirname", detect_from_dirname_google),
             ],
         )
-
-    def detect_export_username(self) -> bool:
-        """
-        Detect export username (legacy wrapper).
-        Returns True if successful, False otherwise
-        """
-        result = self.detect_username()
-        if result.username:
-            self.export_username = result.username
-            logger.info(
-                "Detected export user: %s (via %s)", result.username, result.source
-            )
-            return True
-
-        self.log_message(
-            "USERNAME_DETECTION_ERROR",
-            "All username detection methods failed",
-        )
-        return False
 
     def sanitize_name(self, name: str) -> str:
         """
@@ -675,27 +586,30 @@ class GoogleVoicePreprocessor:
         return conversations
 
     def copy_media_files(self, conversations: List[Dict]) -> None:
-        """Copy media files referenced in conversations to output directory"""
+        """Copy media files referenced in conversations to output directory using copy_with_dedup."""
         # Create output media directory
         self.media_output_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info("Copying media files...")
+        logger.info("Collecting media files for copy...")
 
         # Build media catalog
         media_catalog = self.build_media_catalog()
         self.stats["total_media_files"] = len(media_catalog)
         logger.info(f"   Found {self.stats['total_media_files']} media files")
 
-        # Track destination filenames to avoid collisions
-        destination_files = {}  # maps destination_filename -> source_path
-
         # Reset used files tracker
         self.used_files.clear()
 
-        for conversation in conversations:
-            for message in conversation["messages"]:
+        # Phase 1: Collect all files to copy, resolving fuzzy matches
+        copy_tasks: List[CopyTask] = []
+        # Track which message/media_src pairs map to which source paths
+        message_file_map: Dict[Tuple[int, int], Dict[str, Optional[Path]]] = {}
+
+        for conv_idx, conversation in enumerate(conversations):
+            for msg_idx, message in enumerate(conversation["messages"]):
                 media_src_list = message.get("media_src", [])
-                copied_files = []
+                msg_key = (conv_idx, msg_idx)
+                message_file_map[msg_key] = {}
 
                 for media_src in media_src_list:
                     # Find the file using fuzzy matching
@@ -703,49 +617,29 @@ class GoogleVoicePreprocessor:
 
                     if result:
                         matched_filename, source_path = result
+                        message_file_map[msg_key][media_src] = source_path
 
-                        # Create destination filename, handling duplicates
-                        dest_filename = matched_filename
-                        dest_path = self.media_output_dir / dest_filename
+                        # Build context for this file
+                        context = {
+                            "_source_path": str(source_path),
+                            "conversation_name": conversation["conversation_name"],
+                            "conversation_type": conversation["conversation_type"],
+                            "sender": message.get("sender"),
+                            "timestamp": message.get("timestamp"),
+                            "media_src": media_src,
+                        }
 
-                        # If this exact file already exists at destination, use it
-                        if dest_filename in destination_files:
-                            if destination_files[dest_filename] == source_path:
-                                # Same source file already copied, just reference it
-                                copied_files.append(dest_filename)
-                                continue
-                            else:
-                                # Different source file with same name, create unique name
-                                base, ext = (
-                                    matched_filename.rsplit(".", 1)
-                                    if "." in matched_filename
-                                    else (matched_filename, "")
-                                )
-                                counter = 1
-                                while dest_filename in destination_files:
-                                    dest_filename = (
-                                        f"{base}_dup{counter}.{ext}"
-                                        if ext
-                                        else f"{base}_dup{counter}"
-                                    )
-                                    counter += 1
-                                dest_path = self.media_output_dir / dest_filename
-
-                        try:
-                            shutil.copy2(source_path, dest_path)
-                            copied_files.append(dest_filename)
-                            destination_files[dest_filename] = source_path
-                            self.stats["media_copied"] += 1
-                            # Track that this file was copied
-                            self.copied_media_paths.add(str(source_path))
-                        except Exception as e:
-                            self.log_message(
-                                "COPY_ERROR",
-                                f"Failed to copy {matched_filename}",
-                                str(e),
+                        copy_tasks.append(
+                            CopyTask(
+                                source_path=source_path,
+                                dest_filename=matched_filename,
+                                context=context,
                             )
-                            logger.error("Failed to copy %s: %s", matched_filename, e)
+                        )
+                        # Track that this file was referenced
+                        self.copied_media_paths.add(str(source_path))
                     else:
+                        message_file_map[msg_key][media_src] = None
                         self.log_message(
                             "MISSING_FILE",
                             f"File not found: {media_src}",
@@ -766,12 +660,48 @@ class GoogleVoicePreprocessor:
                             },
                         )
 
+        # Phase 2: Copy files with deduplication
+        logger.info("Copying %d media files with deduplication...", len(copy_tasks))
+        results = self.copy_with_dedup(copy_tasks)
+
+        # Build a map from source_path to dest_filename for updating messages
+        source_to_dest: Dict[str, str] = {}
+        duplicate_count = 0
+
+        for source_path, result in results.items():
+            source_path_str = str(source_path)
+
+            if result.is_duplicate:
+                duplicate_count += 1
+            else:
+                self.stats["media_copied"] += 1
+
+            # Map this source path to the resulting destination filename
+            if source_path_str and result.dest_filename:
+                source_to_dest[source_path_str] = result.dest_filename
+
+        # Phase 3: Update messages with resulting filenames
+        for conv_idx, conversation in enumerate(conversations):
+            for msg_idx, message in enumerate(conversation["messages"]):
+                media_src_list = message.get("media_src", [])
+                copied_files = []
+                msg_key = (conv_idx, msg_idx)
+
+                for media_src in media_src_list:
+                    source_path = message_file_map.get(msg_key, {}).get(media_src)
+                    if source_path:
+                        dest_filename = source_to_dest.get(str(source_path))
+                        if dest_filename:
+                            copied_files.append(dest_filename)
+
                 # Update message with matched filenames
                 message["media_files"] = copied_files
                 # Remove media_src as it's no longer needed
-                del message["media_src"]
+                if "media_src" in message:
+                    del message["media_src"]
 
-        logger.info("   Copied %d files", self.stats["media_copied"])
+        logger.info("   Copied %d unique files", self.stats["media_copied"])
+        logger.info(f"   Deduplicated {duplicate_count} duplicate files")
         logger.info("   Fuzzy matches: %d", self.stats["fuzzy_matches"])
         logger.info("   Missing files: %d", self.stats["missing_files"])
 
@@ -838,7 +768,7 @@ class GoogleVoicePreprocessor:
         }
         print_preprocessing_stats("Preprocessing Stats", stats)
 
-    def process(self) -> None:
+    def process(self) -> bool:
         """Main processing pipeline"""
         logger.info("Starting Google Voice Messages Preprocessing")
         logger.info("Export path: %s", self.export_path)
@@ -846,13 +776,20 @@ class GoogleVoicePreprocessor:
 
         # Validate export structure
         if not self.validate_export():
-            sys.exit(1)
+            return False
 
         # Detect export username
         logger.info("Detecting export username...")
-        if not self.detect_export_username():
+        result = self.detect_username()
+        if not result.username:
+            self.log_message(
+                "USERNAME_DETECTION_ERROR",
+                "All username detection methods failed",
+            )
             logger.error("Could not detect export username")
-            sys.exit(1)
+            return False
+        self.export_username = result.username
+        logger.info("Detected export user: %s (via %s)", result.username, result.source)
 
         # Scan and parse conversations
         conversations = self.scan_conversations()
@@ -873,6 +810,7 @@ class GoogleVoicePreprocessor:
         self.print_statistics()
 
         logger.info("Preprocessing complete!")
+        return True
 
 
 def main():

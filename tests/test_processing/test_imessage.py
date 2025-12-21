@@ -395,3 +395,85 @@ class TestIMessageMixedExports:
 
         assert (mac_export / "chat.db").exists()
         assert (iphone_export / "SMS" / "sms.db").exists()
+
+
+class TestIMessageOrphanDetection:
+    """Tests for orphaned media/metadata detection."""
+
+    def test_detect_orphaned_media_method(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should track media files not in processed attachments as orphaned media."""
+        from processors.imessage.preprocess import IMessagePreprocessor
+        from tests.fixtures.media_samples import write_media_file
+
+        # Create basic export structure (just the Attachments dir, no database needed)
+        temp_export_dir.mkdir(parents=True, exist_ok=True)
+        attachments_dir = temp_export_dir / "Attachments"
+        attachments_dir.mkdir()
+
+        # Create media files - one will be "processed", one will be orphaned
+        processed_dir = attachments_dir / "00" / "00"
+        processed_dir.mkdir(parents=True)
+        processed_file = processed_dir / "processed.jpg"
+        write_media_file(processed_file, "jpeg")
+
+        orphan_dir = attachments_dir / "99" / "99"
+        orphan_dir.mkdir(parents=True)
+        orphan_file = orphan_dir / "orphan_not_in_db.jpg"
+        write_media_file(orphan_file, "jpeg")
+
+        # Create a minimal preprocessor and test _detect_orphaned_media directly
+        preprocessor = IMessagePreprocessor(
+            export_paths=[temp_export_dir],
+            output_dir=temp_output_dir,
+        )
+
+        # Simulate "processed" attachments - only the processed file was in the database
+        processed_attachments = [
+            {"source_path": str(processed_file.resolve())}
+        ]
+
+        # Run orphan detection
+        orphaned_media = preprocessor._detect_orphaned_media(processed_attachments)
+
+        # Check that the orphan file was detected
+        orphaned_paths = [entry["media_file"] for entry in orphaned_media]
+        assert "orphan_not_in_db.jpg" in orphaned_paths
+
+        # Check FailureTracker was updated
+        tracker_paths = [
+            entry["file_path"] for entry in preprocessor.failure_tracker.orphaned_media
+        ]
+        assert any("orphan_not_in_db.jpg" in path for path in tracker_paths)
+
+    def test_no_orphans_when_all_files_processed(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should not report orphans when all files were processed from database."""
+        from processors.imessage.preprocess import IMessagePreprocessor
+        from tests.fixtures.media_samples import write_media_file
+
+        temp_export_dir.mkdir(parents=True, exist_ok=True)
+        attachments_dir = temp_export_dir / "Attachments" / "00" / "00"
+        attachments_dir.mkdir(parents=True)
+
+        # Create a media file
+        media_file = attachments_dir / "photo.jpg"
+        write_media_file(media_file, "jpeg")
+
+        preprocessor = IMessagePreprocessor(
+            export_paths=[temp_export_dir],
+            output_dir=temp_output_dir,
+        )
+
+        # Simulate that this file was processed from the database
+        processed_attachments = [
+            {"source_path": str(media_file.resolve())}
+        ]
+
+        orphaned_media = preprocessor._detect_orphaned_media(processed_attachments)
+
+        # No orphans should be found
+        assert len(orphaned_media) == 0
+        assert len(preprocessor.failure_tracker.orphaned_media) == 0

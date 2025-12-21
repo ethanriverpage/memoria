@@ -583,7 +583,7 @@ def show_supported_formats() -> None:
     logger.info("  snapmsgs-username-20251017/   -> Snapchat Messages")
 
 
-def _get_structure_signature(path: Path) -> tuple:
+def _get_structure_signature(path: Path) -> tuple[str, ...] | None:
     """Create a signature of directory structure for caching detection.
 
     Uses top-level subdirectory names to identify export type.
@@ -610,19 +610,19 @@ def _get_structure_signature(path: Path) -> tuple:
 
 def _process_export_worker(
     export_dir: Path,
-    output_base: str,
+    output_base: str | None,
     verbose: bool,
     workers: int,
     immich_enabled: bool,
-    immich_url: str,
-    immich_key: str,
+    immich_url: str | None,
+    immich_key: str | None,
     immich_concurrency: int,
     immich_skip_hash: bool,
     temp_dir: str,
     export_idx: int,
     total_exports: int,
     upload_queue=None,
-    processor_filter: str = None,
+    processor_filter: str | None = None,
 ) -> tuple[str, int, int]:
     """Worker function for parallel processing of exports
 
@@ -1600,6 +1600,9 @@ Examples:
 
         input_path = Path(args.input_dir).resolve()
         upload_path = Path(args.upload_only).resolve()
+
+        # Type guard: immich_enabled is True only if these are set (checked at line 1579)
+        assert immich_url is not None and immich_key is not None
 
         return upload_only_mode(
             input_path,

@@ -16,19 +16,16 @@ import csv
 import json
 import logging
 import re
-import shutil
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from common.failure_tracker import FailureTracker
-from common.files.filter import BannedFilesFilter
-from common.dedup.hashing import compute_content_hash
+from common.detection import DetectionResult
 from common.output.logging import get_processor_logger
+from common.preprocess.context_mergers import merge_imessage_context
 from common.processing import print_preprocessing_stats
-from common.utils import default_worker_count
 from common.output.progress import PHASE_PREPROCESS, progress_bar
+from processors.preprocess_base import CopyTask, PreprocessorBase
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -125,7 +122,7 @@ def get_media_type(file_path: Path) -> Optional[str]:
     return None
 
 
-class ImazingPreprocessor:
+class ImazingPreprocessor(PreprocessorBase):
     """Preprocessor for iMazing-format iMessage exports.
 
     Handles the flat file structure with filename-encoded metadata,
@@ -156,41 +153,35 @@ class ImazingPreprocessor:
             workers: Number of parallel workers for hashing/copying (default: 8)
             owner_name: Override for device owner name
         """
-        self.export_path = Path(export_path)
+        # Handle default output_dir before calling super().__init__
+        if output_dir is None:
+            output_dir = Path(export_path).parent / "imessage-imazing-processed"
 
-        # Output directories
-        if output_dir:
-            self.output_dir = Path(output_dir)
-        else:
-            self.output_dir = self.export_path.parent / "imessage-imazing-processed"
+        super().__init__(
+            processor_name="iMessage-iMazing",
+            export_path=export_path,
+            output_dir=output_dir,
+            workers=workers,
+            final_output_dir=None,
+        )
 
-        self.media_dir = self.output_dir / "media"
-        self.metadata_file = self.output_dir / "metadata.json"
-
-        # Parallel processing worker count
-        self.workers = workers if workers is not None else default_worker_count()
+        # Override media_dir to match expected name
+        self.media_dir = self.media_output_dir
 
         # Owner name (device owner) - extract from Device-Info.txt if not provided
         self.owner_name = owner_name or self._extract_owner_name()
 
-        # Global hash registry for deduplication
-        # hash -> {output_filename, source_path}
-        self.content_hashes: Dict[str, dict] = {}
+        # Set context merger for deduplication (accumulates messages)
+        self._context_merger = merge_imessage_context
 
         # CSV message cache for cross-reference
         # (timestamp, attachment_filename) -> message_info
         self.csv_message_cache: Dict[Tuple[str, str], Dict] = {}
 
-        # Banned files filter
-        self.banned_filter = BannedFilesFilter()
+        # Track which CSV entries were matched to media files
+        self.matched_csv_keys: set = set()
 
-        # Failure tracker
-        self.failure_tracker = FailureTracker(
-            processor_name="iMessage-iMazing",
-            export_directory=str(self.export_path),
-        )
-
-        # Statistics
+        # Statistics specific to this preprocessor
         self.stats = {
             "total_files_scanned": 0,
             "media_files_found": 0,
@@ -253,6 +244,13 @@ class ImazingPreprocessor:
             parsed = parse_imazing_filename(file_path.name)
             if parsed:
                 media_files.append(file_path)
+            else:
+                # Track as orphaned media (filename doesn't match iMazing pattern)
+                self.failure_tracker.add_orphaned_media(
+                    media_path=file_path,
+                    reason="Filename does not match iMazing pattern",
+                    context={"filename": file_path.name},
+                )
 
         return media_files
 
@@ -329,6 +327,7 @@ class ImazingPreprocessor:
         # Try direct lookup
         cache_key = (timestamp_str, original_filename)
         if cache_key in self.csv_message_cache:
+            self.matched_csv_keys.add(cache_key)
             return self.csv_message_cache[cache_key]
 
         # Try with slight timestamp variations
@@ -336,103 +335,58 @@ class ImazingPreprocessor:
         for key, value in self.csv_message_cache.items():
             csv_ts, csv_file = key
             if csv_file == original_filename and csv_ts.startswith(timestamp_str[:16]):
+                self.matched_csv_keys.add(key)
                 return value
 
         return None
 
-    def _compute_file_hash(self, file_path: Path) -> str:
-        """Compute xxHash64 of file for deduplication.
+    def _detect_orphaned_csv_metadata(self) -> None:
+        """Detect CSV entries that reference attachments without matching media files.
 
-        Args:
-            file_path: Path to file
+        Iterates through the CSV message cache and tracks any entries that
+        weren't matched to a media file during _build_conversations.
+        """
+        orphaned_count = 0
+        for cache_key, message_info in self.csv_message_cache.items():
+            if cache_key not in self.matched_csv_keys:
+                orphaned_count += 1
+                timestamp_str, attachment_filename = cache_key
+                self.failure_tracker.add_orphaned_metadata(
+                    metadata_entry={
+                        "attachment": attachment_filename,
+                        "message_date": timestamp_str,
+                        "chat_session": message_info.get("chat_session", ""),
+                        "sender_name": message_info.get("sender_name", ""),
+                        "text": message_info.get("text", ""),
+                    },
+                    reason="CSV references attachment but media file not found",
+                    context={
+                        "expected_attachment": attachment_filename,
+                        "message_date": message_info.get("message_date", ""),
+                    },
+                )
+
+        if orphaned_count > 0:
+            logger.info(f"Found {orphaned_count} orphaned CSV metadata entries")
+
+    def validate_export(self) -> bool:
+        """Validate that export directory exists.
 
         Returns:
-            Hexadecimal hash digest
+            True if valid, False otherwise
         """
-        return compute_content_hash(file_path)
+        if not self.export_path.exists():
+            log.logger.error("Export path does not exist: %s", self.export_path)
+            return False
+        return True
 
-    def _compute_hashes_parallel(
-        self, media_files: List[Path]
-    ) -> Dict[str, List[Dict]]:
-        """Hash files in parallel and group by content hash.
-
-        Args:
-            media_files: List of media file paths
+    def detect_username(self) -> DetectionResult:
+        """Detect device owner name.
 
         Returns:
-            Dictionary mapping content hash to list of file info dicts
+            DetectionResult with owner name and source
         """
-        hash_to_files: Dict[str, List[Dict]] = {}
-
-        def hash_file(file_path: Path) -> Tuple[Path, Optional[str], Optional[Dict]]:
-            """Hash a single file, returning path, hash, and parsed metadata."""
-            try:
-                file_hash = self._compute_file_hash(file_path)
-                parsed = parse_imazing_filename(file_path.name)
-                return (file_path, file_hash, parsed)
-            except Exception as e:
-                logger.warning(f"Failed to hash {file_path}: {e}")
-                return (file_path, None, None)
-
-        with ThreadPoolExecutor(max_workers=self.workers) as executor:
-            futures = [executor.submit(hash_file, f) for f in media_files]
-
-            for future in progress_bar(
-                as_completed(futures),
-                PHASE_PREPROCESS,
-                "Hashing files",
-                total=len(futures),
-                unit="file",
-            ):
-                file_path, file_hash, parsed = future.result()
-
-                if file_hash and parsed:
-                    file_info_item = {
-                        "path": file_path,
-                        "hash": file_hash,
-                        "parsed": parsed,
-                    }
-                    hash_to_files.setdefault(file_hash, []).append(file_info_item)
-
-        return hash_to_files
-
-    def _copy_files_parallel(
-        self, copy_tasks: List[Tuple[Path, Path]]
-    ) -> Dict[Path, bool]:
-        """Copy files in parallel.
-
-        Args:
-            copy_tasks: List of (source_path, dest_path) tuples
-
-        Returns:
-            Dictionary mapping dest_path to success status
-        """
-        results: Dict[Path, bool] = {}
-
-        def copy_file(args: Tuple[Path, Path]) -> Tuple[Path, bool]:
-            """Copy a single file."""
-            src, dst = args
-            try:
-                shutil.copy2(src, dst)
-                return (dst, True)
-            except Exception as e:
-                logger.error(f"Failed to copy {src}: {e}")
-                return (dst, False)
-
-        with ThreadPoolExecutor(max_workers=self.workers) as executor:
-            futures = [executor.submit(copy_file, task) for task in copy_tasks]
-
-            for future in progress_bar(
-                as_completed(futures),
-                PHASE_PREPROCESS,
-                "Copying files",
-                total=len(futures),
-                unit="file",
-            ):
-                dest, success = future.result()
-                results[dest] = success
-
-        return results
+        return DetectionResult(username=self.owner_name, source="device_info")
 
     def _generate_output_filename(self, source_path: Path) -> str:
         """Generate output filename from source path.
@@ -446,83 +400,40 @@ class ImazingPreprocessor:
         return source_path.name
 
     def _build_conversations(
-        self, hash_to_files: Dict[str, List[Dict]]
+        self, media_files: List[Path]
     ) -> Tuple[Dict[str, Dict], List[Dict]]:
-        """Build conversations structure and copy files.
+        """Build conversations structure and copy files using copy_with_dedup.
 
         Args:
-            hash_to_files: Dict mapping content hash to list of file info
+            media_files: List of media file paths to process
 
         Returns:
             Tuple of (conversations dict, orphaned_media list)
         """
-        self.media_dir.mkdir(parents=True, exist_ok=True)
+        # Sort files by parsed timestamp so oldest is processed first (becomes primary)
+        def get_timestamp(file_path: Path) -> datetime:
+            parsed = parse_imazing_filename(file_path.name)
+            if parsed:
+                return parsed["timestamp"]
+            return datetime.max.replace(tzinfo=timezone.utc)
 
-        # Prepare copy tasks
-        copy_tasks: List[Tuple[Path, Path]] = []
-        copy_info: Dict[str, Dict] = {}  # hash -> copy info
+        media_files.sort(key=get_timestamp)
 
-        for file_hash, files in hash_to_files.items():
-            # Sort by timestamp to get oldest first
-            files.sort(key=lambda x: x["parsed"]["timestamp"])
-            primary = files[0]
-
-            source_path = primary["path"]
-            output_filename = self._generate_output_filename(source_path)
-
-            # Handle name collisions
-            output_path = self.media_dir / output_filename
-            counter = 1
-            base_stem = output_path.stem
-            while output_path.exists():
-                output_filename = f"{base_stem}_{counter}{output_path.suffix}"
-                output_path = self.media_dir / output_filename
-                counter += 1
-
-            copy_tasks.append((source_path, output_path))
-            copy_info[file_hash] = {
-                "source_path": source_path,
-                "output_path": output_path,
-                "output_filename": output_filename,
-                "files": files,
-            }
-
-        # Copy files in parallel
-        copy_results = self._copy_files_parallel(copy_tasks)
-
-        # Build conversations structure
-        conversations: Dict[str, Dict] = {}
-
-        for file_hash, info in copy_info.items():
-            output_path = info["output_path"]
-            output_filename = info["output_filename"]
-            files = info["files"]
-
-            # Check if copy succeeded
-            if not copy_results.get(output_path, False):
+        # Build CopyTask objects from media files
+        copy_tasks: List[CopyTask] = []
+        for file_path in media_files:
+            parsed = parse_imazing_filename(file_path.name)
+            if not parsed:
                 continue
 
-            self.stats["files_copied"] += 1
-            self.stats["unique_files"] += 1
-
-            if len(files) > 1:
-                self.stats["duplicate_files"] += len(files) - 1
-
-            # Use primary file's metadata
-            primary = files[0]
-            parsed = primary["parsed"]
-            conversation_name = parsed["conversation"]
-            timestamp_str = parsed["timestamp_str"]
-            original_filename = parsed["original_filename"]
-
-            # Determine conversation type
-            conv_type = "group" if is_group_chat(conversation_name) else "dm"
-
-            # Try to get additional info from CSV
+            # Get additional info from CSV for context
             csv_timestamp = parsed["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
-            csv_info = self._lookup_csv_message(csv_timestamp, original_filename)
+            csv_info = self._lookup_csv_message(csv_timestamp, parsed["original_filename"])
 
             # Determine sender and is_sender
+            conversation_name = parsed["conversation"]
+            conv_type = "group" if is_group_chat(conversation_name) else "dm"
+
             if csv_info:
                 msg_type = csv_info.get("type", "")
                 is_sender = msg_type == "Outgoing"
@@ -533,92 +444,117 @@ class ImazingPreprocessor:
                 )
                 content = csv_info.get("text", "")
             else:
-                # Without CSV, we can't determine direction
-                is_sender = False  # Default to received
+                is_sender = False
                 sender = conversation_name
                 content = ""
 
+            # Build context for merging
+            context = {
+                "source_export": self.export_path.name,
+                "conversation_id": conversation_name,
+                "conversation_type": conv_type,
+                "conversation_title": conversation_name,
+                "sender": sender,
+                "created": parsed["timestamp_str"],
+                "content": content,
+                "is_sender": is_sender,
+                "media_type": get_media_type(file_path),
+            }
+
+            copy_tasks.append(CopyTask(
+                source_path=file_path,
+                dest_filename=file_path.name,
+                context=context,
+            ))
+
+        # Use copy_with_dedup for parallel hashing, deduplication, and copying
+        self.media_dir.mkdir(parents=True, exist_ok=True)
+        results = self.copy_with_dedup(copy_tasks)
+
+        # Build conversations from results
+        conversations: Dict[str, Dict] = {}
+        unique_files_copied = 0
+        duplicate_count = 0
+
+        for source_path, result in results.items():
+            if result.is_duplicate:
+                duplicate_count += 1
+                continue
+
+            unique_files_copied += 1
+            self.stats["files_copied"] += 1
+
+            # Get merged context (includes all duplicate message contexts)
+            merged_contexts = self.get_contexts_list_for_file(result.dest_filename)
+
+            # Primary context is the first one (oldest due to sorting)
+            # If no merged contexts found, skip this result as we can't process without context
+            if not merged_contexts:
+                continue
+            primary_context = merged_contexts[0]
+
+            conv_id = primary_context.get("conversation_id")
+            if not conv_id:
+                continue
+
             # Initialize conversation if needed
-            conv_id = conversation_name  # Use conversation name as ID
             if conv_id not in conversations:
                 conversations[conv_id] = {
-                    "type": conv_type,
-                    "title": conversation_name,
+                    "type": primary_context.get("conversation_type"),
+                    "title": primary_context.get("conversation_title"),
                     "message_count": 0,
                     "messages": [],
                 }
 
-            # Get media type
-            media_type = get_media_type(primary["path"])
+            media_type = primary_context.get("media_type")
 
-            # Handle duplicates vs single files
-            if len(files) > 1:
-                # Create merged message entry
+            # Check if this has merged duplicates
+            if len(merged_contexts) > 1:
+                # Create merged message with messages array
                 merged_message = {
-                    "media_file": output_filename,
-                    "primary_created": timestamp_str,
+                    "media_file": result.dest_filename,
+                    "primary_created": primary_context.get("created"),
                     "is_duplicate": True,
                     "messages": [],
                     "media_type": media_type,
                 }
 
-                for file_info in files:
-                    fp = file_info["parsed"]
-                    file_csv_ts = fp["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
-                    file_csv_info = self._lookup_csv_message(
-                        file_csv_ts, fp["original_filename"]
-                    )
-
-                    if file_csv_info:
-                        file_is_sender = file_csv_info.get("type", "") == "Outgoing"
-                        file_sender = (
-                            "me"
-                            if file_is_sender
-                            else file_csv_info.get("sender_name", "")
-                            or fp["conversation"]
-                        )
-                        file_content = file_csv_info.get("text", "")
-                    else:
-                        file_is_sender = False
-                        file_sender = fp["conversation"]
-                        file_content = ""
-
-                    merged_message["messages"].append(
-                        {
-                            "source_export": self.export_path.name,
-                            "conversation_id": fp["conversation"],
-                            "conversation_type": (
-                                "group" if is_group_chat(fp["conversation"]) else "dm"
-                            ),
-                            "conversation_title": fp["conversation"],
-                            "sender": file_sender,
-                            "created": fp["timestamp_str"],
-                            "content": file_content,
-                            "is_sender": file_is_sender,
-                        }
-                    )
+                # Add all occurrences to messages array
+                for ctx in merged_contexts:
+                    merged_message["messages"].append({
+                        "source_export": ctx.get("source_export"),
+                        "conversation_id": ctx.get("conversation_id"),
+                        "conversation_type": ctx.get("conversation_type"),
+                        "conversation_title": ctx.get("conversation_title"),
+                        "sender": ctx.get("sender"),
+                        "created": ctx.get("created"),
+                        "content": ctx.get("content"),
+                        "is_sender": ctx.get("is_sender"),
+                    })
 
                 conversations[conv_id]["messages"].append(merged_message)
                 conversations[conv_id]["message_count"] += 1
-
+                duplicate_count += len(merged_contexts) - 1
             else:
-                # Single file - create standard message entry
+                # Single occurrence - create standard message entry
                 message = {
-                    "source_export": self.export_path.name,
+                    "source_export": primary_context.get("source_export"),
                     "conversation_id": conv_id,
-                    "conversation_type": conv_type,
-                    "conversation_title": conversation_name,
-                    "sender": sender,
-                    "created": timestamp_str,
-                    "content": content,
-                    "is_sender": is_sender,
-                    "media_file": output_filename,
+                    "conversation_type": primary_context.get("conversation_type"),
+                    "conversation_title": primary_context.get("conversation_title"),
+                    "sender": primary_context.get("sender"),
+                    "created": primary_context.get("created"),
+                    "content": primary_context.get("content"),
+                    "is_sender": primary_context.get("is_sender"),
+                    "media_file": result.dest_filename,
                     "media_type": media_type,
                 }
 
                 conversations[conv_id]["messages"].append(message)
                 conversations[conv_id]["message_count"] += 1
 
+        self.stats["unique_files"] = unique_files_copied
+        self.stats["duplicate_files"] = duplicate_count
         self.stats["conversations"] = len(conversations)
 
         # No orphaned media in this format
@@ -685,20 +621,18 @@ class ImazingPreprocessor:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
             return True
 
-        # Phase 3: Hash files for deduplication
-        log.logger.info("Hashing files for deduplication...")
-        hash_to_files = self._compute_hashes_parallel(media_files)
-        log.found_items(len(hash_to_files), "unique files")
-
-        # Phase 4: Build conversations and copy files
+        # Phase 3: Build conversations and copy files (with deduplication)
         log.logger.info("Building conversations and copying files...")
-        conversations, orphaned_media = self._build_conversations(hash_to_files)
+        conversations, orphaned_media = self._build_conversations(media_files)
         log.logger.info(
             "Organized into %d conversations, %d unique files (%d duplicates removed)",
             len(conversations),
             self.stats["unique_files"],
             self.stats["duplicate_files"],
         )
+
+        # Phase 4b: Detect orphaned CSV metadata entries
+        self._detect_orphaned_csv_metadata()
 
         # Phase 5: Generate metadata
         log.logger.info("Generating metadata.json")
@@ -712,11 +646,11 @@ class ImazingPreprocessor:
         self.failure_tracker.handle_failures(self.output_dir)
 
         log.preprocessing_done(str(self.output_dir))
-        self._print_statistics()
+        self.print_statistics()
 
         return True
 
-    def _print_statistics(self) -> None:
+    def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
         stats = {
             "Media files found": self.stats["media_files_found"],

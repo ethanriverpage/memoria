@@ -200,7 +200,7 @@ class IMessageProcessor(ProcessorBase):
     @staticmethod
     def process_consolidated(
         input_dirs: List[str],
-        output_dir: str = None,
+        output_dir: Optional[str] = None,
         dedup_manifest: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> bool:
@@ -276,24 +276,54 @@ def get_processor():
 # ============================================================================
 
 
+def _extract_date_from_source_export(source_export: str) -> Optional[str]:
+    """Extract date string from source_export directory name.
+
+    Examples:
+        "imessage-iph13p-20220426" -> "20220426"
+        "imessage-m3_mbp-20251202" -> "20251202"
+
+    Args:
+        source_export: Directory name like "imessage-{device}-YYYYMMDD"
+
+    Returns:
+        Date string (YYYYMMDD), or None if pattern doesn't match
+    """
+    if not source_export or not source_export.startswith("imessage-"):
+        return None
+
+    # Format: imessage-{device}-YYYYMMDD
+    # The date is always the last 8 characters after the final hyphen
+    parts = source_export.rsplit("-", 1)
+    if len(parts) == 2 and len(parts[1]) == 8 and parts[1].isdigit():
+        return parts[1]
+
+    return None
+
+
 def _extract_device_from_source_export(source_export: str) -> str:
     """Extract device identifier from source_export directory name.
 
     Examples:
-        "iph13p-messages-20220426" -> "iph13p"
-        "mac-messages-20240601" -> "mac"
+        "imessage-iph13p-20220426" -> "iph13p"
+        "imessage-m3_mbp-20251202" -> "m3_mbp"
 
     Args:
-        source_export: Directory name like "{device}-messages-YYYYMMDD"
+        source_export: Directory name like "imessage-{device}-YYYYMMDD"
 
     Returns:
         Device identifier, or "unknown" if pattern doesn't match
     """
-    if not source_export:
+    if not source_export or not source_export.startswith("imessage-"):
         return "unknown"
 
-    if "-messages-" in source_export:
-        return source_export.split("-messages-")[0]
+    # Format: imessage-{device}-YYYYMMDD
+    # Remove "imessage-" prefix, then extract device before the date suffix
+    remainder = source_export[9:]  # len("imessage-") = 9
+    # Find the last hyphen followed by 8 digits (date)
+    parts = remainder.rsplit("-", 1)
+    if len(parts) == 2 and len(parts[1]) == 8 and parts[1].isdigit():
+        return parts[0]
 
     return "unknown"
 
@@ -321,11 +351,15 @@ def _build_description(message: dict, export_username: str) -> str:
             source_export = msg.get("source_export")
             if source_export:
                 try:
-                    date_str = source_export.split("-messages-")[1]
-                    export_date = dt.strptime(date_str, "%Y%m%d")
-                    if oldest_export_date is None or export_date < oldest_export_date:
-                        oldest_export_date = export_date
-                        oldest_msg = msg
+                    date_str = _extract_date_from_source_export(source_export)
+                    if date_str:
+                        export_date = dt.strptime(date_str, "%Y%m%d")
+                        if (
+                            oldest_export_date is None
+                            or export_date < oldest_export_date
+                        ):
+                            oldest_export_date = export_date
+                            oldest_msg = msg
                 except (ValueError, IndexError):
                     pass
 
@@ -420,7 +454,7 @@ def _build_description(message: dict, export_username: str) -> str:
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[str, dict, str]],
+    file_info: List[Tuple[Optional[str], dict, str]],
 ) -> List[MetadataWriteRequest]:
     """Build MetadataWriteRequest objects for iMessage files.
 
@@ -433,6 +467,8 @@ def _build_metadata_requests(
     requests: List[MetadataWriteRequest] = []
 
     for file_path, message, export_username in file_info:
+        if file_path is None:
+            continue
         is_merged = "messages" in message and isinstance(message["messages"], list)
 
         # Build datetime tags
@@ -623,7 +659,7 @@ def _process_file_worker(args_tuple):
 
 def process_logic(
     input_dirs: List[str],
-    output_dir: str = None,
+    output_dir: Optional[str] = None,
     temp_dir: str = "../pre",
     verbose: bool = False,  # noqa: ARG001 - Reserved for future detailed logging
     workers: Optional[int] = None,

@@ -212,9 +212,11 @@ def _get_description_for_file(
 # =============================================================================
 
 
-def batch_validate_exif(file_paths: List[str]) -> Set[str]:
+def batch_validate_exif(file_paths: List[Optional[str]]) -> Set[str]:
     """Return set of file paths with corrupted EXIF that need rebuilding."""
-    if not file_paths:
+    # Filter out None values
+    valid_paths = [p for p in file_paths if p is not None]
+    if not valid_paths:
         return set()
 
     corrupted_files = set()
@@ -223,8 +225,8 @@ def batch_validate_exif(file_paths: List[str]) -> Set[str]:
     # At ~150 bytes per path, 500 files uses ~75KB (~3.5% of 2MB ARG_MAX)
     chunk_size = 500
 
-    for i in range(0, len(file_paths), chunk_size):
-        chunk = file_paths[i : i + chunk_size]
+    for i in range(0, len(valid_paths), chunk_size):
+        chunk = valid_paths[i : i + chunk_size]
         try:
             # Use exiftool to validate files in this chunk
             cmd = ["exiftool", "-validate", "-warning"]
@@ -334,14 +336,16 @@ def batch_rebuild_exif(file_paths: List[str]) -> None:
 # =============================================================================
 
 
-def batch_read_existing_metadata(file_paths: List[str]) -> Dict[str, Dict[str, bool]]:
+def batch_read_existing_metadata(file_paths: List[Optional[str]]) -> Dict[str, Dict[str, bool]]:
     """Read existing metadata fields from files, returning presence map."""
-    if not file_paths:
+    # Filter out None values first
+    valid_paths = [p for p in file_paths if p is not None]
+    if not valid_paths:
         return {}
 
     # Filter to only existing files
-    existing_files = [fp for fp in file_paths if Path(fp).exists()]
-    missing_files = [fp for fp in file_paths if not Path(fp).exists()]
+    existing_files = [fp for fp in valid_paths if Path(fp).exists()]
+    missing_files = [fp for fp in valid_paths if not Path(fp).exists()]
 
     if missing_files:
         logger.warning(

@@ -153,7 +153,7 @@ Files are renamed with descriptive, sortable names that include platform, userna
 |----------|------------------|
 | Google Chat | `gchat-john.doe-Family Chat-20230115.jpg` |
 | iMessage | `imessage-mac-14045551234-20230115.heic` |
-| Instagram Messages | `instagram-messages-jane_doe-Best Friends-20230220.mp4` |
+| Instagram Messages | `insta-messages-jane_doe-Best Friends-20230220.mp4` |
 | Snapchat Messages | `snap-messages-user123-john-20230310.jpg` |
 | Instagram Posts | `insta-posts-user123-20230405.jpg` |
 | Google Photos | `gphotos-john.doe-IMG_1234.jpg` |

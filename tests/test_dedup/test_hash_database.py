@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for HashDatabase."""
 
-from pathlib import Path
 
 import pytest
 

@@ -21,11 +21,29 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from processors.base import ProcessorBase  # noqa: E402
 from processors.registry import ProcessorRegistry  # noqa: E402
+from common.output.logging import set_logs_dir  # noqa: E402
 
 
 # ============================================================================
 # Session-scoped fixtures - created once per test session
 # ============================================================================
+
+
+@pytest.fixture(scope="session", autouse=True)
+def redirect_logs_to_temp(tmp_path_factory) -> Path:
+    """Redirect all log file output to a temp directory during tests.
+
+    This prevents pytest from polluting the regular logs folder with
+    test-generated log files. The logs are written to a session-scoped
+    temp directory that is automatically cleaned up after tests complete.
+
+    This fixture runs automatically for all test sessions.
+    """
+    logs_dir = tmp_path_factory.mktemp("test_logs")
+    set_logs_dir(logs_dir)
+    yield logs_dir
+    # Reset to default after tests complete
+    set_logs_dir(None)
 
 
 @pytest.fixture(scope="session")

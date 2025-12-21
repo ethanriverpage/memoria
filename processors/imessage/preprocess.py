@@ -14,21 +14,18 @@ Processes iMessage exports from Mac and iPhone backups:
 import json
 import logging
 import re
-import shutil
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
-from common.failure_tracker import FailureTracker
-from common.dedup.hashing import compute_content_hash
 from common.detection import resolve_username, DetectionResult
+from common.preprocess.context_mergers import merge_imessage_context
 from common.processing import print_preprocessing_stats
 from common.output.progress import PHASE_PREPROCESS, progress_bar
-from common.files.filter import BannedFilesFilter
-from common.utils import default_worker_count, get_media_type
+from common.utils import get_media_type
 from processors.imessage.vcard_parser import VCardParser
+from processors.preprocess_base import CopyTask, PreprocessorBase
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +196,7 @@ def has_meaningful_text(text: Optional[str]) -> bool:
     return len(strip_placeholders(text)) > 0
 
 
-class IMessagePreprocessor:
+class IMessagePreprocessor(PreprocessorBase):
     """Preprocessor for iMessage exports.
 
     Handles both Mac (chat.db) and iPhone (SMS/sms.db) export formats.
@@ -234,43 +231,38 @@ class IMessagePreprocessor:
         """
         # Normalize to list for unified handling
         if isinstance(export_paths, Path):
-            self.export_paths = [export_paths]
+            export_paths_list = [export_paths]
         else:
-            self.export_paths = list(export_paths)
+            export_paths_list = list(export_paths)
 
-        # Output directories
-        if output_dir:
-            self.output_dir = Path(output_dir)
-        else:
-            # Default: create output in first export's parent directory
-            self.output_dir = self.export_paths[0].parent / "imessage-processed"
+        # Handle default output_dir before calling super().__init__
+        if output_dir is None:
+            output_dir = export_paths_list[0].parent / "imessage-processed"
 
-        self.media_dir = self.output_dir / "media"
-        self.metadata_file = self.output_dir / "metadata.json"
+        super().__init__(
+            processor_name="iMessage",
+            export_path=export_paths_list[0],
+            output_dir=output_dir,
+            workers=workers,
+            final_output_dir=None,
+        )
 
-        # Parallel processing worker count
-        self.workers = workers if workers is not None else default_worker_count()
+        # Store all export paths (multi-export support)
+        self.export_paths = export_paths_list
+
+        # Override media_dir to match expected name
+        self.media_dir = self.media_output_dir
 
         # Owner name (device owner) - extract from directory name if not provided
         self.owner_name = owner_name or self._extract_owner_name()
 
-        # Global hash registry for cross-export deduplication
-        # hash -> {output_filename, source_path, messages: []}
-        self.content_hashes: Dict[str, dict] = {}
+        # Set context merger for deduplication (accumulates messages)
+        self._context_merger = merge_imessage_context
 
         # Merged contact map from all vCards
         self.handle_to_name: Dict[str, str] = {}
 
-        # Banned files filter
-        self.banned_filter = BannedFilesFilter()
-
-        # Failure tracker
-        self.failure_tracker = FailureTracker(
-            processor_name="iMessage",
-            export_directory=str(self.export_paths[0]),
-        )
-
-        # Statistics
+        # Statistics specific to this preprocessor
         self.stats = {
             "exports_processed": 0,
             "total_attachments": 0,
@@ -522,97 +514,24 @@ class IMessagePreprocessor:
 
         return None
 
-    def _compute_file_hash(self, file_path: Path) -> str:
-        """Compute xxHash64 of file for deduplication.
-
-        Args:
-            file_path: Path to file
+    def validate_export(self) -> bool:
+        """Validate that at least one export directory exists with a database.
 
         Returns:
-            Hexadecimal hash digest
+            True if valid, False otherwise
         """
-        return compute_content_hash(file_path)
-
-    def _compute_hashes_parallel(
-        self, attachments: List[Dict], workers: int = 8
-    ) -> Dict[str, List[Dict]]:
-        """Hash files in parallel and group by content hash.
-
-        Uses ThreadPoolExecutor to parallelize I/O-bound hashing operations.
-
-        Args:
-            attachments: List of attachment dictionaries with resolved_path
-            workers: Number of parallel workers (default: 8)
-
-        Returns:
-            Dictionary mapping content hash to list of attachments with that hash
-        """
-        hash_to_attachments: Dict[str, List[Dict]] = {}
-
-        def hash_file(attachment: Dict) -> Tuple[Dict, Optional[str]]:
-            """Hash a single file, returning attachment and hash."""
-            file_path = Path(attachment["resolved_path"])
-            try:
-                return (attachment, self._compute_file_hash(file_path))
-            except Exception as e:
-                logger.warning(f"Failed to hash {file_path}: {e}")
-                return (attachment, None)
-
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(hash_file, att) for att in attachments]
-            for future in progress_bar(
-                as_completed(futures),
-                PHASE_PREPROCESS,
-                "Hashing files",
-                total=len(futures),
-                unit="file",
+        for export_path in self.export_paths:
+            if not export_path.exists():
+                logger.error("Export path does not exist: %s", export_path)
+                return False
+            # Check for database
+            if (
+                not (export_path / "chat.db").exists()
+                and not (export_path / "SMS" / "sms.db").exists()
             ):
-                attachment, file_hash = future.result()
-                if file_hash:
-                    attachment["content_hash"] = file_hash
-                    hash_to_attachments.setdefault(file_hash, []).append(attachment)
-
-        return hash_to_attachments
-
-    def _copy_files_parallel(
-        self, copy_tasks: List[Tuple[Path, Path]], workers: int = 8
-    ) -> Dict[Path, bool]:
-        """Copy files in parallel.
-
-        Uses ThreadPoolExecutor to parallelize I/O-bound copy operations.
-
-        Args:
-            copy_tasks: List of (source_path, dest_path) tuples
-            workers: Number of parallel workers (default: 8)
-
-        Returns:
-            Dictionary mapping dest_path to success status (True/False)
-        """
-        results: Dict[Path, bool] = {}
-
-        def copy_file(args: Tuple[Path, Path]) -> Tuple[Path, bool]:
-            """Copy a single file, returning dest path and success status."""
-            src, dst = args
-            try:
-                shutil.copy2(src, dst)
-                return (dst, True)
-            except Exception as e:
-                logger.error(f"Failed to copy {src}: {e}")
-                return (dst, False)
-
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(copy_file, task) for task in copy_tasks]
-            for future in progress_bar(
-                as_completed(futures),
-                PHASE_PREPROCESS,
-                "Copying files",
-                total=len(futures),
-                unit="file",
-            ):
-                dest, success = future.result()
-                results[dest] = success
-
-        return results
+                logger.error("No iMessage database found in %s", export_path)
+                return False
+        return True
 
     def _get_conversation_type(self, chat_style: int) -> str:
         """Convert chat style to conversation type.
@@ -683,6 +602,17 @@ class IMessagePreprocessor:
             file_path = self._resolve_attachment_path(row["filename"], export_path)
             if not file_path:
                 logger.debug(f"Attachment not found: {row['filename']}")
+                # Track as orphaned metadata (database entry with missing file)
+                self.failure_tracker.add_orphaned_metadata(
+                    metadata_entry={
+                        "attachment_id": row["attachment_id"],
+                        "filename": row["filename"],
+                        "message_date": row["message_date"],
+                        "chat_identifier": row["chat_identifier"],
+                    },
+                    reason="Attachment file not found in filesystem",
+                    context={"expected_path": row["filename"]},
+                )
                 continue
 
             # Skip banned files
@@ -746,7 +676,11 @@ class IMessagePreprocessor:
             attachments.append(attachment)
 
             # Check for Live Photo video sidecar
-            if row["transfer_name"] == "lp_image.HEIC":
+            # Live Photos can be stored as lp_image.HEIC or lp_image.jpeg
+            transfer_name = row["transfer_name"] or ""
+            if transfer_name.lower().startswith(
+                "lp_image."
+            ) and not transfer_name.lower().endswith(".mov"):
                 mov_path = file_path.parent / "lp_image.MOV"
                 if mov_path.exists():
                     # Create linked attachment entry for the MOV
@@ -762,184 +696,244 @@ class IMessagePreprocessor:
         conn.close()
         return attachments
 
-    def _deduplicate_and_organize(
-        self, attachments: List[Dict]
-    ) -> Tuple[Dict[str, Dict], List[Dict]]:
+    def _deduplicate_and_organize(self, attachments: List[Dict]) -> Dict[str, Dict]:
         """Deduplicate attachments and organize by conversation.
 
         Groups identical files and organizes into conversations structure
-        matching Snapchat messages format. Uses parallel processing for
-        file hashing and copying operations.
+        matching Snapchat messages format. Uses copy_with_dedup() for parallel
+        processing of file hashing and copying operations.
 
         Args:
             attachments: List of attachment dictionaries
 
         Returns:
-            Tuple of (conversations dict, orphaned_media list)
+            Conversations dictionary
         """
-        # Phase 1: Hash files in parallel
-        hash_to_attachments = self._compute_hashes_parallel(
-            attachments, workers=self.workers
-        )
+        # Sort attachments by date so oldest is processed first (becomes primary)
+        attachments.sort(key=lambda x: x.get("created") or "9999-99-99")
 
-        # Phase 2: Prepare copy tasks (sequential - handles filename collisions)
-        self.media_dir.mkdir(parents=True, exist_ok=True)
+        # Build CopyTask objects from attachments
+        copy_tasks: List[CopyTask] = []
+        for att in attachments:
+            source_path = Path(att["resolved_path"])
+            # Use original transfer_name or filename
+            dest_filename = att.get("transfer_name") or source_path.name
 
-        # Track copy info: file_hash -> {source_path, output_path, output_filename, group}
-        copy_info: Dict[str, Dict] = {}
-        copy_tasks: List[Tuple[Path, Path]] = []
-
-        for file_hash, group in hash_to_attachments.items():
-            # Sort by date to find oldest
-            group.sort(key=lambda x: x.get("created") or "9999-99-99")
-
-            # Use first (oldest) as the source file
-            primary = group[0]
-            source_path = Path(primary["resolved_path"])
-
-            # Generate unique output filename
-            output_filename = self._generate_output_filename(source_path, primary)
-            output_path = self.media_dir / output_filename
-
-            # Handle name collisions
-            counter = 1
-            base_stem = output_path.stem
-            while output_path.exists():
-                output_filename = f"{base_stem}_{counter}{output_path.suffix}"
-                output_path = self.media_dir / output_filename
-                counter += 1
-
-            copy_tasks.append((source_path, output_path))
-            copy_info[file_hash] = {
-                "source_path": source_path,
-                "output_path": output_path,
-                "output_filename": output_filename,
-                "group": group,
+            # Build message context for merging
+            context = {
+                "source_export": att["source_export"],
+                "conversation_id": att["conversation_id"],
+                "conversation_type": att["conversation_type"],
+                "conversation_title": att["conversation_title"],
+                "sender": att["sender"],
+                "created": att["created"],
+                "content": att["content"],
+                "is_sender": att["is_sender"],
+                "mime_type": att.get("mime_type"),
+                "is_live_photo_video": att.get("is_live_photo_video", False),
             }
 
-        # Phase 3: Copy files in parallel
-        copy_results = self._copy_files_parallel(copy_tasks, workers=self.workers)
+            copy_tasks.append(CopyTask(
+                source_path=source_path,
+                dest_filename=dest_filename,
+                context=context,
+            ))
 
-        # Phase 4: Build conversations based on copy results
+        self.stats["total_attachments"] = len(copy_tasks)
+
+        # Use copy_with_dedup for parallel hashing, deduplication, and copying
+        self.media_dir.mkdir(parents=True, exist_ok=True)
+        results = self.copy_with_dedup(copy_tasks)
+
+        # Build conversations from results
         conversations: Dict[str, Dict] = {}
         unique_files_copied = 0
+        duplicate_count = 0
 
-        for file_hash, info in copy_info.items():
-            output_path = info["output_path"]
-            output_filename = info["output_filename"]
-            source_path = info["source_path"]
-            group = info["group"]
-
-            # Check if copy succeeded
-            if not copy_results.get(output_path, False):
+        for source_path, result in results.items():
+            if result.is_duplicate:
+                duplicate_count += 1
                 continue
 
             unique_files_copied += 1
             self.stats["files_copied"] += 1
 
-            # Track duplicates
-            if len(group) > 1:
-                self.stats["duplicate_files"] += len(group) - 1
+            # Get merged context (includes all duplicate message contexts)
+            merged_contexts = self.get_contexts_list_for_file(result.dest_filename)
 
-            # Store in content hash registry
-            self.content_hashes[file_hash] = {
-                "output_filename": output_filename,
-                "source_path": str(source_path),
-            }
+            # Primary context is the first one (oldest due to sorting)
+            # If no merged contexts found, skip this result as we can't process without context
+            if not merged_contexts:
+                continue
+            primary_context = merged_contexts[0]
 
-            # Determine primary conversation (oldest message's conversation)
-            primary = group[0]
-            primary_conv_id = primary["conversation_id"]
+            primary_conv_id = primary_context.get("conversation_id")
             if not primary_conv_id:
                 continue
 
-            # Initialize primary conversation if needed
+            # Initialize conversation if needed
             if primary_conv_id not in conversations:
                 conversations[primary_conv_id] = {
-                    "type": primary["conversation_type"],
-                    "title": primary["conversation_title"],
+                    "type": primary_context.get("conversation_type"),
+                    "title": primary_context.get("conversation_title"),
                     "message_count": 0,
                     "messages": [],
                 }
 
-            # Also ensure all other conversations exist (for non-duplicate messages)
-            for att in group:
-                conv_id = att["conversation_id"]
+            # Also ensure all other conversations exist
+            for ctx in merged_contexts:
+                conv_id = ctx.get("conversation_id")
                 if conv_id and conv_id not in conversations:
                     conversations[conv_id] = {
-                        "type": att["conversation_type"],
-                        "title": att["conversation_title"],
+                        "type": ctx.get("conversation_type"),
+                        "title": ctx.get("conversation_title"),
                         "message_count": 0,
                         "messages": [],
                     }
 
-            # Handle duplicates: create single merged entry in primary conversation
-            if len(group) > 1:
-                # Create merged message with messages array (Snapchat pattern)
+            # Determine media type
+            mime_type = primary_context.get("mime_type") or ""
+            media_type = "IMAGE" if "image" in mime_type else "VIDEO"
+
+            # Check if this has merged duplicates
+            if len(merged_contexts) > 1:
+                # Create merged message with messages array
                 merged_message = {
-                    "media_file": output_filename,
-                    "primary_created": primary["created"],
+                    "media_file": result.dest_filename,
+                    "primary_created": primary_context.get("created"),
                     "is_duplicate": True,
                     "messages": [],
-                    "media_type": (
-                        "IMAGE" if "image" in (primary["mime_type"] or "") else "VIDEO"
-                    ),
+                    "media_type": media_type,
                 }
 
                 # Add Live Photo marker if applicable
-                if primary.get("is_live_photo_video"):
+                if primary_context.get("is_live_photo_video"):
                     merged_message["is_live_photo_video"] = True
 
                 # Add all occurrences to messages array
-                for att in group:
-                    merged_message["messages"].append(
-                        {
-                            "source_export": att["source_export"],
-                            "conversation_id": att["conversation_id"],
-                            "conversation_type": att["conversation_type"],
-                            "conversation_title": att["conversation_title"],
-                            "sender": att["sender"],
-                            "created": att["created"],
-                            "content": att["content"],
-                            "is_sender": att["is_sender"],
-                        }
-                    )
+                for ctx in merged_contexts:
+                    merged_message["messages"].append({
+                        "source_export": ctx.get("source_export"),
+                        "conversation_id": ctx.get("conversation_id"),
+                        "conversation_type": ctx.get("conversation_type"),
+                        "conversation_title": ctx.get("conversation_title"),
+                        "sender": ctx.get("sender"),
+                        "created": ctx.get("created"),
+                        "content": ctx.get("content"),
+                        "is_sender": ctx.get("is_sender"),
+                    })
 
                 conversations[primary_conv_id]["messages"].append(merged_message)
                 conversations[primary_conv_id]["message_count"] += 1
-
+                duplicate_count += len(merged_contexts) - 1
             else:
                 # Single occurrence - create standard message entry
-                att = group[0]
                 message = {
-                    "source_export": att["source_export"],
-                    "conversation_id": att["conversation_id"],
-                    "conversation_type": att["conversation_type"],
-                    "conversation_title": att["conversation_title"],
-                    "sender": att["sender"],
-                    "created": att["created"],
-                    "content": att["content"],
-                    "is_sender": att["is_sender"],
-                    "media_file": output_filename,
-                    "media_type": (
-                        "IMAGE" if "image" in (att["mime_type"] or "") else "VIDEO"
-                    ),
+                    "source_export": primary_context.get("source_export"),
+                    "conversation_id": primary_context.get("conversation_id"),
+                    "conversation_type": primary_context.get("conversation_type"),
+                    "conversation_title": primary_context.get("conversation_title"),
+                    "sender": primary_context.get("sender"),
+                    "created": primary_context.get("created"),
+                    "content": primary_context.get("content"),
+                    "is_sender": primary_context.get("is_sender"),
+                    "media_file": result.dest_filename,
+                    "media_type": media_type,
                 }
 
                 # Add Live Photo marker if applicable
-                if att.get("is_live_photo_video"):
+                if primary_context.get("is_live_photo_video"):
                     message["is_live_photo_video"] = True
 
                 conversations[primary_conv_id]["messages"].append(message)
                 conversations[primary_conv_id]["message_count"] += 1
 
         self.stats["unique_files"] = unique_files_copied
+        self.stats["duplicate_files"] = duplicate_count
         self.stats["conversations"] = len(conversations)
 
-        # No orphaned media in iMessage (all attachments are linked to messages)
-        orphaned_media: List[Dict] = []
+        return conversations
 
-        return conversations, orphaned_media
+    def _detect_orphaned_media(self, processed_attachments: List[Dict]) -> List[Dict]:
+        """Detect media files in Attachments folder that aren't in the database.
+
+        Scans the Attachments directory for all media files and compares against
+        the list of attachments that were found in the database query.
+
+        Args:
+            processed_attachments: List of attachment dicts from database query
+
+        Returns:
+            List of orphaned media entries for metadata.json
+        """
+        # Build set of processed file paths (resolved paths from database)
+        processed_paths: set = set()
+        for attachment in processed_attachments:
+            source_path = attachment.get("source_path")
+            if source_path:
+                processed_paths.add(Path(source_path).resolve())
+
+        orphaned_media: List[Dict] = []
+        orphaned_count = 0
+
+        # Scan all export paths for media files not in the database
+        for export_path in self.export_paths:
+            # Find Attachments directory (Mac or iPhone format)
+            attachments_dir = None
+            if (export_path / "Attachments").is_dir():
+                attachments_dir = export_path / "Attachments"
+            elif (export_path / "SMS" / "Attachments").is_dir():
+                attachments_dir = export_path / "SMS" / "Attachments"
+
+            if not attachments_dir:
+                continue
+
+            # Scan for all media files
+            for file_path in attachments_dir.rglob("*"):
+                if not file_path.is_file():
+                    continue
+
+                # Skip non-media files
+                if not get_media_type(str(file_path)):
+                    continue
+
+                # Skip banned files
+                if self.banned_filter.is_banned(file_path):
+                    continue
+
+                # Check if this file was processed from the database
+                resolved_path = file_path.resolve()
+                if resolved_path not in processed_paths:
+                    # This is an orphaned media file
+                    orphaned_count += 1
+
+                    # Track with FailureTracker
+                    self.failure_tracker.add_orphaned_media(
+                        media_path=file_path,
+                        reason="Media file not referenced in iMessage database",
+                        context={
+                            "export_path": str(export_path),
+                            "original_location": str(file_path),
+                        },
+                    )
+
+                    # Create orphaned media entry for metadata.json
+                    orphaned_entry = {
+                        "conversation_id": None,
+                        "conversation_type": None,
+                        "conversation_title": None,
+                        "sender": None,
+                        "media_type": get_media_type(str(file_path)),
+                        "created": None,
+                        "content": "",
+                        "media_file": file_path.name,
+                    }
+                    orphaned_media.append(orphaned_entry)
+
+        if orphaned_count > 0:
+            logger.info(f"Found {orphaned_count} orphaned media files")
+
+        return orphaned_media
 
     def _generate_output_filename(self, source_path: Path, attachment: Dict) -> str:
         """Generate output filename from attachment metadata.
@@ -1034,12 +1028,15 @@ class IMessagePreprocessor:
 
         # Phase 3: Deduplicate and organize by conversation
         logger.info("Deduplicating and organizing attachments...")
-        conversations, orphaned_media = self._deduplicate_and_organize(all_attachments)
+        conversations = self._deduplicate_and_organize(all_attachments)
         logger.info(
             f"Organized into {len(conversations)} conversations, "
             f"{self.stats['unique_files']} unique files "
             f"({self.stats['duplicate_files']} duplicates removed)"
         )
+
+        # Phase 3b: Detect orphaned media (files in Attachments not in database)
+        orphaned_media = self._detect_orphaned_media(all_attachments)
 
         # Phase 4: Generate metadata
         logger.info("Generating metadata.json")
@@ -1053,11 +1050,11 @@ class IMessagePreprocessor:
         self.failure_tracker.handle_failures(self.output_dir)
 
         logger.info(f"Preprocessing complete. Output: {self.output_dir}")
-        self._print_statistics()
+        self.print_statistics()
 
         return True
 
-    def _print_statistics(self) -> None:
+    def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
         stats = {
             "Exports processed": self.stats["exports_processed"],

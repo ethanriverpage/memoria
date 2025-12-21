@@ -53,6 +53,42 @@ SUPPRESSED_LOGGERS: List[str] = [
 
 
 # =============================================================================
+# Configurable Logs Directory
+# =============================================================================
+
+_logs_dir: Optional[Path] = None
+"""Override for the logs directory. If None, defaults to 'logs' in the current directory."""
+
+
+def set_logs_dir(path: Optional[Path]) -> None:
+    """Set the directory where log files are created.
+
+    This is primarily used by pytest fixtures to redirect logs to temp directories
+    during test runs, keeping the regular logs folder clean.
+
+    Args:
+        path: Path to use for logs directory, or None to reset to default ('logs')
+
+    Example:
+        >>> from common.output.logging import set_logs_dir
+        >>> set_logs_dir(Path("/tmp/test_logs"))
+        >>> # ... run tests ...
+        >>> set_logs_dir(None)  # Reset to default
+    """
+    global _logs_dir
+    _logs_dir = path
+
+
+def get_logs_dir() -> Path:
+    """Get the current logs directory.
+
+    Returns:
+        The configured logs directory, or 'logs' if not set.
+    """
+    return _logs_dir if _logs_dir is not None else Path("logs")
+
+
+# =============================================================================
 # Custom Handlers
 # =============================================================================
 
@@ -182,8 +218,8 @@ def add_export_log_handler(
     if not verbose:
         return None
 
-    # Create logs directory if it doesn't exist
-    logs_dir = Path("logs")
+    # Create logs directory if it doesn't exist (uses configurable path)
+    logs_dir = get_logs_dir()
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     # Create log filename with export name and timestamp

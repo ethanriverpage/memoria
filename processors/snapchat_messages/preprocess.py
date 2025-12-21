@@ -17,13 +17,11 @@ from datetime import datetime, timezone
 import re
 import sys
 import argparse
-from threading import Lock
 
-from common.files.filter import BannedFilesFilter
-from common.dedup.hashing import compute_content_hash
-from common.utils import default_worker_count
-from common.failure_tracker import FailureTracker
+from common.detection import DetectionResult
+from common.preprocess.context_mergers import merge_snapchat_context
 from common.processing import print_preprocessing_stats
+from processors.preprocess_base import PreprocessorBase, CopyTask
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -36,10 +34,8 @@ class PreprocessingError(Exception):
     when the preprocessor is called from library code (e.g., parallel cataloging).
     """
 
-    pass
 
-
-class SnapchatPreprocessor:
+class SnapchatPreprocessor(PreprocessorBase):
     """Preprocesses Snapchat export by organizing files and cleaning metadata"""
 
     def __init__(
@@ -50,7 +46,14 @@ class SnapchatPreprocessor:
         final_output_dir: Optional[Path] = None,
         username_override: Optional[str] = None,
     ):
-        self.export_path = Path(export_path)
+        super().__init__(
+            processor_name="Snapchat Messages",
+            export_path=export_path,
+            output_dir=output_dir,
+            workers=workers,
+            final_output_dir=final_output_dir,
+        )
+
         self.chat_media_dir = self.export_path / "chat_media"
         self.json_dir = self.export_path / "json"
         self.chat_history_file = self.json_dir / "chat_history.json"
@@ -58,50 +61,15 @@ class SnapchatPreprocessor:
         # Store username override for consolidated exports
         self.username_override = username_override
 
-        # Output directories - require explicit output_dir to prevent writing to exports
-        if output_dir is None:
-            raise ValueError(
-                "output_dir is required. Preprocessors must not write to the export "
-                "directory. Use a temp directory or specify an explicit output path."
-            )
-        output_base = Path(output_dir)
-        # Safety check: never write to the export directory
-        if output_base.resolve() == self.export_path.resolve():
-            raise ValueError(
-                f"output_dir cannot be the same as export_path ({self.export_path}). "
-                "This would corrupt the original export."
-            )
-        self.output_dir = output_base
-        self.media_dir = output_base / "media"
-        self.overlays_dir = output_base / "overlays"
-        self.needs_matching_dir = output_base / "needs_matching"
-        self.metadata_file = output_base / "metadata.json"
-        self.log_file = output_base / "preprocessing.log"
+        # Additional output directories specific to Snapchat
+        self.media_dir = self.media_output_dir
+        self.overlays_dir = self.output_dir / "overlays"
+        self.needs_matching_dir = self.output_dir / "needs_matching"
 
-        # Final output directory for processor (for failure tracking)
-        self.final_output_dir = (
-            Path(final_output_dir) if final_output_dir else output_base
-        )
+        # Set up context merger for message accumulation
+        self.set_context_merger(merge_snapchat_context)
 
-        # Initialize banned files filter
-        self.banned_filter = BannedFilesFilter()
-
-        # Initialize failure tracker
-        self.failure_tracker = FailureTracker(
-            processor_name="Snapchat Messages",
-            export_directory=str(export_path),
-        )
-
-        # Threading configuration
-        self.workers = workers if workers is not None else default_worker_count()
-
-        # Thread-safe locks for shared data structures
-        self.stats_lock = Lock()
-        self.log_lock = Lock()
-        self.destination_lock = Lock()
-        self.hash_lock = Lock()
-
-        # Statistics
+        # Statistics specific to this preprocessor
         self.stats = {
             "total_files": 0,
             "media_files": 0,
@@ -117,47 +85,32 @@ class SnapchatPreprocessor:
             "deduplicated_files": 0,
         }
 
-        # Log entries for unmatched files
-        self.log_entries = []
-
-        # Track file hashes for deduplication across conversations
-        # Maps hash -> {"filename": str, "messages": [Dict], "overlay_file": str}
-        self.file_hashes = {}
-
     def log_failure(
         self, category: str, filename: str, reason: str, details: str = ""
     ) -> None:
         """Add a log entry for a file that failed to match (thread-safe)"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        entry = f"[{timestamp}] {category}: {filename}"
+        message = filename
         if reason:
-            entry += f" - {reason}"
-        if details:
-            entry += f" ({details})"
-        with self.log_lock:
-            self.log_entries.append(entry)
+            message += f" - {reason}"
+        self.log_message(category, message, details)
 
-    def save_log(self) -> None:
-        """Save log entries to log file"""
-        if not self.log_entries:
-            return
+    def detect_username(self) -> DetectionResult:
+        """Detect export username from directory name or chat history.
 
-        try:
-            with open(self.log_file, "w", encoding="utf-8") as f:
-                f.write("Snapchat Export Preprocessing Log\n")
-                f.write("=" * 80 + "\n")
-                f.write(f"Export: {self.export_path}\n")
-                f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write("=" * 80 + "\n\n")
+        Returns:
+            DetectionResult with username and source
+        """
+        # Use override if provided (for consolidated exports)
+        if self.username_override:
+            return DetectionResult(username=self.username_override, source="override")
 
-                for entry in self.log_entries:
-                    f.write(entry + "\n")
+        # From directory name using regex
+        dir_name = self.export_path.name
+        match = re.match(r"snapchat-(.+?)-\d{4}-?\d{2}-?\d{2}", dir_name)
+        if match:
+            return DetectionResult(username=match.group(1), source="directory_name")
 
-                f.write(f"\nTotal logged issues: {len(self.log_entries)}\n")
-
-            logger.info("Saved preprocessing log to %s", self.log_file)
-        except Exception as e:
-            logger.warning("Failed to save log file: %s", e)
+        return DetectionResult(username="unknown", source="none")
 
     def validate_export(self) -> bool:
         """Validate that export directory has required structure"""
@@ -185,10 +138,10 @@ class SnapchatPreprocessor:
             return chat_history
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse chat_history.json: {e}")
-            raise PreprocessingError(f"Failed to parse chat_history.json: {e}")
-        except Exception as e:
+            raise PreprocessingError(f"Failed to parse chat_history.json: {e}") from e
+        except OSError as e:
             logger.error(f"Error loading chat_history.json: {e}")
-            raise PreprocessingError(f"Error loading chat_history.json: {e}")
+            raise PreprocessingError(f"Error loading chat_history.json: {e}") from e
 
     def extract_username(self, chat_history: Dict) -> str:
         """Extract exporter's username from directory name or chat history"""
@@ -299,18 +252,6 @@ class SnapchatPreprocessor:
         result = common_get_media_type(filename)
         return result if result else "unknown"
 
-    def _compute_file_hash(self, file_path: Path) -> str:
-        """
-        Compute xxHash64 of file for deduplication (fast, non-cryptographic)
-
-        Args:
-            file_path: Path to file to hash
-
-        Returns:
-            str: Hexadecimal hash digest
-        """
-        return compute_content_hash(file_path)
-
     def classify_conversation(
         self, conversation_id: str, messages: List[Dict]
     ) -> Tuple[str, Optional[str]]:
@@ -333,28 +274,6 @@ class SnapchatPreprocessor:
             return "group", None
 
         return "dm", None
-
-    def clean_message_metadata(
-        self,
-        message: Dict,
-        conversation_id: str,
-        conversation_type: str,
-        conversation_title: Optional[str],
-    ) -> Dict:
-        """Extract and clean essential metadata from message"""
-        cleaned = {
-            "conversation_id": conversation_id,
-            "conversation_type": conversation_type,
-            "conversation_title": conversation_title,
-            "sender": message.get("From", ""),
-            "media_type": message.get("Media Type", ""),
-            "created": message.get("Created", ""),
-            "content": message.get("Content", ""),
-            "is_sender": message.get("IsSender", False),
-            "media_id": message.get("Media IDs", ""),
-        }
-
-        return cleaned
 
     def build_file_catalog(self) -> Dict[str, Dict]:
         """
@@ -489,178 +408,419 @@ class SnapchatPreprocessor:
 
         return media_id_to_filename, media_id_to_overlay, mtime_to_filenames
 
-    def _deduplicate_media_messages(self, metadata: Dict, file_catalog: Dict) -> Dict:
+    def collect_media_tasks(
+        self, chat_history: Dict, file_catalog: Dict
+    ) -> Tuple[List[CopyTask], Dict[str, Dict], List[Dict]]:
         """
-        Detect and merge duplicate media files across conversations
-
-        Args:
-            metadata: Metadata dict with conversations
-            file_catalog: File catalog with media file paths
+        Parse chat_history and collect media copy tasks.
 
         Returns:
-            Updated metadata dict with merged duplicates
+            Tuple of (copy_tasks, file_catalog, ambiguous_cases)
         """
-        # Build map of media filename -> hash
-        media_hashes = {}
+        copy_tasks: List[CopyTask] = []
+        ambiguous_cases: List[Dict] = []
+
+        # Build lookup maps
+        media_id_to_filename, _, mtime_to_filenames = self.build_media_overlay_maps(
+            file_catalog
+        )
+
+        # Build timestamp-based lookup for UUID media files
+        timestamp_to_uuid_files = {}
         for filename, file_info in file_catalog.items():
-            if file_info["type"] == "media":
-                try:
-                    file_path = Path(file_info["original_path"])
-                    if file_path.exists():
-                        file_hash = self._compute_file_hash(file_path)
-                        media_hashes[filename] = file_hash
-                except Exception as e:
-                    logger.warning(f"Failed to compute hash for {filename}: {e}")
+            if file_info["type"] == "media" and "media_id" not in file_info:
+                mtime = file_info.get("mtime")
+                if mtime:
+                    if mtime not in timestamp_to_uuid_files:
+                        timestamp_to_uuid_files[mtime] = []
+                    timestamp_to_uuid_files[mtime].append(filename)
 
-        # Track which messages belong to which hash
-        # hash -> list of (conv_id, message_index, message_dict)
-        hash_to_messages = {}
+        # Track matched files and overlays
+        matched_media_files: set = set()
+        matched_overlays: set = set()
 
-        # Scan all messages and group by media file hash
-        for conv_id, conv_data in metadata["conversations"].items():
-            messages = conv_data.get("messages", [])
-            for idx, message in enumerate(messages):
-                # Get media file(s) from message
-                media_files = []
-                if "media_file" in message:
-                    media_files = [message["media_file"]]
-                elif "media_files" in message:
-                    media_files = message["media_files"]
+        # Process each conversation
+        for conversation_id, messages in chat_history.items():
+            self.stats["conversations"] += 1
 
-                # For each media file, look up its hash
-                for media_file in media_files:
-                    if media_file in media_hashes:
-                        file_hash = media_hashes[media_file]
-                        if file_hash not in hash_to_messages:
-                            hash_to_messages[file_hash] = []
-                        hash_to_messages[file_hash].append(
-                            (conv_id, idx, message.copy())
-                        )
-
-        # Scan orphaned media as well
-        orphaned_media = metadata.get("orphaned_media", [])
-        for idx, message in enumerate(orphaned_media):
-            media_file = message.get("media_file")
-            if media_file and media_file in media_hashes:
-                file_hash = media_hashes[media_file]
-                if file_hash not in hash_to_messages:
-                    hash_to_messages[file_hash] = []
-                hash_to_messages[file_hash].append((None, idx, message.copy()))
-
-        # Identify duplicates (hash with multiple messages)
-        duplicates_found = 0
-        messages_to_remove = {}  # conv_id -> list of message indices to remove
-        orphaned_to_remove = []  # list of orphaned media indices to remove
-
-        for file_hash, message_list in hash_to_messages.items():
-            if len(message_list) > 1:
-                # Found duplicate! Merge messages
-                duplicates_found += 1
-
-                # Sort by timestamp to find oldest
-                sorted_messages = sorted(
-                    message_list,
-                    key=lambda x: x[2].get("created", "9999-99-99 99:99:99 UTC"),
-                )
-
-                # Use oldest message as base
-                oldest_conv_id, oldest_idx, oldest_msg = sorted_messages[0]
-
-                # Get the media file from oldest message
-                if "media_file" in oldest_msg:
-                    primary_media = oldest_msg["media_file"]
-                elif "media_files" in oldest_msg and oldest_msg["media_files"]:
-                    primary_media = oldest_msg["media_files"][0]
-                else:
-                    continue  # Skip if no media file
-
-                # Get overlay from oldest message (if exists)
-                primary_overlay = oldest_msg.get("overlay_file")
-
-                # Create merged message structure
-                merged_message = {
-                    "media_file": primary_media,
-                    "messages": [],
-                    "primary_created": oldest_msg.get("created"),
-                    "is_duplicate": True,
-                }
-
-                if primary_overlay:
-                    merged_message["overlay_file"] = primary_overlay
-
-                # Add all message metadata to the messages array
-                for conv_id, msg_idx, msg in sorted_messages:
-                    merged_message["messages"].append(
-                        {
-                            "conversation_id": msg.get("conversation_id"),
-                            "conversation_type": msg.get("conversation_type"),
-                            "conversation_title": msg.get("conversation_title"),
-                            "sender": msg.get("sender"),
-                            "created": msg.get("created"),
-                            "content": msg.get("content", ""),
-                            "is_sender": msg.get("is_sender"),
-                            "media_id": msg.get("media_id", ""),
-                        }
-                    )
-
-                    # Mark for removal (except the oldest one)
-                    if conv_id != oldest_conv_id or msg_idx != oldest_idx:
-                        if conv_id is not None:
-                            if conv_id not in messages_to_remove:
-                                messages_to_remove[conv_id] = []
-                            messages_to_remove[conv_id].append(msg_idx)
-                        else:
-                            orphaned_to_remove.append(msg_idx)
-
-                # Replace oldest message with merged version
-                if oldest_conv_id is not None:
-                    conv_messages = metadata["conversations"][oldest_conv_id][
-                        "messages"
-                    ]
-                    conv_messages[oldest_idx] = merged_message
-                else:
-                    orphaned_media[oldest_idx] = merged_message
-
-                # Log the deduplication
-                conv_list = [
-                    m.get("conversation_id") for m in merged_message["messages"]
-                ]
-                self.log_failure(
-                    "DEDUPLICATED",
-                    primary_media,
-                    f"Found in {len(message_list)} conversations",
-                    f"Hash: {file_hash[:16]}..., Conversations: {', '.join(filter(None, conv_list))}",
-                )
-
-        # Remove duplicate message entries (in reverse order to maintain indices)
-        for conv_id, indices in messages_to_remove.items():
-            conv_messages = metadata["conversations"][conv_id]["messages"]
-            for idx in sorted(indices, reverse=True):
-                del conv_messages[idx]
-            # Update message count
-            metadata["conversations"][conv_id]["message_count"] = len(conv_messages)
-
-        # Remove from orphaned media
-        for idx in sorted(orphaned_to_remove, reverse=True):
-            del orphaned_media[idx]
-
-        # Update statistics
-        with self.stats_lock:
-            self.stats["duplicate_files"] = duplicates_found
-            self.stats["deduplicated_files"] = sum(
-                len(msgs) - 1 for msgs in hash_to_messages.values() if len(msgs) > 1
+            conversation_type, conversation_title = self.classify_conversation(
+                conversation_id, messages
             )
 
-        return metadata
+            for message in messages:
+                self.stats["messages"] += 1
 
-    def create_metadata(
-        self, chat_history: Dict, file_catalog: Dict
-    ) -> Tuple[Dict, List]:
-        """
-        Create cleaned metadata structure
+                # Skip TEXT messages
+                if message.get("Media Type") == "TEXT":
+                    continue
 
-        Returns: Dict with conversations, messages, and file mappings
-        """
+                # Track media messages
+                if message.get("Media Type") in ["MEDIA", "IMAGE", "VIDEO"]:
+                    self.stats["media_messages"] += 1
+
+                # Build message context
+                msg_context = {
+                    "conversation_id": conversation_id,
+                    "conversation_type": conversation_type,
+                    "conversation_title": conversation_title,
+                    "sender": message.get("From", ""),
+                    "media_type": message.get("Media Type", ""),
+                    "created": message.get("Created", ""),
+                    "content": message.get("Content", ""),
+                    "is_sender": message.get("IsSender", False),
+                    "media_id": message.get("Media IDs", ""),
+                }
+
+                # Parse media IDs
+                media_ids_str = message.get("Media IDs", "")
+                if not media_ids_str:
+                    continue
+
+                media_ids = [mid.strip() for mid in media_ids_str.split("|")]
+                media_files = []
+                orphaned_media_ids = []
+
+                # Phase 1: Match by media_id
+                for media_id in media_ids:
+                    if not media_id:
+                        continue
+
+                    if media_id in media_id_to_filename:
+                        media_file = media_id_to_filename[media_id]
+                        media_files.append(media_file)
+                        matched_media_files.add(media_file)
+                    else:
+                        orphaned_media_ids.append(media_id)
+
+                # Phase 2: Match UUID files by timestamp
+                try:
+                    date_str = message.get("Created", "")
+                    if date_str:
+                        date_str_no_tz = date_str.replace(" UTC", "")
+                        message_dt = datetime.strptime(
+                            date_str_no_tz, "%Y-%m-%d %H:%M:%S"
+                        )
+                        message_timestamp = message_dt.replace(
+                            tzinfo=timezone.utc
+                        ).timestamp()
+
+                        if message_timestamp in timestamp_to_uuid_files:
+                            uuid_files = timestamp_to_uuid_files[message_timestamp]
+                            unmatched_count = len(media_ids) - len(media_files)
+                            if unmatched_count > 0:
+                                for uuid_file in uuid_files:
+                                    if uuid_file not in matched_media_files:
+                                        media_files.append(uuid_file)
+                                        matched_media_files.add(uuid_file)
+                                        unmatched_count -= 1
+                                        if unmatched_count == 0:
+                                            break
+                except (ValueError, TypeError):
+                    pass
+
+                # Re-evaluate orphaned media_ids
+                if len(media_files) >= len(media_ids):
+                    orphaned_media_ids = []
+                elif len(media_files) > 0 and len(orphaned_media_ids) > 0:
+                    truly_unmatched = len(media_ids) - len(media_files)
+                    if truly_unmatched < len(orphaned_media_ids):
+                        orphaned_media_ids = orphaned_media_ids[:truly_unmatched]
+
+                # Phase 3: Overlay matching
+                overlay_file = None
+                if media_files:
+                    try:
+                        date_str = message.get("Created", "")
+                        if date_str:
+                            date_str_no_tz = date_str.replace(" UTC", "")
+                            message_dt = datetime.strptime(
+                                date_str_no_tz, "%Y-%m-%d %H:%M:%S"
+                            )
+                            message_timestamp = message_dt.replace(
+                                tzinfo=timezone.utc
+                            ).timestamp()
+
+                            # Find overlays at this timestamp
+                            overlays_at_timestamp = []
+                            if message_timestamp in mtime_to_filenames:
+                                for fname, ftype in mtime_to_filenames[
+                                    message_timestamp
+                                ]:
+                                    if (
+                                        ftype == "overlay"
+                                        and fname not in matched_overlays
+                                    ):
+                                        overlays_at_timestamp.append(fname)
+
+                            video_count = len(
+                                [
+                                    mf
+                                    for mf in media_files
+                                    if self.get_media_type(mf) == "video"
+                                ]
+                            )
+                            overlay_count = len(overlays_at_timestamp)
+
+                            if video_count == 1 and overlay_count == 1:
+                                # Safe 1:1 match
+                                overlay_file = overlays_at_timestamp[0]
+                                matched_overlays.add(overlay_file)
+                            elif overlay_count > 0 and (
+                                video_count > 1 or overlay_count > 1
+                            ):
+                                # Ambiguous case
+                                self._record_ambiguous_case(
+                                    ambiguous_cases,
+                                    message,
+                                    media_files,
+                                    overlays_at_timestamp,
+                                    file_catalog,
+                                    conversation_id,
+                                    conversation_type,
+                                    conversation_title,
+                                )
+                    except (ValueError, TypeError):
+                        pass
+
+                # Create copy tasks for each media file
+                for media_file in media_files:
+                    file_info = file_catalog.get(media_file, {})
+                    source_path = Path(file_info.get("original_path", ""))
+
+                    if not source_path.exists():
+                        continue
+
+                    # Build context with messages list for merging
+                    context = {
+                        "messages": [msg_context.copy()],
+                        "overlay_file": overlay_file,
+                        "primary_created": msg_context.get("created"),
+                    }
+
+                    copy_tasks.append(
+                        CopyTask(
+                            source_path=source_path,
+                            dest_filename=media_file,
+                            context=context,
+                        )
+                    )
+
+                # Track orphaned metadata
+                for media_id in orphaned_media_ids:
+                    self.failure_tracker.add_orphaned_metadata(
+                        metadata_entry={
+                            "conversation_id": conversation_id,
+                            "conversation_type": conversation_type,
+                            "conversation_title": conversation_title,
+                            "message": msg_context,
+                            "media_id": media_id,
+                        },
+                        reason=f"Media ID '{media_id}' referenced but file not found",
+                        context={
+                            "timestamp": message.get("Created", ""),
+                            "sender": message.get("From", ""),
+                            "content": message.get("Content", ""),
+                            "matched_files_count": len(media_files),
+                            "expected_files_count": len(media_ids),
+                        },
+                    )
+
+        # Collect orphaned media files (not matched to any message)
+        for filename, file_info in file_catalog.items():
+            if file_info["type"] == "media" and filename not in matched_media_files:
+                source_path = Path(file_info["original_path"])
+                if not source_path.exists():
+                    continue
+
+                # Build orphaned entry context
+                created_date = None
+                mtime = file_info.get("mtime")
+                if mtime:
+                    created_date = datetime.fromtimestamp(mtime).strftime(
+                        "%Y-%m-%d %H:%M:%S UTC"
+                    )
+                else:
+                    created_date = file_info.get("date")
+
+                # Try to find overlay
+                overlay_file = None
+                if mtime and mtime in mtime_to_filenames:
+                    available_overlays = [
+                        fname
+                        for fname, ftype in mtime_to_filenames[mtime]
+                        if ftype == "overlay" and fname not in matched_overlays
+                    ]
+                    if len(available_overlays) == 1:
+                        overlay_file = available_overlays[0]
+                        matched_overlays.add(overlay_file)
+
+                orphaned_context = {
+                    "messages": [
+                        {
+                            "conversation_id": None,
+                            "conversation_type": None,
+                            "conversation_title": None,
+                            "sender": None,
+                            "media_type": "MEDIA",
+                            "created": created_date,
+                            "content": "",
+                            "is_sender": None,
+                            "media_id": file_info.get("media_id", ""),
+                        }
+                    ],
+                    "overlay_file": overlay_file,
+                    "primary_created": created_date,
+                    "is_orphaned": True,
+                }
+
+                copy_tasks.append(
+                    CopyTask(
+                        source_path=source_path,
+                        dest_filename=filename,
+                        context=orphaned_context,
+                    )
+                )
+
+                # Log and track
+                media_id = file_info.get("media_id", "N/A")
+                overlay_status = "with overlay" if overlay_file else "no overlay"
+                self.log_failure(
+                    "ORPHANED_MEDIA",
+                    filename,
+                    "Not matched to any message",
+                    f"media_id={media_id}, {overlay_status}",
+                )
+
+                self.failure_tracker.add_orphaned_media(
+                    media_path=source_path,
+                    reason="Not matched to any message in chat_history.json",
+                    context={
+                        "media_id": media_id,
+                        "overlay_status": overlay_status,
+                        "date": file_info.get("date"),
+                        "mtime": mtime,
+                        "has_overlay": overlay_file is not None,
+                    },
+                )
+
+        self.stats["matched_overlays"] = len(matched_overlays)
+        self.stats["ambiguous_cases"] = len(ambiguous_cases)
+
+        return copy_tasks, file_catalog, ambiguous_cases
+
+    def _record_ambiguous_case(
+        self,
+        ambiguous_cases: List[Dict],
+        message: Dict,
+        media_files: List[str],
+        overlays_at_timestamp: List[str],
+        file_catalog: Dict,
+        conversation_id: str,
+        conversation_type: str,
+        conversation_title: Optional[str],
+    ) -> None:
+        """Record an ambiguous overlay matching case."""
+        date_str = message.get("Created", "")
+
+        ambiguous_case = {
+            "timestamp": date_str,
+            "message_metadata": {
+                "conversation_id": conversation_id,
+                "conversation_type": conversation_type,
+                "conversation_title": conversation_title,
+                "sender": message.get("From", ""),
+                "content": message.get("Content", ""),
+                "is_sender": message.get("IsSender", False),
+                "created": message.get("Created", ""),
+            },
+            "media_files": [],
+            "overlays": [],
+        }
+
+        # Add video file details only
+        image_count = 0
+        video_count = 0
+        for media_file in media_files:
+            file_info = file_catalog.get(media_file, {})
+            media_type = self.get_media_type(media_file)
+            if media_type == "video":
+                video_count += 1
+                ambiguous_case["media_files"].append(
+                    {
+                        "filename": media_file,
+                        "media_id": file_info.get("media_id"),
+                        "uuid": file_info.get("uuid"),
+                        "type": media_type,
+                        "extension": Path(media_file).suffix,
+                    }
+                )
+            else:
+                image_count += 1
+
+        # Add overlay details
+        for overlay_file in overlays_at_timestamp:
+            ambiguous_case["overlays"].append(
+                {
+                    "filename": overlay_file,
+                    "uuid": self.extract_uuid(overlay_file),
+                }
+            )
+
+        # Add analysis
+        overlay_count = len(overlays_at_timestamp)
+        hint = f"{image_count} images + {video_count} videos, but only {overlay_count} overlays."
+        if video_count == overlay_count and image_count > 0:
+            hint += " Images don't need overlays and are processed normally."
+        elif overlay_count == 0:
+            hint += " Videos can exist without overlays."
+
+        ambiguous_case["analysis"] = {
+            "media_count": len(media_files),
+            "overlay_count": overlay_count,
+            "images": image_count,
+            "videos": video_count,
+            "hint": hint,
+        }
+
+        ambiguous_cases.append(ambiguous_case)
+
+        self.log_failure(
+            "AMBIGUOUS_OVERLAY",
+            f"{video_count} videos at {date_str}",
+            "Cannot determine correct overlay match",
+            f"{overlay_count} overlays available",
+        )
+
+    def copy_overlay_files(self, file_catalog: Dict) -> None:
+        """Copy overlay files to overlays/ directory."""
+        self.overlays_dir.mkdir(parents=True, exist_ok=True)
+
+        for filename, file_info in file_catalog.items():
+            if file_info["type"] != "overlay":
+                continue
+
+            source = Path(file_info["original_path"])
+            if not source.exists():
+                continue
+
+            destination = self.overlays_dir / filename
+            try:
+                shutil.copy2(str(source), str(destination))
+                file_info["new_path"] = str(destination)
+            except Exception as e:
+                self.log_failure(
+                    "COPY_FAILED",
+                    filename,
+                    f"Failed to copy overlay: {e}",
+                    f"source={source}, dest={destination}",
+                )
+                logger.error("Failed to copy %s: %s", filename, e)
+
+    def build_metadata_from_results(self, chat_history: Dict) -> Dict:
+        """Build metadata from copy_with_dedup results."""
+        # Get merged contexts from base class
+        merged_contexts = self.get_merged_contexts()
+
         metadata = {
             "export_info": {
                 "export_path": str(self.export_path),
@@ -671,426 +831,116 @@ class SnapchatPreprocessor:
             "orphaned_media": [],
         }
 
-        # Build lookup maps for efficient media and overlay matching
-        media_id_to_filename, _, mtime_to_filenames = self.build_media_overlay_maps(
-            file_catalog
-        )
+        # Group entries by conversation
+        conversation_entries: Dict[str, List[Dict]] = {}
+        orphaned_entries: List[Dict] = []
 
-        # Build timestamp-based lookup for UUID media files (for matching by timestamp)
-        timestamp_to_uuid_files = {}
-        for filename, file_info in file_catalog.items():
-            if file_info["type"] == "media" and "media_id" not in file_info:
-                # This is a UUID-based media file (no media_id in filename)
-                mtime = file_info.get("mtime")
-                if mtime:
-                    if mtime not in timestamp_to_uuid_files:
-                        timestamp_to_uuid_files[mtime] = []
-                    timestamp_to_uuid_files[mtime].append(filename)
+        for content_hash, context in merged_contexts.items():
+            registry_entry = self._hash_registry.get(content_hash, {})
+            filename = registry_entry.get("filename", "")
 
-        # Track which media files have been matched to messages
-        matched_media_files = set()
-        matched_overlays = set()  # Changed to set to track which overlays are used
+            messages = context.get("messages", [])
+            overlay_file = context.get("overlay_file")
+            is_orphaned = context.get("is_orphaned", False)
 
-        # Track ambiguous cases for needs_matching folder
-        ambiguous_cases = []
+            # Check if this is a duplicate (multiple messages)
+            is_duplicate = len(messages) > 1
 
-        # Process each conversation
-        for conversation_id, messages in chat_history.items():
-            self.stats["conversations"] += 1
-
-            conversation_type, conversation_title = self.classify_conversation(
-                conversation_id, messages
-            )
-
-            cleaned_messages = []
-
-            for message in messages:
-                self.stats["messages"] += 1
-
-                # Skip TEXT messages - only keep media messages
-                if message.get("Media Type") == "TEXT":
-                    continue
-
-                cleaned_msg = self.clean_message_metadata(
-                    message, conversation_id, conversation_type, conversation_title
-                )
-
-                # Find and add media file references
-                # Note: Media IDs can be multiple, separated by " | "
-                media_ids_str = message.get("Media IDs", "")
-                if media_ids_str:
-                    # Split by " | " to handle multiple media IDs
-                    media_ids = [mid.strip() for mid in media_ids_str.split("|")]
-
-                    media_files = []
-                    orphaned_media_ids = []  # Track media IDs that couldn't be matched
-
-                    # Phase 1: Match by media_id (existing logic)
-                    for media_id in media_ids:
-                        if not media_id:
-                            continue
-
-                        # Add media filename if found by media_id
-                        if media_id in media_id_to_filename:
-                            media_file = media_id_to_filename[media_id]
-                            media_files.append(media_file)
-                            matched_media_files.add(media_file)
-                        else:
-                            # Track media_id that wasn't found
-                            orphaned_media_ids.append(media_id)
-
-                    # Phase 2: Try to match UUID files by timestamp
-                    # Calculate message timestamp
-                    try:
-                        date_str = message.get("Created", "")
-                        if date_str:
-                            # Parse timestamp: "YYYY-MM-DD HH:MM:SS UTC"
-                            # Remove " UTC" suffix and parse as naive datetime
-                            date_str_no_tz = date_str.replace(" UTC", "")
-                            message_dt = datetime.strptime(
-                                date_str_no_tz, "%Y-%m-%d %H:%M:%S"
-                            )
-                            # Treat as UTC and convert to timestamp
-                            message_timestamp = message_dt.replace(
-                                tzinfo=timezone.utc
-                            ).timestamp()
-
-                            # Check for unmatched UUID files with this timestamp
-                            if message_timestamp in timestamp_to_uuid_files:
-                                uuid_files_at_timestamp = timestamp_to_uuid_files[
-                                    message_timestamp
-                                ]
-                                # Only match if we haven't matched all media_ids yet
-                                unmatched_count = len(media_ids) - len(media_files)
-                                if unmatched_count > 0:
-                                    for uuid_file in uuid_files_at_timestamp:
-                                        if uuid_file not in matched_media_files:
-                                            media_files.append(uuid_file)
-                                            matched_media_files.add(uuid_file)
-                                            unmatched_count -= 1
-                                            if unmatched_count == 0:
-                                                break
-                    except (ValueError, TypeError):
-                        # Failed to parse timestamp, skip UUID matching
-                        pass
-
-                    # Re-evaluate orphaned media_ids after timestamp matching
-                    # If we matched enough files via timestamp, clear false positives
-                    if len(media_files) >= len(media_ids):
-                        # We found at least as many files as media_ids
-                        # Clear orphaned list - these were matched by timestamp
-                        orphaned_media_ids = []
-                    elif len(media_files) > 0 and len(orphaned_media_ids) > 0:
-                        # Partial match - only keep truly unmatched media_ids
-                        # We matched some files, so reduce orphaned count accordingly
-                        matched_count = len(media_files)
-                        expected_count = len(media_ids)
-                        truly_unmatched = expected_count - matched_count
-                        if truly_unmatched < len(orphaned_media_ids):
-                            # Keep only the number of orphaned_media_ids that are truly unmatched
-                            orphaned_media_ids = orphaned_media_ids[:truly_unmatched]
-
-                    # Phase 3: Smart overlay matching (only for unambiguous cases)
-                    overlay_files = []
-                    if media_files:
-                        # Get message timestamp for overlay lookup
-                        try:
-                            date_str = message.get("Created", "")
-                            if date_str:
-                                # Parse timestamp as UTC
-                                date_str_no_tz = date_str.replace(" UTC", "")
-                                message_dt = datetime.strptime(
-                                    date_str_no_tz, "%Y-%m-%d %H:%M:%S"
-                                )
-                                message_timestamp = message_dt.replace(
-                                    tzinfo=timezone.utc
-                                ).timestamp()
-
-                                # Find all overlays with this timestamp
-                                overlays_at_timestamp = []
-                                if message_timestamp in mtime_to_filenames:
-                                    for fname, ftype in mtime_to_filenames[
-                                        message_timestamp
-                                    ]:
-                                        if (
-                                            ftype == "overlay"
-                                            and fname not in matched_overlays
-                                        ):
-                                            overlays_at_timestamp.append(fname)
-
-                                # Determine if we can safely match overlays
-                                # Only count VIDEO files for overlay matching (images never have overlays)
-                                video_count = len(
-                                    [
-                                        mf
-                                        for mf in media_files
-                                        if self.get_media_type(mf) == "video"
-                                    ]
-                                )
-                                media_count = len(media_files)
-                                overlay_count = len(overlays_at_timestamp)
-
-                                if video_count == 1 and overlay_count == 1:
-                                    # SAFE: Unique 1:1 match (1 video, 1 overlay)
-                                    overlay_files.append(overlays_at_timestamp[0])
-                                    matched_overlays.add(overlays_at_timestamp[0])
-                                elif overlay_count > 0 and (
-                                    video_count > 1 or overlay_count > 1
-                                ):
-                                    # AMBIGUOUS: Skip overlay matching and save for manual review
-                                    ambiguous_case = {
-                                        "timestamp": date_str,
-                                        "message_metadata": {
-                                            "conversation_id": conversation_id,
-                                            "conversation_type": conversation_type,
-                                            "conversation_title": conversation_title,
-                                            "sender": message.get("From", ""),
-                                            "content": message.get("Content", ""),
-                                            "is_sender": message.get("IsSender", False),
-                                            "created": message.get("Created", ""),
-                                        },
-                                        "media_files": [],
-                                        "overlays": [],
-                                    }
-
-                                    # Add media file details (only videos, since images never have overlays)
-                                    for media_file in media_files:
-                                        file_info = file_catalog.get(media_file, {})
-                                        media_type = self.get_media_type(media_file)
-                                        # Only include videos in ambiguous cases (images are processed normally)
-                                        if media_type == "video":
-                                            ambiguous_case["media_files"].append(
-                                                {
-                                                    "filename": media_file,
-                                                    "media_id": file_info.get(
-                                                        "media_id"
-                                                    ),
-                                                    "uuid": file_info.get("uuid"),
-                                                    "type": media_type,
-                                                    "extension": Path(
-                                                        media_file
-                                                    ).suffix,
-                                                }
-                                            )
-
-                                    # Add overlay details
-                                    for overlay_file in overlays_at_timestamp:
-                                        ambiguous_case["overlays"].append(
-                                            {
-                                                "filename": overlay_file,
-                                                "uuid": self.extract_uuid(overlay_file),
-                                            }
-                                        )
-
-                                    # Add analysis/hints
-                                    # Calculate counts from original media_files (not ambiguous_case which only has videos)
-                                    image_count = sum(
-                                        1
-                                        for mf in media_files
-                                        if self.get_media_type(mf) == "image"
-                                    )
-                                    # video_count was already calculated earlier for the ambiguity check
-
-                                    hint = f"{image_count} images + {video_count} videos, but only {overlay_count} overlays."
-                                    if video_count == overlay_count and image_count > 0:
-                                        hint += " Images don't need overlays and are processed normally."
-                                    elif overlay_count == 0:
-                                        hint += " Videos can exist without overlays."
-
-                                    ambiguous_case["analysis"] = {
-                                        "media_count": media_count,
-                                        "overlay_count": overlay_count,
-                                        "images": image_count,
-                                        "videos": video_count,
-                                        "hint": hint,
-                                    }
-
-                                    ambiguous_cases.append(ambiguous_case)
-
-                                    self.log_failure(
-                                        "AMBIGUOUS_OVERLAY",
-                                        f"{video_count} videos at {date_str}",
-                                        "Cannot determine correct overlay match",
-                                        f"{overlay_count} overlays available",
-                                    )
-                        except (ValueError, TypeError):
-                            # Failed to parse timestamp, skip overlay matching
-                            pass
-
-                    # Store as array if multiple, or single value for backwards compatibility
-                    if len(media_files) == 1:
-                        cleaned_msg["media_file"] = media_files[0]
-                    elif len(media_files) > 1:
-                        cleaned_msg["media_files"] = media_files
-
-                    if len(overlay_files) == 1:
-                        cleaned_msg["overlay_file"] = overlay_files[0]
-                    elif len(overlay_files) > 1:
-                        cleaned_msg["overlay_files"] = overlay_files
-
-                    # Track orphaned metadata (media IDs referenced but files not found)
-                    # Only track if still orphaned after all matching phases
-                    if orphaned_media_ids:
-                        for media_id in orphaned_media_ids:
-                            self.failure_tracker.add_orphaned_metadata(
-                                metadata_entry={
-                                    "conversation_id": conversation_id,
-                                    "conversation_type": conversation_type,
-                                    "conversation_title": conversation_title,
-                                    "message": cleaned_msg,
-                                    "media_id": media_id,
-                                },
-                                reason=f"Media ID '{media_id}' referenced in message but file not found (after all matching attempts)",
-                                context={
-                                    "timestamp": message.get("Created", ""),
-                                    "sender": message.get("From", ""),
-                                    "content": message.get("Content", ""),
-                                    "matched_files_count": len(media_files),
-                                    "expected_files_count": len(media_ids),
-                                    "matching_phases_completed": "media_id + timestamp",
-                                },
-                            )
-
-                cleaned_messages.append(cleaned_msg)
-
-                # Track media messages
-                if message.get("Media Type") in ["MEDIA", "IMAGE", "VIDEO"]:
-                    self.stats["media_messages"] += 1
-
-            # Only store conversation if it has media messages
-            if cleaned_messages:
-                metadata["conversations"][conversation_id] = {
-                    "type": conversation_type,
-                    "title": conversation_title,
-                    "message_count": len(cleaned_messages),
-                    "messages": cleaned_messages,
-                }
-
-        # Create entries for orphaned media files (not matched to any message)
-        orphaned_count = 0
-        for filename, file_info in file_catalog.items():
-            if file_info["type"] == "media" and filename not in matched_media_files:
-                # Use filesystem mtime for created date (format to match conversation messages)
-                created_date = None
-                if "mtime" in file_info:
-                    created_date = datetime.fromtimestamp(file_info["mtime"]).strftime(
-                        "%Y-%m-%d %H:%M:%S UTC"
-                    )
-                else:
-                    created_date = file_info.get("date")
-
-                orphaned_entry = {
+            if is_orphaned or (messages and messages[0].get("conversation_id") is None):
+                # Orphaned media
+                entry = {
                     "conversation_id": None,
                     "conversation_type": None,
                     "conversation_title": None,
                     "sender": None,
                     "media_type": "MEDIA",
-                    "created": created_date,
+                    "created": context.get("primary_created"),
                     "content": "",
                     "is_sender": None,
-                    "media_id": file_info.get("media_id", ""),
+                    "media_id": messages[0].get("media_id", "") if messages else "",
                     "media_file": filename,
                 }
+                if overlay_file:
+                    entry["overlay_file"] = overlay_file
+                orphaned_entries.append(entry)
+            elif is_duplicate:
+                # Duplicate media across conversations - create merged entry
+                conv_id = messages[0].get("conversation_id")
+                if conv_id is None:
+                    continue
+                entry = {
+                    "media_file": filename,
+                    "messages": messages,
+                    "primary_created": context.get("primary_created"),
+                    "is_duplicate": True,
+                }
+                if overlay_file:
+                    entry["overlay_file"] = overlay_file
 
-                # Try to find matching overlay using mtime (only if unambiguous)
-                mtime = file_info.get("mtime")
-                overlay_found = False
-                if mtime and mtime in mtime_to_filenames:
-                    # Count available overlays at this timestamp
-                    available_overlays = [
-                        fname
-                        for fname, ftype in mtime_to_filenames[mtime]
-                        if ftype == "overlay" and fname not in matched_overlays
-                    ]
-
-                    # Only match if there's exactly 1 unmatched overlay
-                    if len(available_overlays) == 1:
-                        orphaned_entry["overlay_file"] = available_overlays[0]
-                        matched_overlays.add(available_overlays[0])
-                        overlay_found = True
-
-                # Log the orphaned media file
-                media_id = file_info.get("media_id", "N/A")
-                overlay_status = "with overlay" if overlay_found else "no overlay"
-                self.log_failure(
-                    "ORPHANED_MEDIA",
-                    filename,
-                    "Not matched to any message",
-                    f"media_id={media_id}, {overlay_status}",
-                )
-
-                metadata["orphaned_media"].append(orphaned_entry)
-                orphaned_count += 1
-
-                # Track with FailureTracker
-                media_path = Path(file_info["original_path"])
-                self.failure_tracker.add_orphaned_media(
-                    media_path=media_path,
-                    reason="Not matched to any message in chat_history.json",
-                    context={
-                        "media_id": media_id,
-                        "overlay_status": overlay_status,
-                        "date": file_info.get("date"),
-                        "mtime": file_info.get("mtime"),
-                        "has_overlay": overlay_found,
-                    },
-                )
-
-        # Store statistics
-        self.stats["matched_overlays"] = len(matched_overlays)
-        self.stats["orphaned_media"] = orphaned_count
-        self.stats["ambiguous_cases"] = len(ambiguous_cases)
-
-        # Deduplicate media files across conversations
-        metadata = self._deduplicate_media_messages(metadata, file_catalog)
-
-        return metadata, ambiguous_cases
-
-    def organize_files(self, file_catalog: Dict) -> None:
-        """Copy files to appropriate directories"""
-        # Create output base directory if it doesn't exist
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create output directories
-        self.media_dir.mkdir(exist_ok=True)
-        self.overlays_dir.mkdir(exist_ok=True)
-
-        logger.info("Organizing files...")
-        logger.info("   Output directory: %s", self.output_dir)
-
-        for filename, file_info in file_catalog.items():
-            source = Path(file_info["original_path"])
-
-            if not source.exists():
-                self.log_failure(
-                    "FILE_NOT_FOUND",
-                    filename,
-                    "File missing at source",
-                    f"expected at {source}",
-                )
-                logger.warning("File not found: %s", source)
-                continue
-
-            # Determine destination
-            if file_info["type"] == "media":
-                destination = self.media_dir / filename
-            elif file_info["type"] == "overlay":
-                destination = self.overlays_dir / filename
+                if conv_id not in conversation_entries:
+                    conversation_entries[conv_id] = []
+                conversation_entries[conv_id].append(entry)
             else:
+                # Single occurrence
+                msg = messages[0] if messages else {}
+                conv_id = msg.get("conversation_id")
+                if conv_id is None:
+                    continue
+                entry = {
+                    "conversation_id": conv_id,
+                    "conversation_type": msg.get("conversation_type"),
+                    "conversation_title": msg.get("conversation_title"),
+                    "sender": msg.get("sender"),
+                    "media_type": msg.get("media_type"),
+                    "created": msg.get("created"),
+                    "content": msg.get("content"),
+                    "is_sender": msg.get("is_sender"),
+                    "media_id": msg.get("media_id"),
+                    "media_file": filename,
+                }
+                if overlay_file:
+                    entry["overlay_file"] = overlay_file
+
+                if conv_id not in conversation_entries:
+                    conversation_entries[conv_id] = []
+                conversation_entries[conv_id].append(entry)
+
+        # Build conversations structure
+        for conv_id, entries in conversation_entries.items():
+            if conv_id is None:
                 continue
 
-            try:
-                shutil.copy2(str(source), str(destination))
-                # Update path in catalog
-                file_info["new_path"] = str(destination)
-            except Exception as e:
-                self.log_failure(
-                    "COPY_FAILED",
-                    filename,
-                    f"Failed to copy file: {e}",
-                    f"source={source}, dest={destination}",
-                )
-                logger.error("Failed to copy %s: %s", filename, e)
+            # Get conversation metadata from first entry
+            first_entry = entries[0]
+            if "messages" in first_entry:
+                # Duplicate entry - get from first message
+                first_msg = first_entry["messages"][0]
+                conv_type = first_msg.get("conversation_type", "dm")
+                conv_title = first_msg.get("conversation_title")
+            else:
+                conv_type = first_entry.get("conversation_type", "dm")
+                conv_title = first_entry.get("conversation_title")
+
+            metadata["conversations"][conv_id] = {
+                "type": conv_type,
+                "title": conv_title,
+                "message_count": len(entries),
+                "messages": entries,
+            }
+
+        metadata["orphaned_media"] = orphaned_entries
+
+        # Update stats
+        total_unique = len(merged_contexts)
+        total_messages = sum(
+            len(ctx.get("messages", [])) for ctx in merged_contexts.values()
+        )
+        duplicates = total_messages - total_unique
+        self.stats["duplicate_files"] = duplicates if duplicates > 0 else 0
+        self.stats["deduplicated_files"] = duplicates if duplicates > 0 else 0
+        self.stats["orphaned_media"] = len(orphaned_entries)
+
+        return metadata
 
     def organize_ambiguous_files(
         self, ambiguous_cases: List[Dict], export_username: str
@@ -1167,7 +1017,7 @@ class SnapchatPreprocessor:
             logger.info(f"SUCCESS: Saved metadata to {self.metadata_file}")
         except Exception as e:
             logger.error(f"Failed to save metadata: {e}")
-            raise PreprocessingError(f"Failed to save metadata: {e}")
+            raise PreprocessingError(f"Failed to save metadata: {e}") from e
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -1185,7 +1035,7 @@ class SnapchatPreprocessor:
         }
         print_preprocessing_stats("Preprocessing Stats", stats)
 
-    def process(self) -> None:
+    def process(self) -> bool:
         """Main processing pipeline"""
         logger.info("Starting Snapchat Export Preprocessing")
         logger.info("Export path: %s", self.export_path)
@@ -1202,14 +1052,31 @@ class SnapchatPreprocessor:
         logger.info("Scanning chat_media directory...")
         file_catalog = self.build_file_catalog()
 
-        # Create cleaned metadata
-        logger.info("Processing metadata...")
-        metadata, ambiguous_cases = self.create_metadata(chat_history, file_catalog)
+        # Collect copy tasks
+        logger.info("Processing metadata and collecting media tasks...")
+        copy_tasks, file_catalog, ambiguous_cases = self.collect_media_tasks(
+            chat_history, file_catalog
+        )
 
-        # Organize files
-        self.organize_files(file_catalog)
+        # Copy media files with deduplication
+        if copy_tasks:
+            logger.info(f"Copying {len(copy_tasks)} media files with deduplication...")
+            results = self.copy_with_dedup(copy_tasks)
 
-        # Organize ambiguous cases for manual matching
+            # Count unique vs duplicates
+            unique = sum(1 for r in results.values() if not r.is_duplicate)
+            duplicates = sum(1 for r in results.values() if r.is_duplicate)
+            logger.info(f"   Copied {unique} unique files, {duplicates} duplicates")
+
+        # Copy overlay files (no deduplication for overlays)
+        logger.info("Copying overlay files...")
+        self.copy_overlay_files(file_catalog)
+
+        # Build metadata from dedup results
+        logger.info("Building metadata...")
+        metadata = self.build_metadata_from_results(chat_history)
+
+        # Organize ambiguous cases
         export_username = metadata.get("export_info", {}).get(
             "export_username", "unknown"
         )
@@ -1228,6 +1095,7 @@ class SnapchatPreprocessor:
         self.print_statistics()
 
         logger.info("Preprocessing complete!")
+        return True
 
 
 def main():

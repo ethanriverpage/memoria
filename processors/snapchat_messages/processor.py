@@ -408,12 +408,14 @@ def _build_description(message: dict, export_username: str) -> str:
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[str, dict, str]],
+    file_info: List[Tuple[Optional[str], dict, str]],
 ) -> List[MetadataWriteRequest]:
     """Build MetadataWriteRequest objects for Snapchat Messages files."""
     requests: List[MetadataWriteRequest] = []
 
     for file_path, message, export_username in file_info:
+        if file_path is None:
+            continue
         # Skip MKV files (they already have metadata from overlay creation)
         if file_path.endswith(".mkv"):
             continue

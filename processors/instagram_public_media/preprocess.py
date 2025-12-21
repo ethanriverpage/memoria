@@ -10,26 +10,24 @@ Organizes Instagram export files and creates cleaned metadata:
 
 import json
 import logging
-import shutil
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 import argparse
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
-from common.files.filter import BannedFilesFilter
+
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
-from common.utils import default_worker_count
+from common.preprocess.context_mergers import merge_first_occurrence
 from common.processing import print_preprocessing_stats
 from common.output.progress import PHASE_PREPROCESS, futures_progress
-from common.failure_tracker import FailureTracker
+from processors.preprocess_base import CopyTask, PreprocessorBase
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 
-class InstagramPreprocessor:
+class InstagramPreprocessor(PreprocessorBase):
     """Preprocesses Instagram export by organizing files and cleaning metadata"""
 
     # Media type mapping: HTML filename (without extension) -> output media_type
@@ -50,7 +48,14 @@ class InstagramPreprocessor:
         workers: Optional[int] = None,
         final_output_dir: Optional[Path] = None,
     ):
-        self.export_path = Path(export_path)
+        super().__init__(
+            processor_name="Instagram Public Media",
+            export_path=export_path,
+            output_dir=output_dir,
+            workers=workers,
+            final_output_dir=final_output_dir,
+        )
+
         self.media_source_dir = self.export_path / "media"
 
         # Detect export format: new (2025+) vs legacy (2022)
@@ -68,90 +73,20 @@ class InstagramPreprocessor:
             self.html_dir = new_format_html_dir
             self.is_legacy_format = False
 
-        # Output directories - require explicit output_dir to prevent writing to exports
-        if output_dir is None:
-            raise ValueError(
-                "output_dir is required. Preprocessors must not write to the export "
-                "directory. Use a temp directory or specify an explicit output path."
-            )
-        output_base = Path(output_dir)
-        # Safety check: never write to the export directory
-        if output_base.resolve() == self.export_path.resolve():
-            raise ValueError(
-                f"output_dir cannot be the same as export_path ({self.export_path}). "
-                "This would corrupt the original export."
-            )
-        self.output_dir = output_base
-        self.media_output_dir = output_base / "media"
-        self.metadata_file = output_base / "metadata.json"
-        self.log_file = output_base / "preprocessing.log"
-
-        # Final output directory for processor (for failure tracking)
-        self.final_output_dir = (
-            Path(final_output_dir) if final_output_dir else output_base
-        )
-
-        # Initialize banned files filter
-        self.banned_filter = BannedFilesFilter()
-
-        # Initialize failure tracker
-        self.failure_tracker = FailureTracker(
-            processor_name="Instagram Public Media",
-            export_directory=str(export_path),
-        )
-
-        # Threading configuration
-        self.workers = workers if workers is not None else default_worker_count()
-
-        # Thread-safe locks for shared data structures
-        self.stats_lock = Lock()
-        self.log_lock = Lock()
-        self.destination_lock = Lock()
-
-        # Statistics
+        # Statistics specific to this preprocessor
         self.stats = {
             "total_posts": 0,
             "total_media_files": 0,
             "media_copied": 0,
+            "duplicate_files": 0,
             "orphaned_files": 0,
             "missing_files": 0,
             "banned_files_skipped": 0,
             "by_type": {},
         }
 
-        # Log entries
-        self.log_entries = []
-
-    def log_message(self, category: str, message: str, details: str = "") -> None:
-        """Add a log entry (thread-safe)"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        entry = f"[{timestamp}] {category}: {message}"
-        if details:
-            entry += f" ({details})"
-        with self.log_lock:
-            self.log_entries.append(entry)
-
-    def save_log(self) -> None:
-        """Save log entries to log file"""
-        if not self.log_entries:
-            return
-
-        try:
-            with open(self.log_file, "w", encoding="utf-8") as f:
-                f.write("Instagram Export Preprocessing Log\n")
-                f.write("=" * 80 + "\n")
-                f.write(f"Export: {self.export_path}\n")
-                f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write("=" * 80 + "\n\n")
-
-                for entry in self.log_entries:
-                    f.write(entry + "\n")
-
-                f.write(f"\nTotal logged issues: {len(self.log_entries)}\n")
-
-            logger.info("Saved preprocessing log to %s", self.log_file)
-        except Exception as e:
-            logger.warning("Failed to save log file: %s", e)
+        # Set context merger for deduplication (first occurrence wins)
+        self._context_merger = merge_first_occurrence
 
     def validate_export(self) -> bool:
         """Validate that export directory has required structure"""
@@ -403,7 +338,7 @@ class InstagramPreprocessor:
             )
 
             for idx, container in enumerate(post_containers):
-                post_data = {"media_type": media_type}
+                post_data: Dict[str, Any] = {"media_type": media_type}
 
                 # Extract caption (optional)
                 # New format uses <h2>, legacy format uses <div> with same class
@@ -513,17 +448,20 @@ class InstagramPreprocessor:
     def copy_media_files(
         self, metadata: List[Dict], file_catalog: Dict[str, Path]
     ) -> None:
-        """Copy media files referenced in metadata to output directory"""
+        """Copy media files referenced in metadata to output directory using copy_with_dedup."""
         # Create output media directory
         self.media_output_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info("Copying media files...")
+        logger.info("Collecting media files for copy...")
 
+        # Phase 1: Collect all files to copy
+        copy_tasks: List[CopyTask] = []
+        # Track which post/media_path pairs map to which source paths
+        post_file_map: Dict[Tuple[int, str], Optional[Path]] = {}
         matched_files = set()
 
-        for post in metadata:
+        for post_idx, post in enumerate(metadata):
             media_paths = post.get("media_paths", [])
-            copied_files = []
 
             for media_path in media_paths:
                 # Extract filename from path
@@ -531,21 +469,27 @@ class InstagramPreprocessor:
 
                 if filename in file_catalog:
                     source_path = file_catalog[filename]
-                    dest_path = self.media_output_dir / filename
+                    post_file_map[(post_idx, media_path)] = source_path
+                    matched_files.add(filename)
 
-                    try:
-                        shutil.copy2(source_path, dest_path)
-                        copied_files.append(filename)
-                        matched_files.add(filename)
-                        self.stats["media_copied"] += 1
-                    except Exception as e:
-                        self.log_message(
-                            "COPY_ERROR",
-                            f"Failed to copy {filename}",
-                            str(e),
-                        )
-                        logger.error("Failed to copy %s: %s", filename, e)
+                    # Build context for this file
+                    context = {
+                        "_source_path": str(source_path),
+                        "media_type": post.get("media_type"),
+                        "caption": post.get("caption", ""),
+                        "timestamp": post.get("timestamp"),
+                        "latitude": post.get("latitude"),
+                        "longitude": post.get("longitude"),
+                        "media_path": media_path,
+                    }
+
+                    copy_tasks.append(CopyTask(
+                        source_path=source_path,
+                        dest_filename=filename,
+                        context=context,
+                    ))
                 else:
+                    post_file_map[(post_idx, media_path)] = None
                     self.log_message(
                         "MISSING_FILE",
                         f"File referenced in HTML not found: {filename}",
@@ -567,10 +511,42 @@ class InstagramPreprocessor:
                         },
                     )
 
+        # Phase 2: Copy files with deduplication
+        logger.info("Copying %d media files with deduplication...", len(copy_tasks))
+        results = self.copy_with_dedup(copy_tasks)
+
+        # Build a map from source_path to dest_filename for updating posts
+        source_to_dest: Dict[str, str] = {}
+
+        for source_path, result in results.items():
+            source_path_str = str(source_path)
+
+            if result.is_duplicate:
+                self.stats["duplicate_files"] += 1
+            else:
+                self.stats["media_copied"] += 1
+
+            # Map this source path to the resulting destination filename
+            if source_path_str and result.dest_filename:
+                source_to_dest[source_path_str] = result.dest_filename
+
+        # Phase 3: Update posts with resulting filenames
+        for post_idx, post in enumerate(metadata):
+            media_paths = post.get("media_paths", [])
+            copied_files = []
+
+            for media_path in media_paths:
+                source_path = post_file_map.get((post_idx, media_path))
+                if source_path:
+                    dest_filename = source_to_dest.get(str(source_path))
+                    if dest_filename:
+                        copied_files.append(dest_filename)
+
             # Update post with just filenames (not full paths)
             post["media_files"] = copied_files
             # Remove media_paths as it's no longer needed
-            del post["media_paths"]
+            if "media_paths" in post:
+                del post["media_paths"]
 
         # Report orphaned files (in filesystem but not referenced in HTML)
         orphaned = set(file_catalog.keys()) - matched_files
@@ -590,7 +566,8 @@ class InstagramPreprocessor:
                 f"File in filesystem not referenced in any HTML: {filename}",
             )
 
-        logger.info("   Copied %d files", self.stats["media_copied"])
+        logger.info("   Copied %d unique files", self.stats["media_copied"])
+        logger.info("   Deduplicated %d duplicate files", self.stats["duplicate_files"])
         logger.info("   Missing files: %d", self.stats["missing_files"])
         logger.info("   Orphaned files: %d", self.stats["orphaned_files"])
 
@@ -627,10 +604,12 @@ class InstagramPreprocessor:
 
         return (media_type, posts)
 
-    def create_metadata(self, file_catalog: Dict[str, Path]) -> List[Dict]:
+    def create_metadata(self, _file_catalog: Dict[str, Path]) -> List[Dict]:
         """
         Main processing: parse all HTML files and create metadata
         Returns list of all posts with metadata (multithreaded)
+
+        Note: _file_catalog is accepted for API consistency but not used here.
         """
         all_posts = []
 
@@ -654,7 +633,7 @@ class InstagramPreprocessor:
             ):
                 html_basename = future_to_html[future]
                 try:
-                    media_type, posts = future.result()
+                    _, posts = future.result()
                     if posts:
                         logger.debug(
                             "   Processed %s.html: %d posts", html_basename, len(posts)

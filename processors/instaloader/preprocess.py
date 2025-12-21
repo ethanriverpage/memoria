@@ -14,7 +14,6 @@ Note: This is NOT an official Instagram export format - it handles scrape data f
 
 import json
 import logging
-import shutil
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -22,19 +21,19 @@ from datetime import datetime
 import sys
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
+
 from common.output.progress import PHASE_PREPROCESS, futures_progress
+from common.preprocess.context_mergers import merge_first_occurrence
 from common.processing import print_preprocessing_stats
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
-from common.utils import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, default_worker_count
-from common.files.filter import BannedFilesFilter
-from common.failure_tracker import FailureTracker
+from common.utils import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+from processors.preprocess_base import CopyTask, PreprocessorBase
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 
-class InstaloaderPreprocessor:
+class InstaloaderPreprocessor(PreprocessorBase):
     """Preprocesses Instaloader scrape data by organizing files and cleaning metadata"""
 
     # Use common media extensions (images and videos only)
@@ -47,53 +46,20 @@ class InstaloaderPreprocessor:
         workers: Optional[int] = None,
         final_output_dir: Optional[Path] = None,
     ):
-        self.export_path = Path(export_path)
-
-        # Output directories - require explicit output_dir to prevent writing to exports
-        if output_dir is None:
-            raise ValueError(
-                "output_dir is required. Preprocessors must not write to the export "
-                "directory. Use a temp directory or specify an explicit output path."
-            )
-        output_base = Path(output_dir)
-        # Safety check: never write to the export directory
-        if output_base.resolve() == self.export_path.resolve():
-            raise ValueError(
-                f"output_dir cannot be the same as export_path ({self.export_path}). "
-                "This would corrupt the original export."
-            )
-        self.output_dir = output_base
-        self.media_output_dir = output_base / "media"
-        self.metadata_file = output_base / "metadata.json"
-        self.log_file = output_base / "preprocessing.log"
-
-        # Final output directory for processor (for failure tracking)
-        self.final_output_dir = (
-            Path(final_output_dir) if final_output_dir else output_base
-        )
-
-        # Initialize banned files filter
-        self.banned_filter = BannedFilesFilter()
-
-        # Initialize failure tracker
-        self.failure_tracker = FailureTracker(
+        super().__init__(
             processor_name="Instaloader",
-            export_directory=str(export_path),
+            export_path=export_path,
+            output_dir=output_dir,
+            workers=workers,
+            final_output_dir=final_output_dir,
         )
 
-        # Threading configuration
-        self.workers = workers if workers is not None else default_worker_count()
-
-        # Thread-safe locks for shared data structures
-        self.stats_lock = Lock()
-        self.log_lock = Lock()
-        self.destination_lock = Lock()
-
-        # Statistics
+        # Statistics specific to this preprocessor
         self.stats = {
             "total_posts": 0,
             "total_media_files": 0,
             "media_copied": 0,
+            "duplicate_files": 0,
             "posts_with_json": 0,
             "posts_with_txt": 0,
             "posts_with_only_media": 0,
@@ -101,8 +67,8 @@ class InstaloaderPreprocessor:
             "banned_files_skipped": 0,
         }
 
-        # Log entries
-        self.log_entries = []
+        # Set context merger for deduplication (first occurrence wins)
+        self._context_merger = merge_first_occurrence
 
     def normalize_text(self, text: str) -> str:
         """
@@ -135,37 +101,6 @@ class InstaloaderPreprocessor:
             text = text.replace(unicode_char, ascii_char)
 
         return text
-
-    def log_message(self, category: str, message: str, details: str = "") -> None:
-        """Add a log entry (thread-safe)"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        entry = f"[{timestamp}] {category}: {message}"
-        if details:
-            entry += f" ({details})"
-        with self.log_lock:
-            self.log_entries.append(entry)
-
-    def save_log(self) -> None:
-        """Save log entries to log file"""
-        if not self.log_entries:
-            return
-
-        try:
-            with open(self.log_file, "w", encoding="utf-8") as f:
-                f.write("Instaloader Preprocessing Log\n")
-                f.write("=" * 80 + "\n")
-                f.write(f"Export: {self.export_path}\n")
-                f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write("=" * 80 + "\n\n")
-
-                for entry in self.log_entries:
-                    f.write(entry + "\n")
-
-                f.write(f"\nTotal logged issues: {len(self.log_entries)}\n")
-
-            logger.info("Saved preprocessing log to %s", self.log_file)
-        except Exception as e:
-            logger.warning("Failed to save log file: %s", e)
 
     def validate_export(self) -> bool:
         """Validate that export directory exists and contains media files"""
@@ -359,6 +294,34 @@ class InstaloaderPreprocessor:
         for base_name, entry in catalog.items():
             entry["media_files"].sort()
 
+        # Track entries with metadata but no media files as orphaned metadata
+        orphaned_count = 0
+        for base_name, entry in catalog.items():
+            if not entry["media_files"] and (entry["txt"] or entry["json"]):
+                orphaned_count += 1
+                metadata_content = {}
+                if entry["json"]:
+                    try:
+                        with open(entry["json"], "r", encoding="utf-8") as f:
+                            metadata_content = json.load(f)
+                    except Exception:
+                        metadata_content = {"base_name": base_name}
+
+                self.failure_tracker.add_orphaned_metadata(
+                    metadata_entry=metadata_content,
+                    reason="Metadata exists but no matching media file found",
+                    context={
+                        "base_name": base_name,
+                        "has_txt": entry["txt"] is not None,
+                        "has_json": entry["json"] is not None,
+                        "txt_path": str(entry["txt"]) if entry["txt"] else None,
+                        "json_path": str(entry["json"]) if entry["json"] else None,
+                    },
+                )
+
+        if orphaned_count > 0:
+            logger.info(f"Found {orphaned_count} orphaned metadata entries")
+
         # Filter out entries with no media files
         catalog = {k: v for k, v in catalog.items() if v["media_files"]}
 
@@ -533,21 +496,25 @@ class InstaloaderPreprocessor:
         return all_posts
 
     def copy_media_files(self, metadata: List[Dict]) -> None:
-        """Copy media files to output directory"""
+        """Copy media files to output directory using copy_with_dedup."""
         # Create output media directory
         self.media_output_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info("Copying media files...")
+        logger.info("Collecting media files for copy...")
         logger.debug(
             f"Copying {self.stats['total_media_files']} media files to {self.media_output_dir}"
         )
 
-        for post in metadata:
+        # Phase 1: Collect all files to copy
+        copy_tasks: List[CopyTask] = []
+        # Map from (post_idx, filename) to source_path for updating metadata
+        file_map: Dict[Tuple[int, str], Path] = {}
+
+        for post_idx, post in enumerate(metadata):
             media_files = post.get("media_files", [])
 
             for filename in media_files:
                 source_path = self.export_path / filename
-                dest_path = self.media_output_dir / filename
 
                 if not source_path.exists():
                     self.log_message(
@@ -557,21 +524,58 @@ class InstaloaderPreprocessor:
                     logger.warning(f"Media file not found: {filename}")
                     continue
 
-                try:
-                    logger.debug(
-                        f"Copying {filename} ({source_path.stat().st_size} bytes)"
-                    )
-                    shutil.copy2(source_path, dest_path)
-                    self.stats["media_copied"] += 1
-                except Exception as e:
-                    self.log_message(
-                        "COPY_ERROR",
-                        f"Failed to copy {filename}",
-                        str(e),
-                    )
-                    logger.error(f"Failed to copy {filename}: {e}")
+                file_map[(post_idx, filename)] = source_path
 
-        logger.info(f"   Copied {self.stats['media_copied']} files")
+                # Build context for this file
+                context = {
+                    "_source_path": str(source_path),
+                    "_original_filename": filename,
+                    "media_type": post.get("media_type"),
+                    "caption": post.get("caption", ""),
+                    "timestamp": post.get("timestamp"),
+                }
+
+                copy_tasks.append(CopyTask(
+                    source_path=source_path,
+                    dest_filename=filename,
+                    context=context,
+                ))
+
+        # Phase 2: Copy files with deduplication
+        logger.info("Copying %d media files with deduplication...", len(copy_tasks))
+        results = self.copy_with_dedup(copy_tasks)
+
+        # Build a map from source_path to dest_filename for updating posts
+        source_to_dest: Dict[str, str] = {}
+
+        for source_path, result in results.items():
+            source_path_str = str(source_path)
+
+            if result.is_duplicate:
+                self.stats["duplicate_files"] += 1
+            else:
+                self.stats["media_copied"] += 1
+
+            # Map this source path to the resulting destination filename
+            if source_path_str and result.dest_filename:
+                source_to_dest[source_path_str] = result.dest_filename
+
+        # Phase 3: Update posts with resulting filenames (in case of dedup renames)
+        for post_idx, post in enumerate(metadata):
+            media_files = post.get("media_files", [])
+            updated_files = []
+
+            for filename in media_files:
+                source_path = file_map.get((post_idx, filename))
+                if source_path:
+                    dest_filename = source_to_dest.get(str(source_path))
+                    if dest_filename:
+                        updated_files.append(dest_filename)
+
+            post["media_files"] = updated_files
+
+        logger.info(f"   Copied {self.stats['media_copied']} unique files")
+        logger.info(f"   Deduplicated {self.stats['duplicate_files']} duplicate files")
 
     def save_metadata(self, metadata: List[Dict]) -> None:
         """Save cleaned metadata to metadata.json"""
@@ -616,7 +620,7 @@ class InstaloaderPreprocessor:
         }
         print_preprocessing_stats("Preprocessing Stats", stats)
 
-    def process(self) -> None:
+    def process(self) -> bool:
         """Main processing pipeline"""
         logger.info("Starting Instaloader Preprocessing")
         logger.info("Export path: %s", self.export_path)
@@ -624,7 +628,7 @@ class InstaloaderPreprocessor:
 
         # Validate export structure
         if not self.validate_export():
-            sys.exit(1)
+            return False
 
         # Build file catalog
         catalog = self.build_file_catalog()
@@ -648,6 +652,7 @@ class InstaloaderPreprocessor:
         self.print_statistics()
 
         logger.info("Preprocessing complete!")
+        return True
 
 
 def main():

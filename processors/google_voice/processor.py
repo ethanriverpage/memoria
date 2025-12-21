@@ -189,9 +189,9 @@ class GoogleVoiceProcessor(ProcessorBase):
             return False
 
         try:
-            # Choose human-readable subdirectory under provided base output
+            # Choose content-type subdirectory under provided base output
             if output_dir:
-                processor_output = str(Path(output_dir) / "Google Voice")
+                processor_output = str(Path(output_dir) / "voice")
             else:
                 processor_output = kwargs.get("output", "final_googlevoice")
 

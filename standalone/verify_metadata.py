@@ -107,7 +107,7 @@ def parse_processed_filename(filename: str) -> Dict[str, str]:
     for pattern in patterns:
         match = re.match(pattern, base)
         if match:
-            groups = match.groups()
+            groups = list(match.groups())
             info["source"] = groups[0]
             info["date"] = groups[2] if len(groups) > 2 else groups[1]
             break

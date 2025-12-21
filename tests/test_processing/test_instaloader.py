@@ -291,3 +291,92 @@ class TestInstaloaderFileTypes:
         )
 
         assert (temp_export_dir / "2021-01-01_12-00-00_UTC.png").exists()
+
+
+class TestInstaloaderOrphanDetection:
+    """Tests for orphaned metadata detection."""
+
+    def test_orphaned_metadata_txt_without_media(
+        self, instaloader_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should track .txt caption files without matching media as orphaned metadata."""
+        from processors.instaloader.preprocess import InstaloaderPreprocessor
+
+        temp_export_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create a valid media file so preprocessor doesn't exit early
+        write_media_file(temp_export_dir / "2021-01-02_12-00-00_UTC.jpg", "jpeg")
+
+        # Create a .txt file without corresponding media file (orphaned)
+        (temp_export_dir / "2021-01-01_12-00-00_UTC.txt").write_text("Orphaned caption")
+
+        # Run preprocessor
+        preprocessor = InstaloaderPreprocessor(
+            export_path=temp_export_dir,
+            output_dir=temp_output_dir,
+            final_output_dir=temp_output_dir,
+        )
+        preprocessor.process()
+
+        # Check that orphaned metadata was tracked
+        assert len(preprocessor.failure_tracker.orphaned_metadata) >= 1
+        orphaned_entry = preprocessor.failure_tracker.orphaned_metadata[0]
+        assert orphaned_entry["reason"] == "Metadata exists but no matching media file found"
+        assert orphaned_entry["context"]["has_txt"] is True
+
+    def test_orphaned_metadata_json_without_media(
+        self, instaloader_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should track .json metadata files without matching media as orphaned metadata."""
+        from processors.instaloader.preprocess import InstaloaderPreprocessor
+
+        temp_export_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create a valid media file so preprocessor doesn't exit early
+        write_media_file(temp_export_dir / "2021-01-02_12-00-00_UTC.jpg", "jpeg")
+
+        # Create a .json file without corresponding media file (orphaned)
+        (temp_export_dir / "2021-01-01_12-00-00_UTC.json").write_text(
+            '{"taken_at": "2021-01-01T12:00:00"}'
+        )
+
+        # Run preprocessor
+        preprocessor = InstaloaderPreprocessor(
+            export_path=temp_export_dir,
+            output_dir=temp_output_dir,
+            final_output_dir=temp_output_dir,
+        )
+        preprocessor.process()
+
+        # Check that orphaned metadata was tracked
+        assert len(preprocessor.failure_tracker.orphaned_metadata) >= 1
+        orphaned_entry = preprocessor.failure_tracker.orphaned_metadata[0]
+        assert orphaned_entry["context"]["has_json"] is True
+
+    def test_no_orphans_when_media_exists(
+        self, instaloader_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should not track orphans when media file exists."""
+        from processors.instaloader.preprocess import InstaloaderPreprocessor
+
+        create_instaloader_export(
+            temp_export_dir,
+            media_files=[
+                {
+                    "timestamp": "2021-01-01_12-00-00",
+                    "extension": "jpg",
+                    "caption": "Valid caption",
+                }
+            ],
+        )
+
+        # Run preprocessor
+        preprocessor = InstaloaderPreprocessor(
+            export_path=temp_export_dir,
+            output_dir=temp_output_dir,
+            final_output_dir=temp_output_dir,
+        )
+        preprocessor.process()
+
+        # No orphaned metadata should be tracked
+        assert len(preprocessor.failure_tracker.orphaned_metadata) == 0
