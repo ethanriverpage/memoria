@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.dedup.catalog import catalog_media_files
+from common.dedup.service import is_file_primary_by_hash
 from common.dedup.description import (
     SourceEntry,
     build_description,
@@ -417,6 +418,9 @@ def process_logic(
         processing_tasks = []
 
         skipped_dedup = 0
+        # Get file_hashes lookup table for dedup optimization
+        file_hashes = metadata_json.get("file_hashes", {})
+
         for conversation in conversations:
             conversation_name = conversation.get("conversation_name", "unknown")
             sanitized_name = sanitize_filename(conversation_name)
@@ -426,15 +430,25 @@ def process_logic(
                 media_files = message.get("media_files", [])
 
                 for media_file in media_files:
-                    # Build full path for dedup check
-                    full_path = os.path.join(media_dir, media_file)
-
                     # Skip secondary files based on dedup manifest (using hash-based lookup)
-                    if GoogleVoiceProcessor.should_skip_for_dedup(
-                        full_path, dedup_manifest, "Google Voice"
-                    ):
-                        skipped_dedup += 1
-                        continue
+                    # Use cached file_hashes from preprocessing when available
+                    content_hash = file_hashes.get(media_file)
+                    if dedup_manifest:
+                        if content_hash:
+                            # Use cached hash from preprocessing (avoids re-hashing)
+                            if not is_file_primary_by_hash(
+                                dedup_manifest, content_hash, "Google Voice"
+                            ):
+                                skipped_dedup += 1
+                                continue
+                        else:
+                            # Fallback for files without cached hash
+                            full_path = os.path.join(media_dir, media_file)
+                            if GoogleVoiceProcessor.should_skip_for_dedup(
+                                full_path, dedup_manifest, "Google Voice"
+                            ):
+                                skipped_dedup += 1
+                                continue
 
                     # Get file extension
                     file_ext = os.path.splitext(media_file)[1].lower()

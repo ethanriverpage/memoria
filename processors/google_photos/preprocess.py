@@ -1102,6 +1102,7 @@ class GooglePhotosPreprocessor(PreprocessorBase):
                 file_metadata = context.get("metadata", {}).copy()
                 file_metadata["albums"] = sorted(context.get("albums", []))
                 file_metadata["filename"] = filename
+                file_metadata["content_hash"] = content_hash
 
                 media_files.append(file_metadata)
 

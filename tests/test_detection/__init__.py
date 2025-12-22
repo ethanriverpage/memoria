@@ -1,1 +1,1 @@
-# Detection tests for all processors
+# Detection tests module

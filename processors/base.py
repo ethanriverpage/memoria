@@ -4,6 +4,7 @@
 import json
 import logging
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
@@ -264,8 +265,16 @@ class ProcessorBase(ABC):
 
         exif_rebuilt_count = 0
 
-        # Validate and rebuild corrupted EXIF
-        corrupted_files = batch_validate_exif(file_paths)
+        # Run validation and metadata reading in parallel for better performance
+        # Both are read-only operations that can safely execute concurrently
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            validate_future = executor.submit(batch_validate_exif, file_paths)
+            metadata_future = executor.submit(batch_read_existing_metadata, file_paths)
+
+            corrupted_files = validate_future.result()
+            existing_metadata_map = metadata_future.result()
+
+        # Rebuild corrupted EXIF structures
         if corrupted_files:
             logger.info(
                 "Rebuilding %d corrupted EXIF structures...", len(corrupted_files)
@@ -273,8 +282,12 @@ class ProcessorBase(ABC):
             batch_rebuild_exif(list(corrupted_files))
             exif_rebuilt_count = len(corrupted_files)
 
-        # Batch read and write metadata
-        existing_metadata_map = batch_read_existing_metadata(file_paths)
+            # Re-read metadata for rebuilt files to ensure accuracy
+            # The initial parallel read may have gotten incomplete data from corrupted files
+            rebuilt_metadata = batch_read_existing_metadata(list(corrupted_files))
+            existing_metadata_map.update(rebuilt_metadata)
+
+        # Build and write metadata requests
         requests = metadata_request_builder(file_info)
         batch_write_metadata_requests(requests, existing_metadata_map)
 

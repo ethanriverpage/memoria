@@ -823,6 +823,7 @@ class SnapchatPreprocessor(PreprocessorBase):
             },
             "conversations": {},
             "orphaned_media": [],
+            "file_hashes": {},  # Maps filename -> content_hash for dedup optimization
         }
 
         # Group entries by conversation
@@ -923,6 +924,12 @@ class SnapchatPreprocessor(PreprocessorBase):
             }
 
         metadata["orphaned_media"] = orphaned_entries
+
+        # Build file_hashes lookup table for cross-processor dedup optimization
+        for content_hash, registry_entry in self._hash_registry.items():
+            filename = registry_entry.get("filename", "")
+            if filename:
+                metadata["file_hashes"][filename] = content_hash
 
         # Update stats
         total_unique = len(merged_contexts)

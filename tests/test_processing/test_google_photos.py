@@ -9,10 +9,11 @@ Tests cover edge cases including:
 - Live Photo pairs (JPG + MOV)
 - Missing JSON files
 - Files with wrong extensions
+- Content hash caching for cross-processor deduplication
 """
 
 import json
-
+import pytest
 
 from tests.fixtures.generators import create_google_photos_export
 from tests.fixtures.media_samples import write_media_file
@@ -251,3 +252,65 @@ class TestGooglePhotosFileTypes:
         photos_dir.mkdir(parents=True)
         write_media_file(photos_dir / "video.mov", "mov")
         assert (photos_dir / "video.mov").exists()
+
+
+class TestGooglePhotosContentHashCaching:
+    """Tests for content hash caching in metadata.json for cross-processor dedup."""
+
+    @pytest.fixture
+    def preprocessor(self, tmp_path):
+        """Create a GooglePhotosPreprocessor instance for testing."""
+        from processors.google_photos.preprocess import GooglePhotosPreprocessor
+
+        export_dir = tmp_path / "export"
+        output_dir = tmp_path / "output"
+        export_dir.mkdir()
+        output_dir.mkdir()
+
+        return GooglePhotosPreprocessor(
+            export_path=export_dir,
+            output_dir=output_dir,
+        )
+
+    def test_content_hash_saved_in_metadata(self, preprocessor, tmp_path):
+        """Preprocessing should save content_hash in metadata.json for dedup optimization."""
+        # Create minimal export structure
+        export_dir = tmp_path / "export"
+        photos_dir = export_dir / "Google Photos" / "Test Album"
+        photos_dir.mkdir(parents=True)
+
+        # Create a test image
+        write_media_file(photos_dir / "photo.jpg", "jpeg")
+
+        # Create matching JSON metadata
+        metadata = {
+            "title": "photo.jpg",
+            "photoTakenTime": {"timestamp": "1609459200"},
+        }
+        (photos_dir / "photo.jpg.json").write_text(json.dumps(metadata))
+
+        # Run preprocessing
+        result = preprocessor.run()
+        assert result is True
+
+        # Load the output metadata.json
+        output_dir = tmp_path / "output"
+        metadata_file = output_dir / "metadata.json"
+        assert metadata_file.exists(), "metadata.json should be created"
+
+        with open(metadata_file) as f:
+            output_metadata = json.load(f)
+
+        # Verify content_hash is present in media_files
+        media_files = output_metadata.get("media_files", [])
+        assert len(media_files) > 0, "Should have at least one media file"
+
+        for media_entry in media_files:
+            assert "content_hash" in media_entry, (
+                "Each media entry should have content_hash for cross-processor dedup"
+            )
+            assert media_entry["content_hash"], "content_hash should not be empty"
+            # xxHash64 produces 16-character hex string
+            assert len(media_entry["content_hash"]) == 16, (
+                "content_hash should be a 16-char xxHash64 hex digest"
+            )

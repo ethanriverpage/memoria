@@ -979,3 +979,87 @@ def create_imessage_iphone_export(
     (sms_dir / "chat.db").rename(sms_dir / "sms.db")
 
     return base_path
+
+
+def create_imessage_imazing_export(
+    base_path: Path,
+    username: str = "testuser",
+    conversations: Optional[List[Dict]] = None,
+) -> Path:
+    """Create a minimal iMessage iMazing export structure.
+
+    Structure:
+        {base_path}/
+            Device-Info.txt (contains iMazing reference)
+            Messages - Contact Name.csv
+            YYYY-MM-DD HH MM SS - Contact - filename.jpg
+
+    Args:
+        base_path: Base directory for the export
+        username: Username for naming
+        conversations: List of conversation data dicts
+
+    Returns:
+        Path to the created export directory
+    """
+    base_path.mkdir(parents=True, exist_ok=True)
+
+    # Create Device-Info.txt with iMazing reference
+    device_info = base_path / "Device-Info.txt"
+    device_info.write_text("Exported by iMazing 2.17.0\nDevice: iPhone 13 Pro")
+
+    if conversations is None:
+        conversations = [
+            {
+                "contact_name": "John Doe",
+                "messages": [
+                    {
+                        "date": "2021-01-15 14:30:00",
+                        "sender": "John Doe",
+                        "text": "Hello!",
+                        "attachment": "photo.jpg",
+                    },
+                    {
+                        "date": "2021-01-15 14:31:00",
+                        "sender": username,
+                        "text": "Hi there!",
+                    },
+                ],
+            }
+        ]
+
+    for conv in conversations:
+        contact_name = conv["contact_name"]
+
+        # Create CSV file for this conversation
+        csv_lines = [
+            "Chat Session,Message Date,Delivered Date,Read Date,Service,Type,"
+            "Sender ID,Sender Name,Status,Replying to,Subject,Text,Attachment,"
+            "Attachment type"
+        ]
+
+        for msg in conv.get("messages", []):
+            sender = msg.get("sender", "")
+            msg_type = "Incoming" if sender != username else "Outgoing"
+            text = msg.get("text", "")
+            attachment = msg.get("attachment", "")
+            attach_type = "Image" if attachment.endswith((".jpg", ".png")) else ""
+
+            csv_lines.append(
+                f"{contact_name},{msg['date']},,,"
+                f"iMessage,{msg_type},,{sender},Delivered,,,"
+                f"{text},{attachment},{attach_type}"
+            )
+
+            # Create attachment file if present
+            if attachment:
+                # iMazing uses: YYYY-MM-DD HH MM SS - Contact - filename
+                date_part = msg["date"].replace(":", " ")
+                media_filename = f"{date_part} - {contact_name} - {attachment}"
+                ext = attachment.split(".")[-1].lower()
+                write_media_file(base_path / media_filename, ext)
+
+        csv_path = base_path / f"Messages - {contact_name}.csv"
+        csv_path.write_text("\n".join(csv_lines))
+
+    return base_path

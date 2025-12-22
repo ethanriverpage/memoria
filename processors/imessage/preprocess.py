@@ -973,6 +973,13 @@ class IMessagePreprocessor(PreprocessorBase):
         # Get username detection result for source info
         detection_result = self.detect_username()
 
+        # Build file_hashes lookup table for cross-processor dedup optimization
+        file_hashes = {}
+        for content_hash, registry_entry in self._hash_registry.items():
+            filename = registry_entry.get("filename", "")
+            if filename:
+                file_hashes[filename] = content_hash
+
         metadata = {
             "export_info": {
                 "export_path": str(self.export_paths[0]),
@@ -986,6 +993,7 @@ class IMessagePreprocessor(PreprocessorBase):
             },
             "conversations": conversations,
             "orphaned_media": orphaned_media,
+            "file_hashes": file_hashes,
         }
 
         return metadata

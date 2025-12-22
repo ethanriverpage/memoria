@@ -214,9 +214,19 @@ def _get_description_for_file(
 
 def batch_validate_exif(file_paths: List[Optional[str]]) -> Set[str]:
     """Return set of file paths with corrupted EXIF that need rebuilding."""
+    from common.utils import EXIF_BEARING_EXTENSIONS
+
     # Filter out None values
     valid_paths = [p for p in file_paths if p is not None]
     if not valid_paths:
+        return set()
+
+    # Filter to only EXIF-bearing formats (PNG/video/GIF don't have EXIF structure)
+    exif_paths = [
+        p for p in valid_paths
+        if Path(p).suffix.lower() in EXIF_BEARING_EXTENSIONS
+    ]
+    if not exif_paths:
         return set()
 
     corrupted_files = set()
@@ -225,8 +235,8 @@ def batch_validate_exif(file_paths: List[Optional[str]]) -> Set[str]:
     # At ~150 bytes per path, 500 files uses ~75KB (~3.5% of 2MB ARG_MAX)
     chunk_size = 500
 
-    for i in range(0, len(valid_paths), chunk_size):
-        chunk = valid_paths[i : i + chunk_size]
+    for i in range(0, len(exif_paths), chunk_size):
+        chunk = exif_paths[i : i + chunk_size]
         try:
             # Use exiftool to validate files in this chunk
             cmd = ["exiftool", "-validate", "-warning"]

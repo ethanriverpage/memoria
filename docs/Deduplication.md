@@ -442,8 +442,8 @@ The system uses a hybrid matching strategy:
 | Instaloader | Yes |
 | Snapchat Memories | Yes |
 | Snapchat Messages | Yes |
-| Google Chat | No |
-| Google Voice | No |
+| Google Chat | Yes |
+| Google Voice | Yes |
 
 ### Output Structure with Cross-Processor Deduplication
 

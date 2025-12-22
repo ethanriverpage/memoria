@@ -11,7 +11,7 @@ This module provides:
 import shutil
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type
 
 import pytest
 
@@ -203,6 +203,79 @@ def imessage_iphone_export(temp_export_dir) -> Path:
     from tests.fixtures.generators import create_imessage_iphone_export
 
     return create_imessage_iphone_export(temp_export_dir)
+
+
+@pytest.fixture
+def imessage_imazing_export(temp_export_dir) -> Path:
+    """Create a minimal iMessage iMazing export."""
+    from tests.fixtures.generators import create_imessage_imazing_export
+
+    return create_imessage_imazing_export(temp_export_dir)
+
+
+# ============================================================================
+# Comprehensive export fixtures for integration testing
+# ============================================================================
+
+
+@pytest.fixture
+def comprehensive_google_photos_export(temp_export_dir) -> Path:
+    """Create a comprehensive Google Photos export with multiple albums."""
+    from tests.fixtures.complete_exports import create_comprehensive_google_photos_export
+
+    return create_comprehensive_google_photos_export(temp_export_dir)
+
+
+@pytest.fixture
+def comprehensive_discord_export(temp_export_dir) -> Path:
+    """Create a comprehensive Discord export with multiple channels."""
+    from tests.fixtures.complete_exports import create_comprehensive_discord_export
+
+    return create_comprehensive_discord_export(temp_export_dir)
+
+
+@pytest.fixture
+def comprehensive_snapchat_memories_export(temp_export_dir) -> Path:
+    """Create a comprehensive Snapchat Memories export."""
+    from tests.fixtures.complete_exports import create_comprehensive_snapchat_memories_export
+
+    return create_comprehensive_snapchat_memories_export(temp_export_dir)
+
+
+@pytest.fixture
+def comprehensive_instagram_export(temp_export_dir) -> Path:
+    """Create a comprehensive Instagram Messages export."""
+    from tests.fixtures.complete_exports import create_comprehensive_instagram_export
+
+    return create_comprehensive_instagram_export(temp_export_dir)
+
+
+@pytest.fixture
+def all_processor_exports(tmp_path) -> Dict[str, Path]:
+    """Create exports for all 11 processors.
+
+    Returns:
+        Dict mapping processor name to export path
+    """
+    from tests.fixtures.complete_exports import create_all_processor_exports
+
+    return create_all_processor_exports(tmp_path)
+
+
+@pytest.fixture
+def export_with_edge_cases(tmp_path) -> Path:
+    """Create an export with various edge cases."""
+    from tests.fixtures.complete_exports import create_export_with_edge_cases
+
+    return create_export_with_edge_cases(tmp_path, "google_photos")
+
+
+@pytest.fixture
+def large_export(tmp_path) -> Path:
+    """Create a large export for performance testing."""
+    from tests.fixtures.complete_exports import create_large_export
+
+    return create_large_export(tmp_path, num_files=50)
 
 
 # ============================================================================

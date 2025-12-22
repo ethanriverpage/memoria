@@ -784,6 +784,14 @@ class DiscordPreprocessor(PreprocessorBase):
             metadata["export_info"]["unique_files"] = self.stats["unique_files"]
             metadata["export_info"]["duplicate_files"] = self.stats["duplicate_files"]
 
+            # Build file_hashes lookup table for cross-processor dedup optimization
+            file_hashes = {}
+            for content_hash, registry_entry in self._hash_registry.items():
+                filename = registry_entry.get("filename", "")
+                if filename:
+                    file_hashes[filename] = content_hash
+            metadata["file_hashes"] = file_hashes
+
             with open(self.metadata_file, "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
 

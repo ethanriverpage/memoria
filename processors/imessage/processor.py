@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.dedup.catalog import catalog_media_files
+from common.dedup.service import is_file_primary_by_hash
 from common.dedup.description import (
     SourceEntry,
     build_source_line,
@@ -750,14 +751,23 @@ def _process_working_directory(
     logger.info(f"Found {len(media_files)} files in media directory")
 
     # Filter out secondary files based on dedup manifest (using hash-based lookup)
+    # Use cached file_hashes from preprocessing when available to avoid re-hashing
+    file_hashes = metadata.get("file_hashes", {})
     if dedup_manifest:
         original_count = len(media_files)
         filtered_files = []
         for f in media_files:
-            if not IMessageProcessor.should_skip_for_dedup(
-                str(f), dedup_manifest, "iMessage"
-            ):
-                filtered_files.append(f)
+            content_hash = file_hashes.get(f.name)
+            if content_hash:
+                # Use cached hash from preprocessing (avoids re-hashing)
+                if is_file_primary_by_hash(dedup_manifest, content_hash, "iMessage"):
+                    filtered_files.append(f)
+            else:
+                # Fallback for files without cached hash
+                if not IMessageProcessor.should_skip_for_dedup(
+                    str(f), dedup_manifest, "iMessage"
+                ):
+                    filtered_files.append(f)
         media_files = filtered_files
         skipped_count = original_count - len(media_files)
         if skipped_count > 0:

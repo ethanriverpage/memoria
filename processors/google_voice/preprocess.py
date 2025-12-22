@@ -821,6 +821,13 @@ class GoogleVoicePreprocessor(PreprocessorBase):
             # Add export info with username detection source
             detection_result = self.detect_username()
 
+            # Build file_hashes lookup table for cross-processor dedup optimization
+            file_hashes = {}
+            for content_hash, registry_entry in self._hash_registry.items():
+                filename = registry_entry.get("filename", "")
+                if filename:
+                    file_hashes[filename] = content_hash
+
             # Add export info
             output = {
                 "export_info": {
@@ -836,6 +843,7 @@ class GoogleVoicePreprocessor(PreprocessorBase):
                     "total_media_files": self.stats["media_copied"],
                 },
                 "conversations": conversations,
+                "file_hashes": file_hashes,
             }
 
             with open(self.metadata_file, "w", encoding="utf-8") as f:

@@ -9,11 +9,10 @@ For videos, creates MKV files with dual video tracks:
 - Track 0 (default): Video with overlay embedded
 - Track 1: Original video without overlay
 
-Video processing uses a 4-pass approach:
+Video processing uses a 3-pass approach:
 1. Rotate video if needed and remove rotation metadata
 2. Apply overlay to rotated video
-3. Combine both videos into dual-track MKV
-4. Embed metadata into final video
+3. Combine both videos into dual-track MKV and embed metadata
 
 Video rotation metadata (common in portrait videos) is automatically detected and
 the rotation is physically applied to the video. Output files have correct orientation
@@ -201,18 +200,22 @@ def get_video_metadata(video_path: Path) -> Optional[VideoMetadata]:
 
 def _pass1_rotate_video_with_metadata(
     video_path: Path, video_meta: VideoMetadata
-) -> tuple[Path, int, int, Optional[int]]:
+) -> tuple[Path, int, int, Optional[int], bool]:
     """
     PASS 1: Rotate video if needed using pre-fetched metadata.
 
     Uses metadata from get_video_metadata() to avoid redundant FFprobe calls.
+    When no rotation is needed, returns the original path directly to avoid
+    unnecessary I/O copying.
 
     Args:
         video_path: Path to the input video
         video_meta: Pre-fetched VideoMetadata from get_video_metadata()
 
     Returns:
-        Tuple of (rotated_video_path, final_width, final_height, original_bitrate)
+        Tuple of (video_path, final_width, final_height, original_bitrate, is_temp_file)
+        The is_temp_file flag indicates whether the returned path is a temp file
+        that should be cleaned up (True) or the original file (False).
 
     Raises:
         RuntimeError: If video processing fails
@@ -224,11 +227,13 @@ def _pass1_rotate_video_with_metadata(
 
 def _pass1_rotate_video_impl_with_metadata(
     video_path: Path, video_meta: VideoMetadata, use_hardware: bool = True
-) -> tuple[Path, int, int, Optional[int]]:
+) -> tuple[Path, int, int, Optional[int], bool]:
     """
     PASS 1 Implementation using pre-fetched metadata.
 
     Avoids redundant FFprobe calls by using pre-fetched VideoMetadata.
+    When no rotation is needed, returns the original path directly to avoid
+    unnecessary I/O copying.
 
     Args:
         video_path: Path to the input video
@@ -236,7 +241,9 @@ def _pass1_rotate_video_impl_with_metadata(
         use_hardware: Whether to use hardware acceleration
 
     Returns:
-        Tuple of (rotated_video_path, final_width, final_height, original_bitrate)
+        Tuple of (video_path, final_width, final_height, original_bitrate, is_temp_file)
+        The is_temp_file flag indicates whether the returned path is a temp file
+        that should be cleaned up (True) or the original file (False).
 
     Raises:
         RuntimeError: If video processing fails
@@ -273,12 +280,13 @@ def _pass1_rotate_video_impl_with_metadata(
     else:
         target_width, target_height = orig_width, orig_height
 
-    temp_rotated = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-    temp_rotated.close()
-    temp_rotated_path = Path(temp_rotated.name)
-
     if rotation:
         logger.debug(f"[{video_path.name}] Applying {rotation} rotation")
+
+        # Create temp file for rotated output
+        temp_rotated = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+        temp_rotated.close()
+        temp_rotated_path = Path(temp_rotated.name)
 
         # Build rotation filter
         if rotation == 90:
@@ -359,16 +367,29 @@ def _pass1_rotate_video_impl_with_metadata(
                 raise RuntimeError(f"Pass 1 rotation failed: {result.stderr}")
 
             logger.debug(f"[{video_path.name}] Pass 1 complete - video rotated")
+            return (
+                temp_rotated_path,
+                target_width,
+                target_height,
+                original_bitrate,
+                True,
+            )
         else:
             shutil.copy2(video_path, temp_rotated_path)
             logger.debug(
                 f"[{video_path.name}] Pass 1 complete - copied without rotation"
             )
+            return (
+                temp_rotated_path,
+                target_width,
+                target_height,
+                original_bitrate,
+                True,
+            )
     else:
-        shutil.copy2(video_path, temp_rotated_path)
+        # No rotation needed - return original path directly to avoid unnecessary I/O
         logger.debug(f"[{video_path.name}] Pass 1 complete - no rotation needed")
-
-    return temp_rotated_path, target_width, target_height, original_bitrate
+        return video_path, target_width, target_height, original_bitrate, False
 
 
 def _pass2_apply_overlay(
@@ -607,132 +628,6 @@ def _pass2_apply_overlay_impl(
             )
 
 
-def _pass3_combine_tracks(with_overlay_path: Path, original_video_path: Path) -> Path:
-    """
-    PASS 3: Combine videos into dual-track MKV.
-
-    Takes the video with overlay and the original rotated video, and combines
-    them into a single MKV file with two video tracks:
-    - Track 0 (default): Video with overlay embedded
-    - Track 1: Original video without overlay
-
-    Args:
-        with_overlay_path: Path to video with overlay from Pass 2
-        original_video_path: Path to original rotated video from Pass 1
-
-    Returns:
-        Path to dual-track MKV temp file
-
-    Raises:
-        RuntimeError: If video processing fails
-    """
-    logger.debug(
-        f"[{with_overlay_path.name}] PASS 3: Combining tracks into dual-track MKV"
-    )
-
-    temp_dual = tempfile.NamedTemporaryFile(suffix=".mkv", delete=False)
-    temp_dual.close()
-    temp_dual_path = Path(temp_dual.name)
-
-    # Combine both videos into dual-track MKV (-noautorotate for rotation handling)
-    cmd_combine = [
-        "ffmpeg",
-        "-noautorotate",
-        "-i",
-        str(with_overlay_path),  # Input 0: video with overlay
-        "-noautorotate",
-        "-i",
-        str(original_video_path),  # Input 1: original rotated video
-        # Map video from input 0 (with overlay) as stream 0
-        "-map",
-        "0:v",
-        # Map video from input 1 (original) as stream 1
-        "-map",
-        "1:v",
-        # Map audio from input 1 (original has audio)
-        "-map",
-        "1:a?",
-        # Copy all streams without re-encoding
-        "-c:v:0",
-        "copy",
-        "-c:v:1",
-        "copy",
-        "-c:a",
-        "copy",
-        # Don't copy side data (which includes displaymatrix rotation)
-        "-map_metadata",
-        "-1",
-        # Set track titles
-        "-metadata:s:v:0",
-        "title=With Overlay",
-        "-metadata:s:v:1",
-        "title=Original",
-        # Set stream 0 as default, stream 1 as non-default
-        "-disposition:v:0",
-        "default",
-        "-disposition:v:1",
-        "0",
-        "-y",
-        str(temp_dual_path),
-    ]
-
-    logger.debug(
-        f"[{with_overlay_path.name}] Pass 3 ffmpeg command: {' '.join(cmd_combine)}"
-    )
-    result = subprocess.run(
-        cmd_combine,
-        capture_output=True,
-        text=True,
-        timeout=300,
-        check=False,
-        stdin=subprocess.DEVNULL,
-    )
-
-    if result.returncode != 0:
-        temp_dual_path.unlink(missing_ok=True)
-        raise RuntimeError(f"Pass 3 track combination failed: {result.stderr}")
-
-    # Verify output has 2 video streams
-    verify_cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "v",
-        "-show_entries",
-        "stream=index,codec_name,width,height",
-        "-of",
-        "csv=p=0",
-        str(temp_dual_path),
-    ]
-    verify_result = subprocess.run(
-        verify_cmd,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-        stdin=subprocess.DEVNULL,
-    )
-
-    if verify_result.returncode == 0:
-        streams = verify_result.stdout.strip().split("\n")
-        stream_count = len(streams)
-        logger.debug(f"[{with_overlay_path.name}] Created {stream_count} video streams")
-        for idx, stream_info in enumerate(streams):
-            track_label = "With Overlay (default)" if idx == 0 else "Original"
-            logger.debug(
-                f"[{with_overlay_path.name}]   Stream {idx} ({track_label}): {stream_info}"
-            )
-
-        if stream_count != 2:
-            logger.warning(
-                f"[{with_overlay_path.name}] Expected 2 video streams, got {stream_count}"
-            )
-
-    logger.debug(f"[{with_overlay_path.name}] Pass 3 complete")
-    return temp_dual_path
-
-
 def _build_message_description(metadata: Optional[dict], export_username: str) -> str:
     """
     Build rich description for Snapchat Messages.
@@ -775,28 +670,29 @@ def _build_message_description(metadata: Optional[dict], export_username: str) -
     return "\n".join(description_parts)
 
 
-def _pass4_embed_metadata(
-    video_path: Path,
+def _pass3_combine_and_embed(
+    with_overlay_path: Path,
+    original_video_path: Path,
     output_path: Path,
     metadata: Optional[dict] = None,
     export_username: Optional[str] = None,
 ) -> bool:
     """
-    PASS 4: Embed metadata into final video and move to output location.
+    PASS 3: Combine videos into dual-track MKV and embed metadata.
 
-    Takes the final dual-track video from Pass 3 and adds all metadata:
-    - Creation time
-    - GPS coordinates
-    - Source description
-    - Track titles and dispositions
-
-    Then copies to the final output path.
+    Takes the video with overlay and the original rotated video, combines
+    them into a single MKV file with two video tracks, and embeds all metadata
+    in a single FFmpeg invocation:
+    - Track 0 (default): Video with overlay embedded
+    - Track 1: Original video without overlay
+    - Container metadata: creation time, GPS coordinates, source description
 
     Auto-detects whether to use rich message metadata or simple memory metadata
     based on the presence of conversation_type and conversation_id fields.
 
     Args:
-        video_path: Path to the video from Pass 3
+        with_overlay_path: Path to video with overlay from Pass 2
+        original_video_path: Path to original rotated video from Pass 1
         output_path: Final output path for the video
         metadata: Optional dict with 'date', 'latitude', 'longitude' for embedding
                   For messages: also 'conversation_type', 'conversation_id',
@@ -805,23 +701,42 @@ def _pass4_embed_metadata(
 
     Returns:
         True if successful, False otherwise
-    """
-    logger.debug(f"[{video_path.name}] PASS 4: Embedding metadata and finalizing")
 
-    cmd_metadata = [
+    Raises:
+        RuntimeError: If video processing fails
+    """
+    logger.debug(
+        f"[{with_overlay_path.name}] PASS 3: Combining tracks and embedding metadata"
+    )
+
+    # Build FFmpeg command for combining tracks and embedding metadata
+    cmd = [
         "ffmpeg",
+        "-noautorotate",
         "-i",
-        str(video_path),
-        # Explicitly map all streams to preserve both video tracks
+        str(with_overlay_path),  # Input 0: video with overlay
+        "-noautorotate",
+        "-i",
+        str(original_video_path),  # Input 1: original rotated video
+        # Map video from input 0 (with overlay) as stream 0
         "-map",
-        "0:v:0",  # Map first video stream (with overlay)
+        "0:v",
+        # Map video from input 1 (original) as stream 1
         "-map",
-        "0:v:1",  # Map second video stream (original)
+        "1:v",
+        # Map audio from input 1 (original has audio)
         "-map",
-        "0:a?",  # Map audio if present
+        "1:a?",
         # Copy all streams without re-encoding
-        "-c",
+        "-c:v:0",
         "copy",
+        "-c:v:1",
+        "copy",
+        "-c:a",
+        "copy",
+        # Don't copy side data (which includes displaymatrix rotation)
+        "-map_metadata",
+        "-1",
         # Set track titles
         "-metadata:s:v:0",
         "title=With Overlay",
@@ -834,20 +749,19 @@ def _pass4_embed_metadata(
         "0",
     ]
 
-    # Add metadata if provided
+    # Add container-level metadata if provided
     if metadata:
         # Add creation date
         if "date" in metadata:
             # Format: "2021-01-04 23:08:30 UTC" -> "2021-01-04T23:08:30Z"
             date_str = metadata["date"].replace(" UTC", "").replace(" ", "T") + "Z"
-            cmd_metadata.extend(["-metadata", f"creation_time={date_str}"])
-            logger.debug(f"[{video_path.name}] Adding creation time: {date_str}")
+            cmd.extend(["-metadata", f"creation_time={date_str}"])
+            logger.debug(f"[{with_overlay_path.name}] Adding creation time: {date_str}")
 
         # Add GPS coordinates as metadata tags
         if "latitude" in metadata and "longitude" in metadata:
-            # Quote the location values to preserve negative signs
             location_value = f"{metadata['latitude']},{metadata['longitude']}"
-            cmd_metadata.extend(
+            cmd.extend(
                 [
                     "-metadata",
                     f"location={location_value}",
@@ -855,7 +769,7 @@ def _pass4_embed_metadata(
                     f"location-eng={location_value}",
                 ]
             )
-            logger.debug(f"[{video_path.name}] Adding GPS: {location_value}")
+            logger.debug(f"[{with_overlay_path.name}] Adding GPS: {location_value}")
 
     # Add source description metadata
     if export_username:
@@ -869,15 +783,19 @@ def _pass4_embed_metadata(
         if has_conversation_data:
             # Rich format for messages
             description = _build_message_description(metadata, export_username)
-            logger.debug(f"[{video_path.name}] Using rich message description")
+            logger.debug(f"[{with_overlay_path.name}] Using rich message description")
         else:
             # Simple format for memories
             description = f"Source: Snapchat/{export_username}/memories"
-            logger.debug(f"[{video_path.name}] Using simple memories description")
+            logger.debug(
+                f"[{with_overlay_path.name}] Using simple memories description"
+            )
 
-        logger.debug(f"[{video_path.name}] Final description: {repr(description)}")
+        logger.debug(
+            f"[{with_overlay_path.name}] Final description: {repr(description)}"
+        )
 
-        cmd_metadata.extend(
+        cmd.extend(
             [
                 "-metadata",
                 f"comment={description}",
@@ -887,11 +805,11 @@ def _pass4_embed_metadata(
         )
 
     # Add output path and overwrite flag
-    cmd_metadata.extend(["-y", str(output_path)])
+    cmd.extend(["-y", str(output_path)])
 
-    logger.debug(f"[{video_path.name}] Pass 4 ffmpeg command: {' '.join(cmd_metadata)}")
+    logger.debug(f"[{with_overlay_path.name}] Pass 3 ffmpeg command: {' '.join(cmd)}")
     result = subprocess.run(
-        cmd_metadata,
+        cmd,
         capture_output=True,
         text=True,
         timeout=300,
@@ -901,13 +819,15 @@ def _pass4_embed_metadata(
 
     if result.returncode != 0:
         logger.error(
-            f"[{video_path.name}] Pass 4 metadata embedding failed: {result.stderr}"
+            f"[{with_overlay_path.name}] Pass 3 combine and embed failed: {result.stderr}"
         )
         return False
 
-    # Verify final output exists and has correct properties
+    # Verify final output exists
     if not output_path.exists():
-        logger.error(f"[{video_path.name}] Pass 4 failed - output file not created")
+        logger.error(
+            f"[{with_overlay_path.name}] Pass 3 failed - output file not created"
+        )
         return False
 
     # Verify output has 2 video streams
@@ -918,7 +838,7 @@ def _pass4_embed_metadata(
         "-select_streams",
         "v",
         "-show_entries",
-        "stream=index,width,height,codec_name",
+        "stream=index,codec_name,width,height",
         "-of",
         "csv=p=0",
         str(output_path),
@@ -936,15 +856,22 @@ def _pass4_embed_metadata(
         streams = verify_result.stdout.strip().split("\n")
         stream_count = len(streams)
         logger.debug(
-            f"[{video_path.name}] Final output has {stream_count} video streams"
+            f"[{with_overlay_path.name}] Final output has {stream_count} video streams"
         )
         for idx, stream_info in enumerate(streams):
             track_label = "With Overlay (default)" if idx == 0 else "Original"
             logger.debug(
-                f"[{video_path.name}]   Stream {idx} ({track_label}): {stream_info}"
+                f"[{with_overlay_path.name}]   Stream {idx} ({track_label}): {stream_info}"
             )
 
-    logger.debug(f"[{video_path.name}] Pass 4 complete - saved to {output_path.name}")
+        if stream_count != 2:
+            logger.warning(
+                f"[{with_overlay_path.name}] Expected 2 video streams, got {stream_count}"
+            )
+
+    logger.debug(
+        f"[{with_overlay_path.name}] Pass 3 complete - saved to {output_path.name}"
+    )
     return True
 
 
@@ -1035,8 +962,7 @@ def create_video_with_overlay(
 
     Pass 1: Rotate video if needed (apply transpose, remove rotation metadata)
     Pass 2: Apply overlay to rotated video
-    Pass 3: Combine both videos into dual-track MKV
-    Pass 4: Embed metadata into final video
+    Pass 3: Combine both videos into dual-track MKV and embed metadata
 
     - Track 0 (default): Video with overlay embedded
     - Track 1: Original video without overlay
@@ -1072,10 +998,13 @@ def create_video_with_overlay(
 
         # PASS 1: Rotate video if needed (pass pre-fetched metadata)
         try:
-            rotated_video_path, final_width, final_height, original_bitrate = (
+            rotated_video_path, final_width, final_height, original_bitrate, is_temp = (
                 _pass1_rotate_video_with_metadata(video_path, video_meta)
             )
-            temp_files.append(rotated_video_path)
+            # Only add to temp_files if it's a temp file (rotation was applied)
+            # When no rotation needed, original path is returned and must not be deleted
+            if is_temp:
+                temp_files.append(rotated_video_path)
         except Exception as e:
             logger.error(f"[{video_path.name}] Pass 1 failed: {e}")
             return False
@@ -1094,25 +1023,19 @@ def create_video_with_overlay(
             logger.error(f"[{video_path.name}] Pass 2 failed: {e}")
             return False
 
-        # PASS 3: Combine both videos into dual-track MKV
+        # PASS 3: Combine both videos into dual-track MKV and embed metadata
         try:
-            dual_track_path = _pass3_combine_tracks(
-                with_overlay_path, rotated_video_path
-            )
-            temp_files.append(dual_track_path)
-        except Exception as e:
-            logger.error(f"[{video_path.name}] Pass 3 failed: {e}")
-            return False
-
-        # PASS 4: Embed metadata and move to final output
-        try:
-            success = _pass4_embed_metadata(
-                dual_track_path, output_path, metadata, export_username
+            success = _pass3_combine_and_embed(
+                with_overlay_path,
+                rotated_video_path,
+                output_path,
+                metadata,
+                export_username,
             )
             if not success:
                 return False
         except Exception as e:
-            logger.error(f"[{video_path.name}] Pass 4 failed: {e}")
+            logger.error(f"[{video_path.name}] Pass 3 failed: {e}")
             return False
 
         logger.debug(f"[{video_path.name}] Multi-pass processing complete")

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.dedup.catalog import catalog_media_files
+from common.dedup.service import is_file_primary_by_hash
 from common.dedup.description import (
     SourceEntry,
     build_description,
@@ -449,6 +450,7 @@ def _process_working_directory(
 
     export_info = metadata_json.get("export_info", {})
     conversations = metadata_json.get("conversations", [])
+    file_hashes = metadata_json.get("file_hashes", {})
 
     # Count total messages with media
     total_media_files = sum(
@@ -491,15 +493,25 @@ def _process_working_directory(
             media_files = message.get("media_files", [])
 
             for media_file in media_files:
-                # Build full path for dedup check
-                full_path = os.path.join(media_dir, media_file)
-
                 # Skip secondary files based on dedup manifest (using hash-based lookup)
-                if InstagramMessagesProcessor.should_skip_for_dedup(
-                    full_path, dedup_manifest, "Instagram Messages"
-                ):
-                    skipped_dedup += 1
-                    continue
+                # Use cached file_hashes from preprocessing when available
+                content_hash = file_hashes.get(media_file)
+                if dedup_manifest:
+                    if content_hash:
+                        # Use cached hash from preprocessing (avoids re-hashing)
+                        if not is_file_primary_by_hash(
+                            dedup_manifest, content_hash, "Instagram Messages"
+                        ):
+                            skipped_dedup += 1
+                            continue
+                    else:
+                        # Fallback for files without cached hash
+                        full_path = os.path.join(media_dir, media_file)
+                        if InstagramMessagesProcessor.should_skip_for_dedup(
+                            full_path, dedup_manifest, "Instagram Messages"
+                        ):
+                            skipped_dedup += 1
+                            continue
 
                 # Get file extension
                 file_ext = os.path.splitext(media_file)[1].lower()

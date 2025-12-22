@@ -50,6 +50,10 @@ ALL_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 LIVE_PHOTO_IMAGE_EXTENSIONS = {".heic", ".heif", ".jpg", ".jpeg"}
 LIVE_PHOTO_VIDEO_EXTENSIONS = {".mov"}
 
+# Extensions that support EXIF structure validation/rebuild
+# Note: PNGs use tEXt chunks, videos use container atoms - not EXIF
+EXIF_BEARING_EXTENSIONS = {".jpg", ".jpeg", ".heic", ".heif", ".tif", ".tiff"}
+
 
 def get_media_type(file_path) -> Optional[str]:
     """Return "image", "video", or None based on file extension."""

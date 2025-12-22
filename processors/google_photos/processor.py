@@ -16,7 +16,7 @@ from common.dedup.description import (
 )
 from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.files.utils import batch_correct_extensions, copy_file
-from common.dedup.service import save_dedup_metadata
+from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
 from common.dedup.hashing import (
     is_live_photo_pair,
     LIVE_PHOTO_IMAGE_EXTENSIONS,
@@ -476,12 +476,23 @@ def _process_working_directory(
             media_file = media_data.get("filename")
             if media_file:
                 full_path = os.path.join(media_dir, media_file)
-                if GooglePhotosProcessor.should_skip_for_dedup(
-                    full_path, dedup_manifest, "Google Photos"
-                ):
-                    skipped_secondary_files.append(full_path)
+                content_hash = media_data.get("content_hash")
+                if content_hash:
+                    # Use cached hash from preprocessing (avoids re-hashing)
+                    if is_file_primary_by_hash(
+                        dedup_manifest, content_hash, "Google Photos"
+                    ):
+                        filtered_media_files.append(media_data)
+                    else:
+                        skipped_secondary_files.append(full_path)
                 else:
-                    filtered_media_files.append(media_data)
+                    # Fallback for metadata without cached hash
+                    if GooglePhotosProcessor.should_skip_for_dedup(
+                        full_path, dedup_manifest, "Google Photos"
+                    ):
+                        skipped_secondary_files.append(full_path)
+                    else:
+                        filtered_media_files.append(media_data)
         media_files = filtered_media_files
         skipped_count = original_count - len(media_files)
         log.skipped_secondary(skipped_count)

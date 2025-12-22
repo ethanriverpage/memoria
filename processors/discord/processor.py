@@ -19,7 +19,7 @@ from common.dedup.description import (
     build_description,
     PLATFORM_DISCORD,
 )
-from common.dedup.service import save_dedup_metadata
+from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
 from common.files.utils import copy_file
 from common.dependency_checker import (
     check_exiftool,
@@ -501,17 +501,28 @@ def _process_working_directory(
     log.found_files(len(media_files), "media")
 
     # Filter out secondary files based on dedup manifest (using hash-based lookup)
+    # Use cached file_hashes from preprocessing when available to avoid re-hashing
+    file_hashes = metadata.get("file_hashes", {})
     skipped_secondary_files = []
     if dedup_manifest:
         original_count = len(media_files)
         filtered_files = []
         for f in media_files:
-            if DiscordProcessor.should_skip_for_dedup(
-                str(f), dedup_manifest, "Discord"
-            ):
-                skipped_secondary_files.append(str(f))
+            content_hash = file_hashes.get(f.name)
+            if content_hash:
+                # Use cached hash from preprocessing (avoids re-hashing)
+                if is_file_primary_by_hash(dedup_manifest, content_hash, "Discord"):
+                    filtered_files.append(f)
+                else:
+                    skipped_secondary_files.append(str(f))
             else:
-                filtered_files.append(f)
+                # Fallback for files without cached hash
+                if DiscordProcessor.should_skip_for_dedup(
+                    str(f), dedup_manifest, "Discord"
+                ):
+                    skipped_secondary_files.append(str(f))
+                else:
+                    filtered_files.append(f)
         media_files = filtered_files
         skipped_count = original_count - len(media_files)
         log.skipped_secondary(skipped_count)
