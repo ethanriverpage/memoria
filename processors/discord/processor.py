@@ -9,7 +9,6 @@ and metadata embedding for media files.
 import json
 import logging
 import re
-import shutil
 from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -20,18 +19,13 @@ from common.dedup.description import (
     build_description,
     PLATFORM_DISCORD,
 )
-from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
-from common.files.utils import batch_correct_extensions
-from common.dedup.hashing import compute_content_hash
+from common.dedup.service import save_dedup_metadata
+from common.files.utils import copy_file
 from common.dependency_checker import (
     check_exiftool,
     print_exiftool_error,
 )
 from common.media.exiftool import (
-    batch_read_existing_metadata,
-    batch_rebuild_exif,
-    batch_validate_exif,
-    batch_write_metadata_requests,
     DEFAULT_PREAMBLE,
     DescriptionWriteSpec,
     MetadataWriteRequest,
@@ -41,7 +35,6 @@ from common.processing import (
     get_preprocessing_cache_path,
     is_preprocessing_cache_valid,
     print_processing_summary,
-    temp_processing_directory,
 )
 from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import (
@@ -183,7 +176,8 @@ class DiscordProcessor(ProcessorBase):
                         output_dir=cache_path,
                         workers=workers,
                     )
-                    preprocessor.process()
+                    if not preprocessor.run():
+                        return
 
                     working_dir = cache_path
             else:
@@ -247,11 +241,6 @@ class DiscordProcessor(ProcessorBase):
         except Exception as e:
             logger.exception(f"Error in DiscordProcessor: {e}")
             return False
-
-
-def get_processor():
-    """Return processor class for auto-discovery."""
-    return DiscordProcessor
 
 
 def _build_description(message_info: dict, export_username: str) -> str:
@@ -337,12 +326,6 @@ def _build_metadata_requests(
     return requests
 
 
-def load_metadata(metadata_path: Path) -> dict:
-    """Load and parse metadata.json."""
-    with open(metadata_path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
 def build_filename_index(metadata: dict) -> Dict[str, dict]:
     """Build index mapping media filename to message metadata."""
     filename_index = {}
@@ -400,7 +383,7 @@ def _process_file_worker(args_tuple):
         output_path = output_dir / output_filename
 
         # Copy file to output
-        shutil.copy2(media_path, output_path)
+        copy_file(media_path, output_path)
 
         # Update filesystem timestamps - Discord uses "YYYY-MM-DD HH:MM:SS UTC" format
         timestamp_str = message_info["message"].get("timestamp", "")
@@ -455,7 +438,9 @@ def process_logic(
             log.logger.info("Running preprocessing (downloading attachments)...")
 
             # Use context manager for temp directory with automatic cleanup
-            with temp_processing_directory(temp_dir, "discord") as temp_dir_path:
+            with DiscordPreprocessor.temp_output_dir(
+                temp_dir, "discord"
+            ) as temp_dir_path:
                 log.preprocessing_to(str(temp_dir_path))
 
                 # Run preprocessing
@@ -466,7 +451,8 @@ def process_logic(
                     workers=workers,
                     final_output_dir=output_path,
                 )
-                preprocessor.process()
+                if not preprocessor.run():
+                    return
 
                 log.preprocessing_done(str(temp_dir_path))
                 _process_working_directory(
@@ -498,7 +484,7 @@ def _process_working_directory(
 
     # Load metadata
     log.loading_metadata(str(metadata_file))
-    metadata = load_metadata(metadata_file)
+    metadata = DiscordProcessor.load_metadata(metadata_file)
 
     export_username = metadata.get("export_info", {}).get("export_username", "unknown")
     log.export_username(export_username)
@@ -520,11 +506,12 @@ def _process_working_directory(
         original_count = len(media_files)
         filtered_files = []
         for f in media_files:
-            content_hash = compute_content_hash(f)
-            if is_file_primary_by_hash(dedup_manifest, content_hash, "Discord"):
-                filtered_files.append(f)
-            else:
+            if DiscordProcessor.should_skip_for_dedup(
+                str(f), dedup_manifest, "Discord"
+            ):
                 skipped_secondary_files.append(str(f))
+            else:
+                filtered_files.append(f)
         media_files = filtered_files
         skipped_count = original_count - len(media_files)
         log.skipped_secondary(skipped_count)
@@ -614,29 +601,17 @@ def _process_working_directory(
     log.copied_files(success_count, failed_count)
 
     # Correct file extensions based on actual content
-    if file_paths:
-        corrections = batch_correct_extensions([Path(p) for p in file_paths])
-        if corrections:
-            # Update file_paths and file_info with corrected paths
-            file_paths = [corrections.get(p, p) for p in file_paths]
-            file_info = [(corrections.get(fp, fp), mi, eu) for fp, mi, eu in file_info]
+    file_paths, file_info = DiscordProcessor.correct_extensions_and_update_info(
+        file_paths, file_info, path_index=0
+    )
 
     # Batch process EXIF operations
     exif_rebuilt_count = 0
     if file_paths:
         log.exif_batch_start()
-
-        # Batch validate and rebuild
-        corrupted_files = batch_validate_exif(file_paths)
-        if corrupted_files:
-            log.exif_rebuilding(len(corrupted_files))
-            batch_rebuild_exif(list(corrupted_files))
-            exif_rebuilt_count = len(corrupted_files)
-
-        # Batch read and write metadata
-        existing_metadata_map = batch_read_existing_metadata(file_paths)
-        requests = _build_metadata_requests(file_info)
-        batch_write_metadata_requests(requests, existing_metadata_map)
+        exif_rebuilt_count = DiscordProcessor.batch_process_exif(
+            file_paths, file_info, _build_metadata_requests
+        )
 
     # Handle unmatched files
     if unmatched_files:
@@ -646,7 +621,7 @@ def _process_working_directory(
 
         for media_file in unmatched_files:
             try:
-                shutil.copy2(media_file, failed_matching_dir / media_file.name)
+                copy_file(media_file, failed_matching_dir / media_file.name)
             except Exception as e:
                 log.copy_error(media_file.name, e)
 
@@ -676,3 +651,8 @@ def _process_working_directory(
             "Unmatched files saved to: %s",
             (output_dir / "issues" / "failed-matching" / "media").absolute(),
         )
+
+
+def get_processor():
+    """Return processor class for auto-discovery."""
+    return DiscordProcessor

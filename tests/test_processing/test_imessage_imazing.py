@@ -146,7 +146,7 @@ class TestImazingOrphanDetection:
             export_path=imazing_export_dir,
             output_dir=imazing_output_dir,
         )
-        preprocessor.process()
+        preprocessor.run()
 
         # Check orphaned media was tracked
         orphaned_paths = [
@@ -192,7 +192,7 @@ class TestImazingOrphanDetection:
             export_path=imazing_export_dir,
             output_dir=imazing_output_dir,
         )
-        preprocessor.process()
+        preprocessor.run()
 
         # Check orphaned metadata was tracked
         assert len(preprocessor.failure_tracker.orphaned_metadata) >= 1
@@ -231,7 +231,7 @@ class TestImazingOrphanDetection:
             export_path=imazing_export_dir,
             output_dir=imazing_output_dir,
         )
-        preprocessor.process()
+        preprocessor.run()
 
         # No orphans should be tracked
         assert len(preprocessor.failure_tracker.orphaned_media) == 0

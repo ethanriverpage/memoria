@@ -10,29 +10,19 @@ Organizes Snapchat export files and creates cleaned metadata:
 
 import json
 import logging
-import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 import re
-import sys
-import argparse
 
 from common.detection import DetectionResult
+from common.files.utils import copy_file
 from common.preprocess.context_mergers import merge_snapchat_context
 from common.processing import print_preprocessing_stats
 from processors.preprocess_base import PreprocessorBase, CopyTask
 
 # Set up logging
 logger = logging.getLogger(__name__)
-
-
-class PreprocessingError(Exception):
-    """Exception raised when preprocessing fails.
-
-    This replaces sys.exit() calls to allow proper error handling
-    when the preprocessor is called from library code (e.g., parallel cataloging).
-    """
 
 
 class SnapchatPreprocessor(PreprocessorBase):
@@ -128,8 +118,12 @@ class SnapchatPreprocessor(PreprocessorBase):
 
         return True
 
-    def load_chat_history(self) -> Dict:
-        """Load and parse chat_history.json"""
+    def load_chat_history(self) -> Optional[Dict]:
+        """Load and parse chat_history.json.
+
+        Returns:
+            Chat history dict, or None if loading fails
+        """
         try:
             with open(self.chat_history_file, "r", encoding="utf-8") as f:
                 chat_history = json.load(f)
@@ -138,10 +132,10 @@ class SnapchatPreprocessor(PreprocessorBase):
             return chat_history
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse chat_history.json: {e}")
-            raise PreprocessingError(f"Failed to parse chat_history.json: {e}") from e
+            return None
         except OSError as e:
             logger.error(f"Error loading chat_history.json: {e}")
-            raise PreprocessingError(f"Error loading chat_history.json: {e}") from e
+            return None
 
     def extract_username(self, chat_history: Dict) -> str:
         """Extract exporter's username from directory name or chat history"""
@@ -805,7 +799,7 @@ class SnapchatPreprocessor(PreprocessorBase):
 
             destination = self.overlays_dir / filename
             try:
-                shutil.copy2(str(source), str(destination))
+                copy_file(source, destination)
                 file_info["new_path"] = str(destination)
             except Exception as e:
                 self.log_failure(
@@ -974,7 +968,7 @@ class SnapchatPreprocessor(PreprocessorBase):
                 dest = media_subdir / filename
                 if source.exists():
                     try:
-                        shutil.copy2(source, dest)
+                        copy_file(source, dest)
                     except Exception as e:
                         logger.warning("Failed to copy %s: %s", filename, e)
                 else:
@@ -987,7 +981,7 @@ class SnapchatPreprocessor(PreprocessorBase):
                 dest = overlay_subdir / filename
                 if source.exists():
                     try:
-                        shutil.copy2(source, dest)
+                        copy_file(source, dest)
                     except Exception as e:
                         logger.warning("Failed to copy %s: %s", filename, e)
                 else:
@@ -1017,7 +1011,7 @@ class SnapchatPreprocessor(PreprocessorBase):
             logger.info(f"SUCCESS: Saved metadata to {self.metadata_file}")
         except Exception as e:
             logger.error(f"Failed to save metadata: {e}")
-            raise PreprocessingError(f"Failed to save metadata: {e}") from e
+            raise
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -1035,18 +1029,19 @@ class SnapchatPreprocessor(PreprocessorBase):
         }
         print_preprocessing_stats("Preprocessing Stats", stats)
 
-    def process(self) -> bool:
-        """Main processing pipeline"""
-        logger.info("Starting Snapchat Export Preprocessing")
-        logger.info("Export path: %s", self.export_path)
-        logger.info("Output path: %s", self.output_dir)
+    def process_export(self) -> bool:
+        """Platform-specific preprocessing logic.
 
-        # Validate export structure
-        if not self.validate_export():
-            raise PreprocessingError(f"Invalid export structure: {self.export_path}")
+        Processes Snapchat chat media, matching files to messages
+        and performing deduplication.
 
+        Returns:
+            True if processing succeeded, False otherwise
+        """
         # Load chat history
         chat_history = self.load_chat_history()
+        if chat_history is None:
+            return False
 
         # Build file catalog
         logger.info("Scanning chat_media directory...")
@@ -1085,73 +1080,4 @@ class SnapchatPreprocessor(PreprocessorBase):
         # Save metadata
         self.save_metadata(metadata)
 
-        # Save log file
-        self.save_log()
-
-        # Handle failures (copy orphaned files, generate report)
-        self.failure_tracker.handle_failures(self.final_output_dir)
-
-        # Print statistics
-        self.print_statistics()
-
-        logger.info("Preprocessing complete!")
         return True
-
-
-def main():
-    """Main entry point"""
-    parser = argparse.ArgumentParser(
-        description="Preprocess Snapchat export: organize media and create cleaned metadata",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Process in-place (creates media/ and overlays/ in export directory)
-  python preprocess_files.py snapchat-username-2025-10-17
-
-  # Process to a separate output directory
-  python preprocess_files.py snapchat-username-2025-10-17 -o snapchat-username-2025-10-17_media/
-  
-  # Process with custom number of workers
-  python preprocess_files.py snapchat-username-2025-10-17 --workers 8
-        """,
-    )
-
-    parser.add_argument(
-        "export_directory",
-        type=str,
-        help="Path to Snapchat export directory (contains chat_media/ and json/)",
-    )
-
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=str,
-        required=True,
-        help="Output directory for preprocessed files (required to prevent writing to exports)",
-    )
-
-    parser.add_argument(
-        "--workers",
-        "-w",
-        type=int,
-        default=None,
-        help="Number of parallel workers (default: CPU count - 1)",
-    )
-
-    args = parser.parse_args()
-
-    export_path = Path(args.export_directory)
-    output_path = Path(args.output) if args.output else None
-
-    try:
-        preprocessor = SnapchatPreprocessor(
-            export_path, output_path, workers=args.workers
-        )
-        preprocessor.process()
-    except PreprocessingError as e:
-        logger.error("%s", e)
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()

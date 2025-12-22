@@ -17,9 +17,8 @@ from common.dedup.description import (
     PLATFORM_SNAPCHAT,
     SERVICE_MESSAGES,
 )
-from common.dedup.service import is_file_primary_by_hash
-from common.files.utils import batch_correct_extensions
-from common.dedup.hashing import compute_content_hash
+from common.files.utils import copy_file
+from common.utils import ALL_MEDIA_EXTENSIONS
 from common.dependency_checker import (
     check_exiftool,
     check_ffmpeg,
@@ -29,10 +28,6 @@ from common.dependency_checker import (
     print_pillow_error,
 )
 from common.media.exiftool import (
-    batch_validate_exif,
-    batch_rebuild_exif,
-    batch_read_existing_metadata,
-    batch_write_metadata_requests,
     DEFAULT_PREAMBLE,
     DescriptionWriteSpec,
     MetadataWriteRequest,
@@ -43,10 +38,7 @@ from common.media.overlay import (
     create_video_with_overlay,
 )
 from common.processing import (
-    get_preprocessing_cache_path,
-    is_preprocessing_cache_valid,
     print_processing_summary,
-    temp_processing_directory,
 )
 from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import (
@@ -60,10 +52,7 @@ from common.utils import (
 )
 from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
-from processors.snapchat_messages.preprocess import (
-    SnapchatPreprocessor,
-    PreprocessingError,
-)
+from processors.snapchat_messages.preprocess import SnapchatPreprocessor
 
 logger = logging.getLogger(__name__)
 
@@ -168,98 +157,63 @@ class SnapchatMessagesProcessor(ProcessorBase):
 
     @staticmethod
     def build_catalog(input_dir: str, **kwargs):
-        """Build catalog of files with hashes and metadata (generator)."""
+        """Build catalog of files with hashes and metadata (generator).
+
+        Scans media files directly from the export without preprocessing.
+        For raw exports, scans chat_media/. For preprocessed exports, scans media/.
+        """
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
 
-        # Determine the working directory for cataloging
-        # Check for preprocessed export first (has media/ directory)
-        working_dir = None
-        media_dir = input_path / "media"
+        # Find media files - check preprocessed first, then raw export
+        media_files = []
+        catalog_input_path = input_path
 
+        # Check for preprocessed export (has media/ directory)
+        media_dir = input_path / "media"
         if media_dir.exists():
-            # Already preprocessed at root level
-            working_dir = input_path
+            media_files = [
+                f for f in media_dir.iterdir() if f.is_file() and get_media_type(f)
+            ]
         else:
             # Check for consolidated structure with messages/ subdirectory
             messages_subdir = input_path / "messages"
             if messages_subdir.exists():
                 media_subdir = messages_subdir / "media"
                 if media_subdir.exists():
-                    # Already preprocessed in messages/ subdirectory
-                    working_dir = messages_subdir
+                    catalog_input_path = messages_subdir
+                    media_files = [
+                        f
+                        for f in media_subdir.iterdir()
+                        if f.is_file() and get_media_type(f)
+                    ]
 
-        # If no preprocessed directory found, check for raw export and auto-preprocess
-        if working_dir is None:
-            # Check for raw export structure (json/chat_history.json)
-            raw_export_dir = None
-            json_dir = input_path / "json"
-            if json_dir.exists() and (json_dir / "chat_history.json").exists():
-                raw_export_dir = input_path
-            else:
+        # If no preprocessed directory, check for raw export (chat_media/)
+        if not media_files:
+            # Check for raw export structure
+            chat_media_dir = input_path / "chat_media"
+            if not chat_media_dir.exists():
                 # Check in messages/ subdirectory
                 messages_subdir = input_path / "messages"
                 if messages_subdir.exists():
-                    json_subdir = messages_subdir / "json"
-                    if (
-                        json_subdir.exists()
-                        and (json_subdir / "chat_history.json").exists()
-                    ):
-                        raw_export_dir = messages_subdir
+                    chat_media_dir = messages_subdir / "chat_media"
+                    if chat_media_dir.exists():
+                        catalog_input_path = messages_subdir
 
-            if raw_export_dir is None:
-                logger.warning(f"No media directory found in: {input_path}")
-                return
+            if chat_media_dir.exists():
+                media_files = [
+                    f
+                    for f in chat_media_dir.iterdir()
+                    if f.is_file() and get_media_type(f)
+                ]
 
-            # Check for existing preprocessing cache
-            cache_path = get_preprocessing_cache_path(input_path, "Snapchat Messages")
-
-            if is_preprocessing_cache_valid(cache_path):
-                logger.info(f"Using preprocessing cache: {cache_path}")
-                working_dir = cache_path
-            else:
-                # Auto-preprocess to cache directory
-                logger.info(
-                    f"Raw export detected, preprocessing to cache: {cache_path}"
-                )
-                cache_path.mkdir(parents=True, exist_ok=True)
-
-                # Extract username from directory name for consolidated exports
-                username_override = None
-                if raw_export_dir != input_path:
-                    username_override = extract_username_from_export_dir(
-                        str(input_path), "snapchat"
-                    )
-
-                preprocessor = SnapchatPreprocessor(
-                    export_path=raw_export_dir,
-                    output_dir=cache_path,
-                    workers=workers,
-                    username_override=username_override,
-                )
-                try:
-                    preprocessor.process()
-                except PreprocessingError as e:
-                    logger.error(f"Preprocessing failed: {e}")
-                    return
-
-                working_dir = cache_path
-
-        # Now catalog from the working directory
-        media_dir = working_dir / "media"
-        if not media_dir.exists():
-            logger.warning(
-                f"No media directory found after preprocessing: {working_dir}"
-            )
+        if not media_files:
+            logger.warning(f"No media files found in: {input_path}")
             return
-
-        media_files = [
-            f for f in media_dir.iterdir() if f.is_file() and get_media_type(f)
-        ]
 
         yield from catalog_media_files(
             processor_name="Snapchat Messages",
-            input_path=working_dir,
+            input_path=catalog_input_path,
             media_files=media_files,
             workers=workers,
         )
@@ -329,11 +283,6 @@ class SnapchatMessagesProcessor(ProcessorBase):
         except Exception as e:
             logger.error(f"Error in SnapchatMessagesProcessor: {e}")
             return False
-
-
-def get_processor():
-    """Return processor class for auto-discovery."""
-    return SnapchatMessagesProcessor
 
 
 def _build_description(message: dict, export_username: str) -> str:
@@ -460,12 +409,6 @@ def _build_metadata_requests(
         )
 
     return requests
-
-
-def load_metadata(metadata_path: Path) -> dict:
-    """Load and parse metadata.json."""
-    with open(metadata_path, "r", encoding="utf-8") as f:
-        return json.load(f)
 
 
 def build_media_index(metadata: dict) -> dict:
@@ -665,7 +608,7 @@ def _create_file_worker(args_tuple):
                     # Fallback: copy original video with original extension
                     fallback_filename = output_filename.replace(".mkv", file_ext)
                     fallback_path = output_dir / fallback_filename
-                    shutil.copy2(media_path, fallback_path)
+                    copy_file(media_path, fallback_path)
                     _update_snapchat_timestamps(fallback_path, message)
                     # Fallback file needs batch EXIF processing
                     return (True, str(fallback_path), False, message, export_username)
@@ -682,17 +625,17 @@ def _create_file_worker(args_tuple):
                     return (True, str(output_path), False, message, export_username)
                 else:
                     # Fallback: copy original
-                    shutil.copy2(media_path, output_path)
+                    copy_file(media_path, output_path)
                     _update_snapchat_timestamps(output_path, message)
                     return (True, str(output_path), False, message, export_username)
             else:
                 # Unknown file type with overlay - just copy
-                shutil.copy2(media_path, output_path)
+                copy_file(media_path, output_path)
                 _update_snapchat_timestamps(output_path, message)
                 return (True, str(output_path), False, message, export_username)
         else:
             # No overlay - just copy
-            shutil.copy2(media_path, output_path)
+            copy_file(media_path, output_path)
             _update_snapchat_timestamps(output_path, message)
             # File needs batch EXIF processing
             return (True, str(output_path), False, message, export_username)
@@ -746,43 +689,31 @@ def process_logic(
             input_dir, output_dir, workers, log_filename, dedup_manifest
         )
     else:
-        # Check for preprocessing cache from catalog phase
-        # Get the original input path for cache lookup (before messages/ subdir extraction)
-        original_input_path = (
-            input_dir.parent if input_dir.name == "messages" else input_dir
-        )
-        cache_path = get_preprocessing_cache_path(
-            original_input_path, "Snapchat Messages"
-        )
+        logger.info(f"Input directory is raw export: {input_dir}")
+        logger.info("Running preprocessing...")
 
-        if is_preprocessing_cache_valid(cache_path):
-            logger.info(f"Using preprocessing cache from catalog phase: {cache_path}")
-            _process_snapchat_working_directory(
-                cache_path, output_dir, workers, log_filename, dedup_manifest
+        # Use context manager for temp directory with automatic cleanup
+        with SnapchatPreprocessor.temp_output_dir(
+            temp_dir, "snap_msgs"
+        ) as temp_dir_path:
+            logger.info(f"Preprocessing to: {temp_dir_path}")
+
+            # Run preprocessing with final output directory for failure tracking
+            # Note: output_dir already has /messages appended by the caller (process method)
+            preprocessor = SnapchatPreprocessor(
+                export_path=Path(input_dir),
+                output_dir=temp_dir_path,
+                workers=workers,
+                final_output_dir=output_dir,
+                username_override=username_override,
             )
-        else:
-            logger.info(f"Input directory is raw export: {input_dir}")
-            logger.info("Running preprocessing...")
+            if not preprocessor.run():
+                return False
 
-            # Use context manager for temp directory with automatic cleanup
-            with temp_processing_directory(temp_dir, "snap_msgs") as temp_dir_path:
-                logger.info(f"Preprocessing to: {temp_dir_path}")
-
-                # Run preprocessing with final output directory for failure tracking
-                # Note: output_dir already has /messages appended by the caller (process method)
-                preprocessor = SnapchatPreprocessor(
-                    export_path=Path(input_dir),
-                    output_dir=temp_dir_path,
-                    workers=workers,
-                    final_output_dir=output_dir,
-                    username_override=username_override,
-                )
-                preprocessor.process()
-
-                logger.info(f"Preprocessing complete. Using: {temp_dir_path}")
-                _process_snapchat_working_directory(
-                    temp_dir_path, output_dir, workers, log_filename, dedup_manifest
-                )
+            logger.info(f"Preprocessing complete. Using: {temp_dir_path}")
+            _process_snapchat_working_directory(
+                temp_dir_path, output_dir, workers, log_filename, dedup_manifest
+            )
 
 
 def _process_snapchat_working_directory(
@@ -813,7 +744,7 @@ def _process_snapchat_working_directory(
 
     # Load metadata
     logger.info(f"Loading metadata from {metadata_file}...")
-    metadata = load_metadata(metadata_file)
+    metadata = SnapchatMessagesProcessor.load_metadata(metadata_file)
 
     export_username = metadata.get("export_info", {}).get("export_username", "unknown")
     logger.info(f"Export username: {export_username}")
@@ -828,8 +759,8 @@ def _process_snapchat_working_directory(
     # Scan media directory
     logger.info(f"Scanning media directory: {media_dir}")
     media_files = []
-    for ext in ["*.jpg", "*.jpeg", "*.png", "*.mp4", "*.mov", "*.webp"]:
-        media_files.extend(media_dir.glob(ext))
+    for ext in ALL_MEDIA_EXTENSIONS:
+        media_files.extend(media_dir.glob(f"*{ext}"))
 
     logger.info(f"Found {len(media_files)} media files")
 
@@ -838,9 +769,8 @@ def _process_snapchat_working_directory(
         original_count = len(media_files)
         filtered_files = []
         for f in media_files:
-            content_hash = compute_content_hash(f)
-            if is_file_primary_by_hash(
-                dedup_manifest, content_hash, "Snapchat Messages"
+            if not SnapchatMessagesProcessor.should_skip_for_dedup(
+                str(f), dedup_manifest, "Snapchat Messages"
             ):
                 filtered_files.append(f)
         media_files = filtered_files
@@ -979,33 +909,17 @@ def _process_snapchat_working_directory(
     )
 
     # Phase 3: Correct file extensions based on actual content
-    if file_paths:
-        corrections = batch_correct_extensions([Path(p) for p in file_paths])
-        if corrections:
-            # Update file_paths and file_info with corrected paths
-            file_paths = [corrections.get(p, p) for p in file_paths]
-            file_info = [
-                (corrections.get(fp, fp), msg, eu) for fp, msg, eu in file_info
-            ]
+    file_paths, file_info = SnapchatMessagesProcessor.correct_extensions_and_update_info(
+        file_paths, file_info, path_index=0
+    )
 
     # Phase 4: Batch process EXIF operations on non-MKV files
     exif_rebuilt_count = 0
     if file_paths:
         logger.info("Batch processing EXIF metadata...")
-
-        # Batch validate and rebuild
-        corrupted_files = batch_validate_exif(file_paths)
-        if corrupted_files:
-            logger.info(
-                f"Rebuilding {len(corrupted_files)} corrupted EXIF structures..."
-            )
-            batch_rebuild_exif(list(corrupted_files))
-            exif_rebuilt_count = len(corrupted_files)
-
-        # Batch read and write metadata
-        existing_metadata_map = batch_read_existing_metadata(file_paths)
-        requests = _build_metadata_requests(file_info)
-        batch_write_metadata_requests(requests, existing_metadata_map)
+        exif_rebuilt_count = SnapchatMessagesProcessor.batch_process_exif(
+            file_paths, file_info, _build_metadata_requests
+        )
 
     # Handle unmatched files - copy to failed-matching directory
     if unmatched_files:
@@ -1016,7 +930,7 @@ def _process_snapchat_working_directory(
         for media_file in unmatched_files:
             try:
                 # Copy to failed-matching directory with original filename
-                shutil.copy2(media_file, failed_matching_dir / media_file.name)
+                copy_file(media_file, failed_matching_dir / media_file.name)
             except Exception as e:
                 logger.error(f"Error copying unmatched file {media_file.name}: {e}")
 
@@ -1070,3 +984,8 @@ def _process_snapchat_working_directory(
             logger.info(f"Ambiguous cases moved to: {needs_matching_dest.absolute()}")
     except Exception as e:
         logger.warning(f"Failed to move needs_matching directory to output: {e}")
+
+
+def get_processor():
+    """Return processor class for auto-discovery."""
+    return SnapchatMessagesProcessor

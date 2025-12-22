@@ -20,6 +20,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+# Add parent directory to path for imports when running standalone
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from common.utils import ALL_MEDIA_EXTENSIONS
+
 # ANSI colors for output
 RED = "\033[91m"
 GREEN = "\033[92m"
@@ -474,15 +479,7 @@ def main():
             for root, dirs, files in os.walk(export_dir):
                 for f in files:
                     ext = Path(f).suffix.lower()
-                    if ext in [
-                        ".jpg",
-                        ".jpeg",
-                        ".png",
-                        ".mp4",
-                        ".mov",
-                        ".mkv",
-                        ".heic",
-                    ]:
+                    if ext in ALL_MEDIA_EXTENSIONS:
                         processed_files.append(Path(root) / f)
 
     print(f"Total processed files: {len(processed_files)}")

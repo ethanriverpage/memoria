@@ -3,8 +3,6 @@
 
 import json
 import logging
-import shutil
-import uuid
 from datetime import datetime
 from multiprocessing import Pool
 from pathlib import Path
@@ -17,20 +15,15 @@ from common.dedup.description import (
     build_message_context,
     PLATFORM_IMESSAGE,
 )
-from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
+from common.dedup.service import save_dedup_metadata
 from common.dependency_checker import check_exiftool, print_exiftool_error
-from common.files.utils import batch_correct_extensions
+from common.files.utils import copy_file
 from common.dedup.hashing import (
-    compute_content_hash,
     is_live_photo_pair,
     LIVE_PHOTO_IMAGE_EXTENSIONS,
     LIVE_PHOTO_VIDEO_EXTENSIONS,
 )
 from common.media.exiftool import (
-    batch_read_existing_metadata,
-    batch_rebuild_exif,
-    batch_validate_exif,
-    batch_write_metadata_requests,
     DEFAULT_PREAMBLE,
     DescriptionWriteSpec,
     MetadataWriteRequest,
@@ -231,11 +224,6 @@ class ImazingProcessor(ProcessorBase):
             workers=kwargs.get("workers"),
             dedup_manifest=dedup_manifest,
         )
-
-
-def get_processor():
-    """Return processor class for auto-discovery."""
-    return ImazingProcessor
 
 
 def _extract_date_from_source_export(source_export: str) -> Optional[str]:
@@ -457,12 +445,6 @@ def is_preprocessed(input_path: Path) -> bool:
         return False
 
 
-def load_metadata(metadata_path: Path) -> dict:
-    """Load and parse metadata.json."""
-    with open(metadata_path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
 def build_filename_index(metadata: dict) -> dict:
     """Build index mapping media_file to message metadata."""
     filename_index = {}
@@ -525,7 +507,7 @@ def _process_file_worker(args_tuple):
         output_path = output_dir / output_filename
 
         # Copy file
-        shutil.copy2(media_path, output_path)
+        copy_file(media_path, output_path)
 
         # Update timestamps
         timestamp_str = _extract_message_timestamp(message)
@@ -566,45 +548,7 @@ def process_logic(
     messages_output_dir = output_path / "messages"
     messages_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check if input is already preprocessed
-    already_preprocessed = is_preprocessed(input_path)
-    temp_dir_created = None
-    working_dir = None
-
-    try:
-        if already_preprocessed:
-            # Use preprocessed export directly
-            working_dir = input_path
-            log.using_preprocessed(str(working_dir))
-        else:
-            # Need to run preprocessing
-            log.running_preprocessing()
-
-            # Create temp directory
-            temp_base = Path(temp_dir).resolve()
-            temp_base.mkdir(parents=True, exist_ok=True)
-
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            unique_id = str(uuid.uuid4())[:8]
-            temp_dir_created = temp_base / f"imazing_temp_{timestamp}_{unique_id}"
-            temp_dir_created.mkdir(parents=True, exist_ok=True)
-
-            log.preprocessing_to(str(temp_dir_created))
-
-            # Run preprocessor
-            preprocessor = ImazingPreprocessor(
-                export_path=input_path,
-                output_dir=temp_dir_created,
-                workers=workers,
-            )
-
-            if not preprocessor.process():
-                log.logger.error("Preprocessing failed")
-                return False
-
-            working_dir = temp_dir_created
-            log.preprocessing_done(str(working_dir))
-
+    def _process_working_dir(working_dir: Path) -> bool:
         # Load metadata
         metadata_file = working_dir / "metadata.json"
         media_dir = working_dir / "media"
@@ -618,7 +562,7 @@ def process_logic(
             return False
 
         log.loading_metadata(str(metadata_file))
-        metadata = load_metadata(metadata_file)
+        metadata = ImazingProcessor.load_metadata(metadata_file)
 
         export_username = metadata.get("export_info", {}).get(
             "export_username", "unknown"
@@ -640,13 +584,12 @@ def process_logic(
             original_count = len(media_files)
             filtered_files = []
             for f in media_files:
-                content_hash = compute_content_hash(f)
-                if is_file_primary_by_hash(
-                    dedup_manifest, content_hash, "iMessage iMazing"
+                if ImazingProcessor.should_skip_for_dedup(
+                    str(f), dedup_manifest, "iMessage iMazing"
                 ):
-                    filtered_files.append(f)
-                else:
                     skipped_secondary_files.append(str(f))
+                else:
+                    filtered_files.append(f)
             media_files = filtered_files
             skipped_count = original_count - len(media_files)
             log.skipped_secondary(skipped_count)
@@ -718,31 +661,17 @@ def process_logic(
         log.copied_files(success_count, failed_count)
 
         # Phase 2: Correct file extensions based on actual content
-        if file_paths:
-            corrections = batch_correct_extensions([Path(p) for p in file_paths])
-            if corrections:
-                # Update file_paths and file_info with corrected paths
-                file_paths = [corrections.get(p, p) for p in file_paths]
-                file_info = [
-                    (corrections.get(fp, fp), msg, eu) for fp, msg, eu in file_info
-                ]
+        file_paths, file_info = ImazingProcessor.correct_extensions_and_update_info(
+            file_paths, file_info, path_index=0
+        )
 
         # Phase 3: Batch EXIF processing
         exif_rebuilt_count = 0
         if file_paths:
             log.exif_batch_start()
-
-            # Validate and rebuild corrupted EXIF
-            corrupted_files = batch_validate_exif(file_paths)
-            if corrupted_files:
-                log.exif_rebuilding(len(corrupted_files))
-                batch_rebuild_exif(list(corrupted_files))
-                exif_rebuilt_count = len(corrupted_files)
-
-            # Read existing metadata and write new EXIF data
-            existing_metadata_map = batch_read_existing_metadata(file_paths)
-            requests = _build_metadata_requests(file_info)
-            batch_write_metadata_requests(requests, existing_metadata_map)
+            exif_rebuilt_count = ImazingProcessor.batch_process_exif(
+                file_paths, file_info, _build_metadata_requests
+            )
             log.exif_written(len(file_info))
 
         # Print summary using shared utility
@@ -765,15 +694,31 @@ def process_logic(
 
         return True
 
-    finally:
-        # Clean up temp directory
-        if temp_dir_created and temp_dir_created.exists():
-            from common.utils import should_cleanup_temp
+    # Check if input is already preprocessed
+    if is_preprocessed(input_path):
+        log.using_preprocessed(str(input_path))
+        return _process_working_dir(input_path)
 
-            if should_cleanup_temp():
-                log.logger.info("Cleaning up temporary directory: %s", temp_dir_created)
-                shutil.rmtree(temp_dir_created)
-            else:
-                log.logger.info(
-                    "Temp cleanup disabled. Directory preserved: %s", temp_dir_created
-                )
+    # Need to run preprocessing into a managed temp directory, then process within it.
+    log.running_preprocessing()
+    with ImazingPreprocessor.temp_output_dir(temp_dir, "imazing") as temp_dir_path:
+        log.preprocessing_to(str(temp_dir_path))
+
+        preprocessor = ImazingPreprocessor(
+            export_path=input_path,
+            output_dir=temp_dir_path,
+            workers=workers,
+            final_output_dir=messages_output_dir,
+        )
+
+        if not preprocessor.run():
+            log.logger.error("Preprocessing failed")
+            return False
+
+        log.preprocessing_done(str(temp_dir_path))
+        return _process_working_dir(temp_dir_path)
+
+
+def get_processor():
+    """Return processor class for auto-discovery."""
+    return ImazingProcessor

@@ -14,8 +14,6 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
-import sys
-import argparse
 from concurrent.futures import ThreadPoolExecutor
 
 from common.output.progress import PHASE_PREPROCESS, futures_progress
@@ -36,6 +34,9 @@ class GooglePhotosPreprocessor(PreprocessorBase):
     SUPPLEMENTAL_WITH_DUP_PATTERN = re.compile(r"(\.[^.]+)\.supp[^.]*\((\d+)\)\.json$")
     SUPPLEMENTAL_PATTERN = re.compile(r"\.supp[^.]*\.json$")
     FILE_INDEX_PATTERN = re.compile(r"\((\d+)\)(\.[^.]+)$")
+    # Used to build fast candidate sets for “long common prefix” matchers without O(n) scans
+    _PREFIX_INDEX_LEN_STRONG = 40
+    _PREFIX_INDEX_LEN_WEAK = 30
 
     def __init__(
         self,
@@ -328,11 +329,83 @@ class GooglePhotosPreprocessor(PreprocessorBase):
 
                             if base_name:
                                 catalog["metadata"][base_name] = file_path
+
+                                # Some Google Photos exports store media sidecars as "uuid__hash.json"
+                                # (no media extension) but the JSON "title" contains the real media
+                                # filename (including extension). Index by title too to improve matching.
+                                #
+                                # This prevents cases where media exists on disk with a long common prefix
+                                # but the metadata sidecar name is truncated or lacks the extension.
+                                try:
+                                    base_suffix = Path(base_name).suffix.lower()
+                                    if base_suffix not in ALL_MEDIA_EXTENSIONS:
+                                        with open(
+                                            file_path, "r", encoding="utf-8"
+                                        ) as f:
+                                            metadata_json = json.load(f)
+                                        title = (
+                                            metadata_json.get("title") or ""
+                                        ).strip()
+                                        if (
+                                            title
+                                            and Path(title).suffix.lower()
+                                            in ALL_MEDIA_EXTENSIONS
+                                        ):
+                                            catalog["metadata"].setdefault(
+                                                title, file_path
+                                            )
+                                except (
+                                    OSError,
+                                    UnicodeDecodeError,
+                                    json.JSONDecodeError,
+                                    ValueError,
+                                    TypeError,
+                                ):
+                                    # Title indexing is a best-effort optimization; never fail cataloging.
+                                    pass
                         continue
 
                     # Check if it's a media file
                     if file_path.suffix.lower() in media_extensions:
                         catalog["media"][filename] = file_path
+
+            # Build stem index for O(1) candidate lookup
+            catalog["metadata_by_stem"] = {}
+            # Build prefix index to enable fast “common prefix” candidate lookup.
+            # Keys are first N characters of the metadata stem (lowercased).
+            catalog["metadata_by_prefix"] = {
+                self._PREFIX_INDEX_LEN_STRONG: {},
+                self._PREFIX_INDEX_LEN_WEAK: {},
+            }
+            for metadata_name, metadata_path in catalog["metadata"].items():
+                stem = Path(metadata_name).stem.lower()
+                # Also index without trailing punctuation for trailing_chars matcher
+                stem_clean = stem.rstrip("-_.")
+
+                catalog["metadata_by_stem"].setdefault(stem, []).append(
+                    (metadata_name, metadata_path)
+                )
+                if stem_clean != stem:
+                    catalog["metadata_by_stem"].setdefault(stem_clean, []).append(
+                        (metadata_name, metadata_path)
+                    )
+
+                # Index base name without duplicate index for duplicate matching
+                # e.g., "IMG_0004(1)" -> also index under "IMG_0004"
+                base, idx = self.get_file_index(metadata_name)
+                if idx:
+                    base_stem = Path(base).stem.lower()
+                    catalog["metadata_by_stem"].setdefault(base_stem, []).append(
+                        (metadata_name, metadata_path)
+                    )
+
+                # Prefix indexes (strong/weak) for truncated/suffix-variant matching
+                for n in (self._PREFIX_INDEX_LEN_STRONG, self._PREFIX_INDEX_LEN_WEAK):
+                    if len(stem) >= n:
+                        key = stem[:n]
+                        catalog["metadata_by_prefix"][n].setdefault(key, []).append(
+                            (metadata_name, metadata_path)
+                        )
 
         except Exception as e:
             self.log_message(
@@ -553,18 +626,72 @@ class GooglePhotosPreprocessor(PreprocessorBase):
         return False
 
     def find_metadata_for_media(
-        self, media_name: str, metadata_catalog: Dict[str, Path]
+        self, media_name: str, catalog: Dict[str, Any]
     ) -> Optional[Path]:
         """
         Find matching metadata for a media file using various matching strategies
         Returns metadata file path or None
+
+        Uses stem-based index for O(1) candidate lookup instead of iterating all metadata.
 
         When multiple matches exist, applies tie-breaking logic to select the best match:
         1. Prioritize exact matches
         2. Prefer matches with same duplicate index
         3. Fall back to first match found
         """
+        metadata_catalog = catalog["metadata"]
+        stem_index = catalog.get("metadata_by_stem", {})
+        prefix_index = catalog.get("metadata_by_prefix", {})
+
+        # Fast path: exact match (O(1) dictionary lookup)
+        if media_name in metadata_catalog:
+            self.log_message(
+                "EXACT_MATCH",
+                f"{media_name} -> {metadata_catalog[media_name].name} (exact)",
+            )
+            return metadata_catalog[media_name]
+
+        # Build candidate set from stem index (O(1) average per lookup)
+        media_stem = Path(media_name).stem.lower()
+        candidates: Dict[str, Path] = {}
+
+        # Add candidates matching the media stem
+        for metadata_name, metadata_path in stem_index.get(media_stem, []):
+            candidates[metadata_name] = metadata_path
+
+        # Also check base stem without duplicate index
+        base, idx = self.get_file_index(media_name)
+        if idx:
+            base_stem = Path(base).stem.lower()
+            for metadata_name, metadata_path in stem_index.get(base_stem, []):
+                candidates[metadata_name] = metadata_path
+
+        # Also check cleaned stem (without trailing punctuation)
+        stem_clean = media_stem.rstrip("-_.")
+        if stem_clean != media_stem:
+            for metadata_name, metadata_path in stem_index.get(stem_clean, []):
+                candidates[metadata_name] = metadata_path
+
+        # If no candidates from stem index, fall back to prefix-index candidate generation.
+        # This enables match_truncated and match_live_photo_variants for cases where the
+        # metadata stem and media stem share a long prefix but differ in trailing chars.
+        if not candidates and prefix_index:
+            for n in (self._PREFIX_INDEX_LEN_STRONG, self._PREFIX_INDEX_LEN_WEAK):
+                if len(media_stem) >= n:
+                    key = media_stem[:n]
+                    for metadata_name, metadata_path in prefix_index.get(n, {}).get(
+                        key, []
+                    ):
+                        candidates[metadata_name] = metadata_path
+                if candidates:
+                    break
+
+        # Still no candidates means no match possible without expensive scanning.
+        if not candidates:
+            return None
+
         # Try matchers in priority order (based on immich-go)
+        # Only run matchers on the small candidate set, not all metadata
         matchers = [
             ("exact", self.match_exact),
             (
@@ -582,7 +709,7 @@ class GooglePhotosPreprocessor(PreprocessorBase):
         all_matches = []
 
         for matcher_name, matcher_fn in matchers:
-            for metadata_name, metadata_path in metadata_catalog.items():
+            for metadata_name, metadata_path in candidates.items():
                 if matcher_fn(media_name, metadata_name):
                     all_matches.append((metadata_name, metadata_path, matcher_name))
 
@@ -793,10 +920,8 @@ class GooglePhotosPreprocessor(PreprocessorBase):
             with self.stats_lock:
                 self.stats["total_media_files"] += 1
 
-            # Find matching metadata
-            metadata_path = self.find_metadata_for_media(
-                media_name, catalog["metadata"]
-            )
+            # Find matching metadata (uses stem index for O(1) candidate lookup)
+            metadata_path = self.find_metadata_for_media(media_name, catalog)
 
             if metadata_path:
                 matched_metadata_paths.add(str(metadata_path))
@@ -1011,7 +1136,7 @@ class GooglePhotosPreprocessor(PreprocessorBase):
             logger.info("Saved metadata to %s", self.metadata_file)
         except Exception as e:
             logger.error(f"Failed to save metadata: {e}")
-            sys.exit(1)
+            raise
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -1027,85 +1152,19 @@ class GooglePhotosPreprocessor(PreprocessorBase):
         }
         print_preprocessing_stats("Preprocessing Stats", stats)
 
-    def process(self) -> bool:
-        """Main processing pipeline"""
-        logger.info("Starting Google Photos Preprocessing")
-        logger.info("Export path: %s", self.export_path)
-        logger.info("Output path: %s", self.output_dir)
+    def process_export(self) -> bool:
+        """Platform-specific preprocessing logic.
 
-        # Validate export structure
-        if not self.validate_export():
-            return False
+        Processes all albums and media files, performing metadata matching
+        and deduplication.
 
+        Returns:
+            True if processing succeeded, False otherwise
+        """
         # Process all albums and media
         albums = self.process_albums()
 
         # Save consolidated metadata
         self.save_metadata(albums)
 
-        # Save log file
-        self.save_log()
-
-        # Handle failures (copy orphaned files, generate report)
-        self.failure_tracker.handle_failures(self.final_output_dir)
-
-        # Print statistics
-        self.print_statistics()
-
-        logger.info("Preprocessing complete!")
         return True
-
-
-def main():
-    """Main entry point"""
-    parser = argparse.ArgumentParser(
-        description="Preprocess Google Photos export: organize media and create cleaned metadata",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Process in-place (creates media/ and metadata.json in export directory)
-  python modules/preprocess_files.py originals/google-username-2025-10-07
-
-  # Process to a separate output directory
-  python modules/preprocess_files.py originals/google-username-2025-10-07 -o processed/
-  
-  # Process with custom number of workers
-  python modules/preprocess_files.py originals/google-username-2025-10-07 --workers 8
-        """,
-    )
-
-    parser.add_argument(
-        "export_directory",
-        type=str,
-        help="Path to Google Photos export directory (contains Google Photos/)",
-    )
-
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=str,
-        required=True,
-        help="Output directory for preprocessed files (required to prevent writing to exports)",
-    )
-
-    parser.add_argument(
-        "--workers",
-        "-w",
-        type=int,
-        default=None,
-        help="Number of parallel workers (default: CPU count - 1)",
-    )
-
-    args = parser.parse_args()
-
-    export_path = Path(args.export_directory)
-    output_path = Path(args.output) if args.output else None
-
-    preprocessor = GooglePhotosPreprocessor(
-        export_path, output_path, workers=args.workers
-    )
-    preprocessor.process()
-
-
-if __name__ == "__main__":
-    main()

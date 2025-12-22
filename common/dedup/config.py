@@ -88,9 +88,10 @@ class DedupConfig:
     validate_gps_distance: float = 500.0  # meters
     validate_aspect_ratio: float = 0.10  # 10% tolerance
 
-    # Preprocessing cache for catalog phase
+    # Preprocessing cache for catalog phase (defaults to $TEMP_DIR/preprocessing_cache)
     preprocessing_cache_dir: Path = field(
-        default_factory=lambda: Path("../pre/preprocessing_cache")
+        default_factory=lambda: Path(os.environ.get("TEMP_DIR", "../pre"))
+        / "preprocessing_cache"
     )
 
     @classmethod
@@ -108,6 +109,7 @@ class DedupConfig:
             DEDUP_GPS_DISTANCE: Max GPS distance for validation (meters)
             DEDUP_ASPECT_RATIO: Max aspect ratio difference (0.0-1.0)
             DEDUP_PREPROCESSING_CACHE_DIR: Directory for preprocessing cache
+                (defaults to $TEMP_DIR/preprocessing_cache)
 
         Performance Environment Variables (not part of DedupConfig):
             PARALLEL_CATALOG: Enable parallel catalog building (default: true)
@@ -123,12 +125,13 @@ class DedupConfig:
         else:
             database_path = Path.home() / ".memoria" / "dedup.db"
 
-        # Parse preprocessing cache directory
+        # Parse preprocessing cache directory (derives from TEMP_DIR if not explicitly set)
         cache_dir_str = os.environ.get("DEDUP_PREPROCESSING_CACHE_DIR")
         if cache_dir_str:
             preprocessing_cache_dir = Path(cache_dir_str).expanduser()
         else:
-            preprocessing_cache_dir = Path("../pre/preprocessing_cache")
+            temp_dir = os.environ.get("TEMP_DIR", "../pre")
+            preprocessing_cache_dir = Path(temp_dir) / "preprocessing_cache"
 
         return cls(
             enabled=parse_bool_env(os.environ.get("CROSS_PROCESSOR_DEDUP"), False),

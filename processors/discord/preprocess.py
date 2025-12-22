@@ -12,7 +12,6 @@ Only messages sent by the exporting user are included.
 import json
 import logging
 import re
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -33,11 +32,6 @@ from processors.preprocess_base import PreprocessorBase
 logger = logging.getLogger(__name__)
 # Standardized processor logger for consistent output
 log = get_processor_logger(__name__)
-
-
-# Custom exception so callers can handle failures without killing the process
-class PreprocessingError(Exception):
-    """Raised when Discord preprocessing fails."""
 
 
 # Supported media extensions for Discord attachments
@@ -796,7 +790,7 @@ class DiscordPreprocessor(PreprocessorBase):
             log.saved_metadata(str(self.metadata_file))
         except Exception as e:
             log.logger.error("Failed to save metadata: %s", e)
-            raise PreprocessingError(f"Failed to save metadata: {e}") from e
+            raise
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -814,14 +808,14 @@ class DiscordPreprocessor(PreprocessorBase):
         }
         print_preprocessing_stats("Preprocessing Stats", stats)
 
-    def process(self) -> bool:
-        """Main processing pipeline."""
-        log.preprocessor_start("Discord", str(self.export_path), str(self.output_dir))
+    def process_export(self) -> bool:
+        """Platform-specific preprocessing logic.
 
-        # Validate export structure
-        if not self.validate_export():
-            raise PreprocessingError(f"Invalid export structure: {self.export_path}")
+        Downloads Discord attachments and organizes metadata.
 
+        Returns:
+            True if processing succeeded, False otherwise
+        """
         # Load indexes
         self.load_channel_index()
         self.load_server_index()
@@ -844,75 +838,4 @@ class DiscordPreprocessor(PreprocessorBase):
         # Save metadata
         self.save_metadata(metadata)
 
-        # Save log file
-        self.save_log()
-
-        # Handle failures
-        self.failure_tracker.handle_failures(self.final_output_dir)
-
-        # Print statistics
-        self.print_statistics()
-
-        log.preprocessing_complete()
         return True
-
-
-def main():
-    """Main entry point for standalone preprocessing."""
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Preprocess Discord export: download attachments and create metadata",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Process in-place (creates media/ and metadata.json in export directory)
-  python preprocess.py discord-username-20251215
-
-  # Process to a separate output directory
-  python preprocess.py discord-username-20251215 -o processed/
-  
-  # Process with custom number of workers
-  python preprocess.py discord-username-20251215 --workers 8
-        """,
-    )
-
-    parser.add_argument(
-        "export_directory",
-        type=str,
-        help="Path to Discord export directory (contains Messages/)",
-    )
-
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=str,
-        required=True,
-        help="Output directory for preprocessed files (required to prevent writing to exports)",
-    )
-
-    parser.add_argument(
-        "--workers",
-        "-w",
-        type=int,
-        default=None,
-        help="Number of parallel download workers (default: CPU count - 1)",
-    )
-
-    args = parser.parse_args()
-
-    export_path = Path(args.export_directory)
-    output_path = Path(args.output) if args.output else None
-
-    try:
-        preprocessor = DiscordPreprocessor(
-            export_path, output_path, workers=args.workers
-        )
-        preprocessor.process()
-    except PreprocessingError as e:
-        logger.error("%s", e)
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()

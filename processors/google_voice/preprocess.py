@@ -14,8 +14,6 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
-import sys
-import argparse
 from collections import defaultdict
 from html.parser import HTMLParser
 
@@ -171,11 +169,96 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         # Track used files for duplicate handling
         self.used_files = defaultdict(int)
 
+        # Cached index to resolve filesystem copy suffixes like "(1)" efficiently.
+        # Built from the current media catalog passed into find_media_file().
+        self._stripped_catalog_cache_id: Optional[int] = None
+        self._stripped_to_original: Dict[str, List[str]] = {}
+
         # Track which media files were copied (for orphaned media detection)
         self.copied_media_paths = set()
 
         # Set context merger for deduplication (first occurrence wins)
         self._context_merger = merge_first_occurrence
+
+    @staticmethod
+    def _strip_copy_suffix(filename: str) -> str:
+        """
+        Strip filesystem copy suffixes like "(1)" right before the extension.
+
+        Example:
+            "image-1(1).jpg" -> "image-1.jpg"
+        """
+        try:
+            p = Path(filename)
+            stem = p.stem
+            suffix = p.suffix
+            match = re.search(r"\(\d+\)$", stem)
+            if not match:
+                return filename
+            return stem[: match.start()] + suffix
+        except Exception:
+            return filename
+
+    @staticmethod
+    def _copy_suffix_index(filename: str) -> Optional[int]:
+        """
+        Return copy-suffix index if filename ends with "(N)" before extension.
+
+        Examples:
+            "a.jpg" -> None
+            "a(1).jpg" -> 1
+        """
+        try:
+            stem = Path(filename).stem
+            match = re.search(r"\((\d+)\)$", stem)
+            if not match:
+                return None
+            return int(match.group(1))
+        except Exception:
+            return None
+
+    def _ensure_stripped_index(self, file_catalog: Dict[str, Path]) -> None:
+        """Build (or reuse) an index of stripped-copy filenames -> originals."""
+        current_id = id(file_catalog)
+        if self._stripped_catalog_cache_id == current_id:
+            return
+
+        stripped_to_original: Dict[str, List[str]] = defaultdict(list)
+        for filename in file_catalog.keys():
+            stripped = self._strip_copy_suffix(filename)
+            stripped_to_original[stripped].append(filename)
+
+        self._stripped_catalog_cache_id = current_id
+        self._stripped_to_original = dict(stripped_to_original)
+
+    def _try_match_candidate(
+        self, candidate: str, file_catalog: Dict[str, Path]
+    ) -> Optional[Tuple[str, Path]]:
+        """
+        Try to match a candidate filename against the catalog, including resolving copy
+        suffix variants like "(1)" if the exact candidate isn't present.
+        """
+        # Exact match
+        if candidate in file_catalog and self.used_files[candidate] == 0:
+            self.used_files[candidate] += 1
+            return (candidate, file_catalog[candidate])
+
+        # Copy-suffix variants: candidate may exist as "candidate(1).ext", etc.
+        originals = self._stripped_to_original.get(candidate, [])
+        if originals:
+            # Prefer the cleanest filename: no "(n)" suffix if it exists
+            def sort_key(n: str) -> tuple:
+                idx = self._copy_suffix_index(n)
+                # None means no suffix, sort first
+                return (idx is not None, idx or 0, len(n))
+
+            preferred = sorted(originals, key=sort_key)
+            for filename in preferred:
+                if self.used_files[filename] == 0:
+                    self.used_files[filename] += 1
+                    return (filename, file_catalog[filename])
+
+        return None
 
     def validate_export(self) -> bool:
         """Validate that export directory has required structure"""
@@ -261,23 +344,6 @@ class GoogleVoicePreprocessor(PreprocessorBase):
                 ("dirname", detect_from_dirname_google),
             ],
         )
-
-    def sanitize_name(self, name: str) -> str:
-        """
-        Sanitize a name for use in filenames
-        Replaces spaces and special characters with underscores
-        """
-        # Replace spaces with underscores
-        sanitized = name.replace(" ", "_")
-        # Remove or replace other problematic characters
-        sanitized = re.sub(r'[<>:"/\\|?*]', "_", sanitized)
-        # Remove quotes, parentheses, commas, and other punctuation
-        sanitized = re.sub(r'["\',()[\]{}!@#$%^&*+=;~`]', "", sanitized)
-        # Clean up multiple underscores
-        sanitized = re.sub(r"_+", "_", sanitized)
-        # Strip leading/trailing underscores
-        sanitized = sanitized.strip("_")
-        return sanitized
 
     def parse_timestamp(self, timestamp_str: str) -> Optional[str]:
         """
@@ -469,12 +535,15 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         HTML src might not have extension, so we need to match
         Returns (matched_filename, source_path) or None
         """
+        self._ensure_stripped_index(file_catalog)
+
+        # HTML often stores src as a relative path; match based on the basename
+        media_src_key = Path(media_src).name if "/" in media_src else media_src
+
         # Try exact match first
-        if media_src in file_catalog:
-            use_count = self.used_files[media_src]
-            if use_count == 0:
-                self.used_files[media_src] += 1
-                return (media_src, file_catalog[media_src])
+        direct = self._try_match_candidate(media_src_key, file_catalog)
+        if direct:
+            return direct
 
         # Try with common extensions
         extensions = [
@@ -490,46 +559,68 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         ]
 
         for ext in extensions:
-            test_name = media_src if media_src.endswith(ext) else media_src + ext
-            if test_name in file_catalog:
-                use_count = self.used_files[test_name]
-                if use_count == 0:
-                    self.used_files[test_name] += 1
-                    if test_name != media_src:
-                        self.stats["fuzzy_matches"] += 1
-                    return (test_name, file_catalog[test_name])
+            test_name = (
+                media_src_key if media_src_key.endswith(ext) else media_src_key + ext
+            )
+            matched = self._try_match_candidate(test_name, file_catalog)
+            if matched:
+                if test_name != media_src_key:
+                    self.stats["fuzzy_matches"] += 1
+                return matched
 
         # Try stripping trailing "-1" (attachment index) if present
         # Some exports have -1 in HTML but not in actual filenames
-        if media_src.endswith("-1"):
-            alt_src = media_src[:-2]  # Remove the "-1"
+        if media_src_key.endswith("-1"):
+            alt_src = media_src_key[:-2]  # Remove the "-1"
 
             # Try exact match without -1
-            if alt_src in file_catalog:
-                use_count = self.used_files[alt_src]
-                if use_count == 0:
-                    self.used_files[alt_src] += 1
-                    self.stats["fuzzy_matches"] += 1
-                    return (alt_src, file_catalog[alt_src])
+            matched = self._try_match_candidate(alt_src, file_catalog)
+            if matched:
+                self.stats["fuzzy_matches"] += 1
+                return matched
 
             # Try with extensions without -1
             for ext in extensions:
                 test_name = alt_src if alt_src.endswith(ext) else alt_src + ext
-                if test_name in file_catalog:
-                    use_count = self.used_files[test_name]
-                    if use_count == 0:
-                        self.used_files[test_name] += 1
+                matched = self._try_match_candidate(test_name, file_catalog)
+                if matched:
+                    self.stats["fuzzy_matches"] += 1
+                    return matched
+
+        # Handle suffix patterns like "-10-1" where the first number is an attachment group
+        # but files on disk only include the final index (e.g. "-1(1).jpg").
+        #
+        # Example:
+        #   HTML src: "Name - Text - 2016...Z-10-1"
+        #   Disk:     "Name - Text - 2016...Z-1(1).jpg"
+        src_base = media_src_key
+        src_ext = ""
+        if "." in media_src_key:
+            src_base = Path(media_src_key).stem
+            src_ext = Path(media_src_key).suffix
+
+        m = re.match(r"^(.*)-(\d+)-(\d+)$", src_base)
+        if m:
+            alt_base = f"{m.group(1)}-{m.group(3)}"
+            # If src had an extension, preserve it; otherwise try common extensions.
+            if src_ext:
+                matched = self._try_match_candidate(alt_base + src_ext, file_catalog)
+                if matched:
+                    self.stats["fuzzy_matches"] += 1
+                    return matched
+            else:
+                for ext in extensions:
+                    matched = self._try_match_candidate(alt_base + ext, file_catalog)
+                    if matched:
                         self.stats["fuzzy_matches"] += 1
-                        return (test_name, file_catalog[test_name])
+                        return matched
 
         # Try prefix matching (for files with multiple attachments)
         for filename, path in file_catalog.items():
-            if filename.startswith(media_src):
-                use_count = self.used_files[filename]
-                if use_count == 0:
-                    self.used_files[filename] += 1
-                    self.stats["fuzzy_matches"] += 1
-                    return (filename, path)
+            if filename.startswith(media_src_key) and self.used_files[filename] == 0:
+                self.used_files[filename] += 1
+                self.stats["fuzzy_matches"] += 1
+                return (filename, path)
 
         return None
 
@@ -753,7 +844,7 @@ class GoogleVoicePreprocessor(PreprocessorBase):
             logger.info("Saved metadata to %s", self.metadata_file)
         except Exception as e:
             logger.error(f"Failed to save metadata: {e}")
-            sys.exit(1)
+            raise
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -768,16 +859,15 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         }
         print_preprocessing_stats("Preprocessing Stats", stats)
 
-    def process(self) -> bool:
-        """Main processing pipeline"""
-        logger.info("Starting Google Voice Messages Preprocessing")
-        logger.info("Export path: %s", self.export_path)
-        logger.info("Output path: %s", self.output_dir)
+    def process_export(self) -> bool:
+        """Platform-specific preprocessing logic.
 
-        # Validate export structure
-        if not self.validate_export():
-            return False
+        Processes all conversations, matching media files to messages
+        and performing deduplication.
 
+        Returns:
+            True if processing succeeded, False otherwise
+        """
         # Detect export username
         logger.info("Detecting export username...")
         result = self.detect_username()
@@ -800,69 +890,4 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         # Save metadata
         self.save_metadata(conversations)
 
-        # Save log file
-        self.save_log()
-
-        # Handle failures (copy orphaned files, generate report)
-        self.failure_tracker.handle_failures(self.final_output_dir)
-
-        # Print statistics
-        self.print_statistics()
-
-        logger.info("Preprocessing complete!")
         return True
-
-
-def main():
-    """Main entry point"""
-    parser = argparse.ArgumentParser(
-        description="Preprocess Google Voice messages export: organize media and create cleaned metadata",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Process in-place (creates media/ and metadata.json in export directory)
-  python modules/preprocess_files.py originals/google-hexffedit-2025-09-21
-
-  # Process to a separate output directory
-  python modules/preprocess_files.py originals/google-hexffedit-2025-09-21 -o processed/
-  
-  # Process with custom number of workers
-  python modules/preprocess_files.py originals/google-hexffedit-2025-09-21 --workers 8
-        """,
-    )
-
-    parser.add_argument(
-        "export_directory",
-        type=str,
-        help="Path to Google Voice export directory (contains Voice/Calls/)",
-    )
-
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=str,
-        required=True,
-        help="Output directory for preprocessed files (required to prevent writing to exports)",
-    )
-
-    parser.add_argument(
-        "--workers",
-        "-w",
-        type=int,
-        default=None,
-        help="Number of parallel workers (default: CPU count - 1)",
-    )
-
-    args = parser.parse_args()
-
-    export_path = Path(args.export_directory)
-    output_path = Path(args.output) if args.output else None
-
-    preprocessor = GoogleVoicePreprocessor(
-        export_path, output_path, workers=args.workers
-    )
-    preprocessor.process()
-
-
-if __name__ == "__main__":
-    main()

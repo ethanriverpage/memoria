@@ -14,8 +14,6 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
-import sys
-import argparse
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
@@ -165,23 +163,6 @@ class GoogleChatPreprocessor(PreprocessorBase):
             ],
         )
 
-    def sanitize_name(self, name: str) -> str:
-        """
-        Sanitize a name for use in filenames
-        Replaces spaces and special characters with underscores
-        """
-        # Replace spaces with underscores
-        sanitized = name.replace(" ", "_")
-        # Remove or replace other problematic characters
-        sanitized = re.sub(r'[<>:"/\\|?*]', "_", sanitized)
-        # Remove quotes, parentheses, commas, and other punctuation
-        sanitized = re.sub(r'["\',()[\]{}!@#$%^&*+=;~`]', "", sanitized)
-        # Clean up multiple underscores
-        sanitized = re.sub(r"_+", "_", sanitized)
-        # Strip leading/trailing underscores
-        sanitized = sanitized.strip("_")
-        return sanitized
-
     def extract_conversation_name(
         self, group_info: Dict, conversation_type: str, conversation_id: str
     ) -> str:
@@ -264,6 +245,110 @@ class GoogleChatPreprocessor(PreprocessorBase):
         # Handle ' -> _ (apostrophes get converted to underscores in filesystem)
         normalized = normalized.replace("'", "_")
         return normalized
+
+    @staticmethod
+    def _strip_copy_suffix(filename: str) -> str:
+        """
+        Strip filesystem copy suffixes like "(1)" right before the extension.
+
+        Example:
+            "File-abc(1).jpg" -> "File-abc.jpg"
+        """
+        try:
+            p = Path(filename)
+            stem = p.stem
+            suffix = p.suffix
+            # Only strip if the stem ends with "(digits)"
+            match = re.search(r"\(\d+\)$", stem)
+            if not match:
+                return filename
+            return stem[: match.start()] + suffix
+        except Exception:
+            return filename
+
+    @staticmethod
+    def _copy_suffix_index(filename: str) -> Optional[int]:
+        """
+        Return copy-suffix index if filename ends with "(N)" before extension.
+
+        Examples:
+            "a.jpg" -> None
+            "a(1).jpg" -> 1
+            "a(12).jpg" -> 12
+        """
+        try:
+            stem = Path(filename).stem
+            match = re.search(r"\((\d+)\)$", stem)
+            if not match:
+                return None
+            return int(match.group(1))
+        except Exception:
+            return None
+
+    def _allocate_copy_variant(
+        self, canonical_filename: str, file_catalog: Dict[str, Path]
+    ) -> Optional[Tuple[str, Path]]:
+        """
+        Allocate the correct on-disk variant for a canonical filename across multiple
+        references in message order:
+          1st reference -> canonical file (no suffix) if present, else first available variant
+          2nd reference -> "(1)" variant
+          3rd reference -> "(2)" variant
+          ...
+
+        Uses self.used_files[canonical_filename] as the counter (canonical key), and also
+        marks the chosen actual filename as used to avoid reusing a file via other fuzzy paths.
+        """
+        use_count = self.used_files[canonical_filename]
+
+        # Prefer exact canonical file for first use if it exists and is unused.
+        if use_count == 0 and canonical_filename in file_catalog:
+            if self.used_files[canonical_filename] == 0:
+                self.used_files[canonical_filename] += 1
+                return (canonical_filename, file_catalog[canonical_filename])
+
+        # Next, try the explicit numbered variant for this use_count (e.g. (1), (2), ...)
+        base, ext = (
+            canonical_filename.rsplit(".", 1)
+            if "." in canonical_filename
+            else (canonical_filename, "")
+        )
+        numbered_name = f"{base}({use_count}).{ext}" if ext else f"{base}({use_count})"
+        if numbered_name in file_catalog and self.used_files[numbered_name] == 0:
+            self.used_files[canonical_filename] += 1
+            self.used_files[numbered_name] += 1
+            return (numbered_name, file_catalog[numbered_name])
+
+        # Fallback: choose the next unused variant with the same stripped base, ordered by suffix index.
+        family = [
+            fn
+            for fn in file_catalog.keys()
+            if self._strip_copy_suffix(fn) == canonical_filename
+        ]
+        if not family:
+            return None
+
+        def sort_key(fn: str) -> tuple:
+            idx = self._copy_suffix_index(fn)
+            # None means "no suffix" -> treat as 0 and sort first
+            return (idx is not None, idx or 0)
+
+        for fn in sorted(family, key=sort_key):
+            if self.used_files[fn] == 0:
+                self.used_files[canonical_filename] += 1
+                self.used_files[fn] += 1
+                return (fn, file_catalog[fn])
+
+        return None
+
+    @staticmethod
+    def _common_prefix_len(a: str, b: str) -> int:
+        """Return the length of the common prefix between two strings."""
+        i = 0
+        limit = min(len(a), len(b))
+        while i < limit and a[i] == b[i]:
+            i += 1
+        return i
 
     def find_media_file(
         self, export_name: str, file_catalog: Dict[str, Path]
@@ -369,6 +454,47 @@ class GoogleChatPreprocessor(PreprocessorBase):
                     f"Matched truncated filename: {export_name} -> {best_match}",
                 )
                 return (best_match, file_catalog[best_match])
+
+            # Try common-prefix matching for long "File-..." names where only the tail differs.
+            # This catches cases where the export_name includes additional tail tokens
+            # (e.g., "...15_n.jpg") but the filesystem name differs slightly or includes "(1)".
+            if len(base_name) >= 40:
+                best_match = None
+                best_score = 0
+
+                for filename in file_catalog.keys():
+                    if not filename.lower().endswith(f".{ext_lower}"):
+                        continue
+
+                    candidate = self._strip_copy_suffix(filename)
+                    candidate_base = (
+                        candidate.rsplit(".", 1)[0] if "." in candidate else candidate
+                    )
+
+                    common = self._common_prefix_len(
+                        base_name.lower(), candidate_base.lower()
+                    )
+                    shorter = min(len(base_name), len(candidate_base))
+
+                    # Require a very strong match to avoid false positives:
+                    # - at least 40 chars in common
+                    # - at least 90% of the shorter base name matches
+                    if common >= 40 and common >= int(shorter * 0.90):
+                        if common > best_score:
+                            best_score = common
+                            best_match = filename
+
+                if best_match and self.used_files[best_match] == 0:
+                    canonical = self._strip_copy_suffix(best_match)
+                    allocated = self._allocate_copy_variant(canonical, file_catalog)
+                    if not allocated:
+                        return None
+                    self.stats["fuzzy_matches"] += 1
+                    self.log_message(
+                        "COMMON_PREFIX_MATCH",
+                        f"Matched by common prefix: {export_name} -> {allocated[0]}",
+                    )
+                    return allocated
 
         return None
 
@@ -734,11 +860,13 @@ class GoogleChatPreprocessor(PreprocessorBase):
                             "export_name": export_name,
                         }
 
-                        copy_tasks.append(CopyTask(
-                            source_path=source_path,
-                            dest_filename=matched_filename,
-                            context=context,
-                        ))
+                        copy_tasks.append(
+                            CopyTask(
+                                source_path=source_path,
+                                dest_filename=matched_filename,
+                                context=context,
+                            )
+                        )
                         # Track that this file was referenced
                         self.copied_media_paths.add(str(source_path))
                     else:
@@ -866,7 +994,7 @@ class GoogleChatPreprocessor(PreprocessorBase):
             logger.info("Saved metadata to %s", self.metadata_file)
         except Exception as e:
             logger.error(f"Failed to save metadata: {e}")
-            sys.exit(1)
+            raise
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -881,16 +1009,15 @@ class GoogleChatPreprocessor(PreprocessorBase):
         }
         print_preprocessing_stats("Preprocessing Stats", stats)
 
-    def process(self) -> bool:
-        """Main processing pipeline"""
-        logger.info("Starting Google Chat Messages Preprocessing")
-        logger.info("Export path: %s", self.export_path)
-        logger.info("Output path: %s", self.output_dir)
+    def process_export(self) -> bool:
+        """Platform-specific preprocessing logic.
 
-        # Validate export structure
-        if not self.validate_export():
-            return False
+        Processes all conversations, matching media files to messages
+        and performing deduplication.
 
+        Returns:
+            True if processing succeeded, False otherwise
+        """
         # Detect export username
         logger.info("Detecting export username...")
         result = self.detect_username()
@@ -918,69 +1045,4 @@ class GoogleChatPreprocessor(PreprocessorBase):
         # Save metadata
         self.save_metadata(conversations)
 
-        # Save log file
-        self.save_log()
-
-        # Handle failures (copy orphaned files, generate report)
-        self.failure_tracker.handle_failures(self.final_output_dir)
-
-        # Print statistics
-        self.print_statistics()
-
-        logger.info("Preprocessing complete!")
         return True
-
-
-def main():
-    """Main entry point"""
-    parser = argparse.ArgumentParser(
-        description="Preprocess Google Chat messages export: organize media and create cleaned metadata",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Process in-place (creates media/ and metadata.json in export directory)
-  python modules/preprocess_files.py google-username-2025-10-07
-
-  # Process to a separate output directory
-  python modules/preprocess_files.py google-username-2025-10-07 -o processed/
-  
-  # Process with custom number of workers
-  python modules/preprocess_files.py google-username-2025-10-07 --workers 8
-        """,
-    )
-
-    parser.add_argument(
-        "export_directory",
-        type=str,
-        help="Path to Google Chat export directory (contains Google Chat/)",
-    )
-
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=str,
-        required=True,
-        help="Output directory for preprocessed files (required to prevent writing to exports)",
-    )
-
-    parser.add_argument(
-        "--workers",
-        "-w",
-        type=int,
-        default=None,
-        help="Number of parallel workers (default: CPU count - 1)",
-    )
-
-    args = parser.parse_args()
-
-    export_path = Path(args.export_directory)
-    output_path = Path(args.output) if args.output else None
-
-    preprocessor = GoogleChatPreprocessor(
-        export_path, output_path, workers=args.workers
-    )
-    preprocessor.process()
-
-
-if __name__ == "__main__":
-    main()

@@ -8,21 +8,22 @@ shared across all preprocessor implementations.
 
 import logging
 import os
-import shutil
 import threading
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 from common.dedup.config import get_dedup_config
 from common.dedup.hashing import compute_content_hash
 from common.detection import DetectionResult
 from common.failure_tracker import FailureTracker
 from common.files.filter import BannedFilesFilter
+from common.files.utils import copy_file
 from common.output.progress import PHASE_PREPROCESS, futures_progress
 from common.utils import default_worker_count
 
@@ -83,6 +84,16 @@ class CopyResult:
     content_hash: str
     is_duplicate: bool
     primary_source: Path
+
+
+def _copy_single_file(src_path: Path, dest_path: Path) -> None:
+    """Copy a single file with reflink optimization on supported filesystems.
+
+    Args:
+        src_path: Source file path.
+        dest_path: Destination file path.
+    """
+    copy_file(src_path, dest_path, preserve_metadata=True)
 
 
 def _hash_single_file(
@@ -148,8 +159,11 @@ class PreprocessorBase(ABC):
     Subclasses must implement:
     - validate_export(): Validate export directory structure
     - detect_username(): Detect export owner username
-    - process(): Main preprocessing pipeline
+    - process_export(): Platform-specific processing logic
     - print_statistics(): Display processing statistics
+
+    The run() method provides a standardized preprocessing pipeline that calls
+    these methods in the correct order.
     """
 
     def __init__(
@@ -225,6 +239,33 @@ class PreprocessorBase(ABC):
         self._context_merger: Optional[Callable[[Dict, Dict], None]] = None
         self._hash_registry: Dict[str, Dict[str, Any]] = {}
         self._used_filenames: Dict[str, int] = {}
+
+    @classmethod
+    @contextmanager
+    def temp_output_dir(
+        cls, base_dir: Union[str, Path], prefix: str
+    ) -> Generator[Path, None, None]:
+        """Create a temporary preprocessing output directory (with cleanup).
+
+        This standardizes the temp directory lifecycle across processors.
+        Directories are created under `base_dir` with a unique suffix and are
+        automatically cleaned up on context exit unless temp cleanup is disabled.
+
+        Cleanup behavior is controlled by `DISABLE_TEMP_CLEANUP` via
+        `common.utils.should_cleanup_temp()`.
+
+        Args:
+            base_dir: Base directory under which to create the temp directory.
+            prefix: Prefix for the temp directory name (e.g., "gvoice", "instaloader").
+
+        Yields:
+            Path to the created temporary directory.
+        """
+        # Import here to avoid circular import chains in some execution paths.
+        from common.processing import temp_processing_directory
+
+        with temp_processing_directory(str(base_dir), prefix=prefix) as temp_dir:
+            yield temp_dir
 
     def set_context_merger(
         self, merger: Optional[Callable[[Dict, Dict], None]]
@@ -485,25 +526,64 @@ class PreprocessorBase(ABC):
         # Ensure output directory exists
         self.media_output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Pre-allocate unique filenames (deterministic, single-threaded)
+        # This keeps filename generation stable regardless of copy order
+        copy_plan: List[Tuple[str, Path, Path, str, List[CopyTask]]] = []
         for content_hash, group in hash_groups.items():
             primary = primaries[content_hash]
             unique_filename = self._get_unique_filename(primary.dest_filename)
-
-            # Copy primary file
             dest_path = self.media_output_dir / unique_filename
-            shutil.copy2(primary.source_path, dest_path)
 
             # Update registry with actual filename used
             self._hash_registry[content_hash]["filename"] = unique_filename
 
-            # Build results for all tasks in this group
-            for i, task in enumerate(group):
-                results[task.source_path] = CopyResult(
-                    dest_filename=unique_filename,
-                    content_hash=content_hash,
-                    is_duplicate=(i > 0),  # First is primary, rest are duplicates
-                    primary_source=primary.source_path,
+            copy_plan.append(
+                (content_hash, primary.source_path, dest_path, unique_filename, group)
+            )
+
+        # Parallel copy execution (I/O bound)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(_copy_single_file, src_path, dest_path): (
+                    content_hash,
+                    src_path,
+                    dest_path,
+                    unique_filename,
+                    group,
                 )
+                for content_hash, src_path, dest_path, unique_filename, group in copy_plan
+            }
+
+            if show_progress:
+                iterator = futures_progress(
+                    futures, PHASE_PREPROCESS, "Copying files", unit="file"
+                )
+            else:
+                from concurrent.futures import as_completed
+
+                iterator = as_completed(futures)
+
+            for future in iterator:
+                # Re-raise any exception from the copy operation
+                future.result()
+
+                # Retrieve plan details for this future
+                (
+                    content_hash,
+                    src_path,
+                    dest_path,
+                    unique_filename,
+                    group,
+                ) = futures[future]
+
+                # Build results for all tasks in this group
+                for i, task in enumerate(group):
+                    results[task.source_path] = CopyResult(
+                        dest_filename=unique_filename,
+                        content_hash=content_hash,
+                        is_duplicate=(i > 0),  # First is primary, rest are duplicates
+                        primary_source=primaries[content_hash].source_path,
+                    )
 
         return results
 
@@ -604,6 +684,43 @@ class PreprocessorBase(ABC):
                 primary_source=file_path,
             )
 
+    def run(self) -> bool:
+        """Run the standard preprocessing pipeline (Template Method).
+
+        This method provides the common preprocessing flow:
+        1. Log start information
+        2. Validate export structure
+        3. Run platform-specific processing
+        4. Save log file
+        5. Handle failures
+        6. Print statistics
+        7. Log completion
+
+        Subclasses implement process_export() for platform-specific logic.
+
+        Returns:
+            True if preprocessing succeeded, False otherwise
+        """
+        logger.info("Starting %s Preprocessing", self.processor_name)
+        logger.info("Export path: %s", self.export_path)
+        logger.info("Output path: %s", self.output_dir)
+
+        if not self.validate_export():
+            return False
+
+        try:
+            if not self.process_export():
+                return False
+        except Exception as e:
+            logger.error("%s preprocessing failed: %s", self.processor_name, e)
+            return False
+
+        self.save_log()
+        self.failure_tracker.handle_failures(self.final_output_dir)
+        self.print_statistics()
+        logger.info("Preprocessing complete!")
+        return True
+
     @abstractmethod
     def validate_export(self) -> bool:
         """Validate that export directory has required structure.
@@ -621,11 +738,22 @@ class PreprocessorBase(ABC):
         """
 
     @abstractmethod
-    def process(self) -> bool:
-        """Run the main preprocessing pipeline.
+    def process_export(self) -> bool:
+        """Run platform-specific preprocessing logic.
+
+        This method should:
+        - Perform the main processing (scanning, copying, organizing)
+        - Call save_metadata() to write metadata.json
+
+        The template method run() handles:
+        - Logging start/end messages
+        - Calling validate_export()
+        - Calling save_log()
+        - Calling failure_tracker.handle_failures()
+        - Calling print_statistics()
 
         Returns:
-            True if preprocessing succeeded, False otherwise
+            True if processing succeeded, False otherwise
         """
 
     @abstractmethod

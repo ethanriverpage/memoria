@@ -11,7 +11,6 @@ import logging
 import multiprocessing
 import os
 import re
-import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -27,9 +26,7 @@ from common.dedup.description import (
     SERVICE_REELS,
 )
 from common.output.console import console
-from common.dedup.service import is_file_primary_by_hash
-from common.files.utils import batch_correct_extensions, short_path
-from common.dedup.hashing import compute_content_hash
+from common.files.utils import batch_correct_extensions, copy_file, short_path
 from common.processing import print_processing_summary
 from common.output.progress import PHASE_PROCESS, progress_bar
 from processors.instaloader.preprocess import InstaloaderPreprocessor
@@ -40,14 +37,9 @@ from common.utils import (
     extract_username_from_export_dir,
     FilenameGenerator,
     is_preprocessed_directory,
-    should_cleanup_temp,
     update_file_timestamps,
 )
 from common.media.exiftool import (
-    batch_validate_exif,
-    batch_rebuild_exif,
-    batch_read_existing_metadata,
-    batch_write_metadata_requests,
     DescriptionWriteSpec,
     MetadataWriteRequest,
     PREAMBLE_WITH_IGNORE_ERRORS,
@@ -199,18 +191,6 @@ class InstaloaderProcessor(ProcessorBase):
             return False
 
 
-def get_processor():
-    """Return processor class for auto-discovery
-
-    This function is called by the unified memoria.py during
-    automatic processor discovery.
-
-    Returns:
-        InstaloaderProcessor class (not instance, as it uses static methods)
-    """
-    return InstaloaderProcessor
-
-
 # ============================================================================
 # Helper Functions
 # ============================================================================
@@ -321,7 +301,7 @@ def process_media_batch(batch_args):
         try:
             file_size = os.path.getsize(media_path)
             logger.debug(f"Copying {media_file} ({file_size} bytes) to {output_path}")
-            shutil.copy2(media_path, output_path)
+            copy_file(media_path, output_path)
             file_paths.append(output_path)
             file_info.append((output_path, post_data, export_username, media_type))
         except Exception as e:  # noqa: BLE001
@@ -384,43 +364,7 @@ def process_logic(
     logger.info("Instaloader Media Processor")
     logger.info("=" * 50)
 
-    # Determine if input needs preprocessing
-    temp_dir_created = None
-
-    try:
-        if is_preprocessed_directory(input_dir):
-            logger.info(f"Input directory is already preprocessed: {input_dir}")
-            working_dir = input_dir
-        else:
-            logger.info(f"Input directory is raw export: {input_dir}")
-            logger.info("Running preprocessing...")
-
-            # Create temp directory for preprocessing
-            temp_base = Path(temp_dir).resolve()
-            temp_base.mkdir(parents=True, exist_ok=True)
-
-            # Create unique temp subdirectory
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            unique_id = str(uuid.uuid4())[:8]
-            temp_dir_created = temp_base / f"temp_{timestamp}_{unique_id}"
-            temp_dir_created.mkdir(parents=True, exist_ok=True)
-
-            logger.info(f"Preprocessing to: {temp_dir_created}")
-
-            # Run preprocessing with final output directory for failure tracking
-            # output_dir is already the processor-specific path
-            final_output_path = Path(output_dir) if output_dir else Path("final_media")
-            preprocessor = InstaloaderPreprocessor(
-                export_path=Path(input_dir),
-                output_dir=temp_dir_created,
-                workers=workers,
-                final_output_dir=final_output_path,
-            )
-            preprocessor.process()
-
-            working_dir = str(temp_dir_created)
-            logger.info(f"Preprocessing complete. Using: {working_dir}")
-
+    def _process_working_directory(working_dir: str) -> None:
         # Configuration
         metadata_file = os.path.join(working_dir, "metadata.json")
         media_dir = os.path.join(working_dir, "media")
@@ -437,8 +381,7 @@ def process_logic(
 
         # Load metadata
         logger.info(f"Loading metadata from {metadata_file}...")
-        with open(metadata_file, "r", encoding="utf-8") as f:
-            metadata_json = json.load(f)
+        metadata_json = InstaloaderProcessor.load_metadata(Path(metadata_file))
 
         export_info = metadata_json.get("export_info", {})
         media_posts = metadata_json.get("media", [])
@@ -480,13 +423,11 @@ def process_logic(
                 full_path = os.path.join(media_dir, media_file)
 
                 # Skip secondary files based on dedup manifest (using hash-based lookup)
-                if dedup_manifest:
-                    content_hash = compute_content_hash(full_path)
-                    if not is_file_primary_by_hash(
-                        dedup_manifest, content_hash, "Instaloader"
-                    ):
-                        skipped_dedup += 1
-                        continue
+                if InstaloaderProcessor.should_skip_for_dedup(
+                    full_path, dedup_manifest, "Instaloader"
+                ):
+                    skipped_dedup += 1
+                    continue
 
                 # Get file extension
                 file_ext = os.path.splitext(media_file)[1].lower()
@@ -577,22 +518,9 @@ def process_logic(
         exif_rebuilt_count = 0
         if file_paths:
             logger.info("Batch processing EXIF metadata...")
-
-            # Validate and rebuild corrupted EXIF
-            corrupted_files = batch_validate_exif(file_paths)
-            if corrupted_files:
-                for f in corrupted_files:
-                    logger.debug(f"Detected corrupted EXIF in {short_path(f)}")
-                logger.info(
-                    f"Rebuilding {len(corrupted_files)} corrupted EXIF structures..."
-                )
-                batch_rebuild_exif(list(corrupted_files))
-                exif_rebuilt_count = len(corrupted_files)
-
-            # Batch read and write metadata
-            existing_metadata_map = batch_read_existing_metadata(file_paths)
-            requests = _build_metadata_requests(file_info)
-            batch_write_metadata_requests(requests, existing_metadata_map)
+            exif_rebuilt_count = InstaloaderProcessor.batch_process_exif(
+                file_paths, file_info, _build_metadata_requests
+            )
             logger.info(f"EXIF metadata written for {len(file_info)} files")
 
         # Print summary using shared utility
@@ -609,13 +537,35 @@ def process_logic(
         for media_type in sorted(media_types_set):
             console.print(f"  - {media_type}/")
 
-    finally:
-        # Clean up temp directory if it was created
-        if temp_dir_created and temp_dir_created.exists():
-            if should_cleanup_temp():
-                logger.debug(f"Cleaning up temporary directory: {temp_dir_created}")
-                shutil.rmtree(temp_dir_created)
-            else:
-                logger.info(
-                    f"Temp cleanup disabled. Temporary directory preserved at: {temp_dir_created}"
-                )
+    # Determine if input needs preprocessing
+    if is_preprocessed_directory(input_dir):
+        logger.info(f"Input directory is already preprocessed: {input_dir}")
+        _process_working_directory(input_dir)
+        return
+
+    logger.info(f"Input directory is raw export: {input_dir}")
+    logger.info("Running preprocessing...")
+
+    # Run preprocessing into a managed temp directory, then process within it.
+    with InstaloaderPreprocessor.temp_output_dir(temp_dir, "instaloader") as temp_dir_path:
+        logger.info(f"Preprocessing to: {temp_dir_path}")
+
+        # Run preprocessing with final output directory for failure tracking
+        # output_dir is already the processor-specific path
+        final_output_path = Path(output_dir) if output_dir else Path("final_media")
+        preprocessor = InstaloaderPreprocessor(
+            export_path=Path(input_dir),
+            output_dir=temp_dir_path,
+            workers=workers,
+            final_output_dir=final_output_path,
+        )
+        if not preprocessor.run():
+            return False
+
+        logger.info(f"Preprocessing complete. Using: {temp_dir_path}")
+        _process_working_directory(str(temp_dir_path))
+
+
+def get_processor():
+    """Return processor class for auto-discovery."""
+    return InstaloaderProcessor

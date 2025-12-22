@@ -9,7 +9,6 @@ import json
 import logging
 import os
 import re
-import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -20,15 +19,9 @@ from common.dedup.description import (
     PLATFORM_INSTAGRAM,
     SERVICE_MESSAGES,
 )
-from common.dedup.service import is_file_primary_by_hash
 from common.dependency_checker import check_exiftool, print_exiftool_error
-from common.files.utils import batch_correct_extensions
-from common.dedup.hashing import compute_content_hash
+from common.files.utils import batch_correct_extensions, copy_file
 from common.media.exiftool import (
-    batch_validate_exif,
-    batch_rebuild_exif,
-    batch_read_existing_metadata,
-    batch_write_metadata_requests,
     DescriptionWriteSpec,
     MetadataWriteRequest,
     PREAMBLE_WITH_IGNORE_ERRORS,
@@ -36,7 +29,6 @@ from common.media.exiftool import (
 from common.processing import (
     process_batches_parallel,
     print_processing_summary,
-    temp_processing_directory,
 )
 from common.utils import (
     ALL_MEDIA_EXTENSIONS,
@@ -228,18 +220,6 @@ class InstagramMessagesProcessor(ProcessorBase):
             return False
 
 
-def get_processor():
-    """Return processor class for auto-discovery
-
-    This function is called by the unified memoria.py during
-    automatic processor discovery.
-
-    Returns:
-        InstagramMessagesProcessor class (not instance, as it uses static methods)
-    """
-    return InstagramMessagesProcessor
-
-
 # ============================================================================
 # Helper Functions
 # ============================================================================
@@ -336,7 +316,7 @@ def process_media_batch(batch_args):
             continue
 
         try:
-            shutil.copy2(media_path, output_path)
+            copy_file(media_path, output_path)
             file_paths.append(output_path)
             file_info.append(
                 (output_path, message_data, conversation_title, export_username)
@@ -412,7 +392,7 @@ def process_logic(
         logger.info("Running preprocessing...")
 
         # Use context manager for temp directory with automatic cleanup
-        with temp_processing_directory(temp_dir, "instagram_msgs") as temp_dir_path:
+        with InstagramMessagesPreprocessor.temp_output_dir(temp_dir, "instagram_msgs") as temp_dir_path:
             logger.info(f"Preprocessing to: {temp_dir_path}")
 
             # Run preprocessing with final output directory for failure tracking
@@ -423,7 +403,7 @@ def process_logic(
                 workers=workers,
                 final_output_dir=final_output_path,
             )
-            if not preprocessor.process():
+            if not preprocessor.run():
                 logger.warning(
                     "Preprocessing failed - export may not have required structure"
                 )
@@ -465,8 +445,7 @@ def _process_working_directory(
 
     # Load metadata
     logger.info(f"Loading metadata from {metadata_file}...")
-    with open(metadata_file, "r", encoding="utf-8") as f:
-        metadata_json = json.load(f)
+    metadata_json = InstagramMessagesProcessor.load_metadata(Path(metadata_file))
 
     export_info = metadata_json.get("export_info", {})
     conversations = metadata_json.get("conversations", [])
@@ -516,13 +495,11 @@ def _process_working_directory(
                 full_path = os.path.join(media_dir, media_file)
 
                 # Skip secondary files based on dedup manifest (using hash-based lookup)
-                if dedup_manifest:
-                    content_hash = compute_content_hash(full_path)
-                    if not is_file_primary_by_hash(
-                        dedup_manifest, content_hash, "Instagram Messages"
-                    ):
-                        skipped_dedup += 1
-                        continue
+                if InstagramMessagesProcessor.should_skip_for_dedup(
+                    full_path, dedup_manifest, "Instagram Messages"
+                ):
+                    skipped_dedup += 1
+                    continue
 
                 # Get file extension
                 file_ext = os.path.splitext(media_file)[1].lower()
@@ -584,20 +561,9 @@ def _process_working_directory(
     exif_rebuilt_count = 0
     if file_paths:
         logger.info("Batch processing EXIF metadata...")
-
-        # Validate and rebuild corrupted EXIF
-        corrupted_files = batch_validate_exif(file_paths)
-        if corrupted_files:
-            logger.info(
-                f"Rebuilding {len(corrupted_files)} corrupted EXIF structures..."
-            )
-            batch_rebuild_exif(list(corrupted_files))
-            exif_rebuilt_count = len(corrupted_files)
-
-        # Batch read and write metadata
-        existing_metadata_map = batch_read_existing_metadata(file_paths)
-        requests = _build_metadata_requests(file_info)
-        batch_write_metadata_requests(requests, existing_metadata_map)
+        exif_rebuilt_count = InstagramMessagesProcessor.batch_process_exif(
+            file_paths, file_info, _build_metadata_requests
+        )
         logger.info(f"EXIF metadata written for {len(file_info)} files")
 
     # Print summary using shared utility
@@ -608,3 +574,8 @@ def _process_working_directory(
         output_dir=output_dir,
         extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
     )
+
+
+def get_processor():
+    """Return processor class for auto-discovery."""
+    return InstagramMessagesProcessor

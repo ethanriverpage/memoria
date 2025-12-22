@@ -8,7 +8,6 @@ It supports cross-export consolidation for deduplication across multiple devices
 
 import json
 import logging
-import shutil
 from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -21,21 +20,14 @@ from common.dedup.description import (
     PLATFORM_IMESSAGE,
 )
 from common.dependency_checker import check_exiftool, print_exiftool_error
-from common.files.utils import batch_correct_extensions
-from common.dedup.service import is_file_primary_by_hash
-from common.dedup.hashing import compute_content_hash
+from common.files.utils import copy_file
 from common.media.exiftool import (
-    batch_read_existing_metadata,
-    batch_rebuild_exif,
-    batch_validate_exif,
-    batch_write_metadata_requests,
     DEFAULT_PREAMBLE,
     DescriptionWriteSpec,
     MetadataWriteRequest,
 )
 from common.processing import (
     print_processing_summary,
-    temp_processing_directory,
 )
 from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import (
@@ -258,17 +250,6 @@ class IMessageProcessor(ProcessorBase):
         return IMessageProcessor.process_consolidated(
             [input_dir], output_dir, dedup_manifest=dedup_manifest, **kwargs
         )
-
-
-def get_processor():
-    """Return processor class for auto-discovery.
-
-    This function is called by memoria.py during automatic processor discovery.
-
-    Returns:
-        IMessageProcessor class
-    """
-    return IMessageProcessor
 
 
 # ============================================================================
@@ -530,19 +511,6 @@ def is_preprocessed(input_path: Path) -> bool:
         return False
 
 
-def load_metadata(metadata_path: Path) -> dict:
-    """Load and parse metadata.json.
-
-    Args:
-        metadata_path: Path to metadata.json
-
-    Returns:
-        Parsed metadata dictionary
-    """
-    with open(metadata_path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
 def build_filename_index(metadata: dict) -> dict:
     """Build index mapping media_file to message metadata.
 
@@ -560,9 +528,12 @@ def build_filename_index(metadata: dict) -> dict:
             if media_file:
                 filename_index[media_file] = message
 
+    # Only add orphaned_media entries if they don't already exist in the index.
+    # Orphaned files can have the same filename as database entries (e.g., IMG_0001.jpeg),
+    # but we should prefer the database entry which has valid metadata.
     for message in metadata.get("orphaned_media", []):
         media_file = message.get("media_file")
-        if media_file:
+        if media_file and media_file not in filename_index:
             filename_index[media_file] = message
 
     return filename_index
@@ -639,7 +610,7 @@ def _process_file_worker(args_tuple):
         output_path = output_dir / output_filename
 
         # Copy file
-        shutil.copy2(media_path, output_path)
+        copy_file(media_path, output_path)
 
         # Update timestamps
         timestamp_str = _extract_message_timestamp(message)
@@ -713,7 +684,7 @@ def process_logic(
         logger.info("Running preprocessing...")
 
         # Use context manager for temp directory with automatic cleanup
-        with temp_processing_directory(temp_dir, "imessage") as temp_dir_path:
+        with IMessagePreprocessor.temp_output_dir(temp_dir, "imessage") as temp_dir_path:
             logger.info(f"Preprocessing to: {temp_dir_path}")
 
             # Run preprocessor with all exports
@@ -721,9 +692,10 @@ def process_logic(
                 export_paths=input_paths,
                 output_dir=temp_dir_path,
                 workers=workers,
+                final_output_dir=messages_output_dir,
             )
 
-            if not preprocessor.process():
+            if not preprocessor.run():
                 logger.error("Preprocessing failed")
                 return False
 
@@ -763,7 +735,7 @@ def _process_working_directory(
         return False
 
     logger.info(f"Loading metadata from {metadata_file}...")
-    metadata = load_metadata(metadata_file)
+    metadata = IMessageProcessor.load_metadata(metadata_file)
 
     export_username = metadata.get("export_info", {}).get("export_username", "unknown")
     logger.info(f"Export identifier: {export_username}")
@@ -782,8 +754,9 @@ def _process_working_directory(
         original_count = len(media_files)
         filtered_files = []
         for f in media_files:
-            content_hash = compute_content_hash(f)
-            if is_file_primary_by_hash(dedup_manifest, content_hash, "iMessage"):
+            if not IMessageProcessor.should_skip_for_dedup(
+                str(f), dedup_manifest, "iMessage"
+            ):
                 filtered_files.append(f)
         media_files = filtered_files
         skipped_count = original_count - len(media_files)
@@ -858,33 +831,17 @@ def _process_working_directory(
     logger.info(f"Copied {success_count} files ({failed_count} failed)")
 
     # Phase 2: Correct file extensions based on actual content
-    if file_paths:
-        corrections = batch_correct_extensions([Path(p) for p in file_paths])
-        if corrections:
-            # Update file_paths and file_info with corrected paths
-            file_paths = [corrections.get(p, p) for p in file_paths]
-            file_info = [
-                (corrections.get(fp, fp), msg, eu) for fp, msg, eu in file_info
-            ]
+    file_paths, file_info = IMessageProcessor.correct_extensions_and_update_info(
+        file_paths, file_info, path_index=0
+    )
 
     # Phase 3: Batch EXIF processing
     exif_rebuilt_count = 0
     if file_paths:
         logger.info("Batch processing EXIF metadata...")
-
-        # Validate and rebuild corrupted EXIF
-        corrupted_files = batch_validate_exif(file_paths)
-        if corrupted_files:
-            logger.info(
-                f"Rebuilding {len(corrupted_files)} corrupted EXIF structures..."
-            )
-            batch_rebuild_exif(list(corrupted_files))
-            exif_rebuilt_count = len(corrupted_files)
-
-        # Read existing metadata and write new EXIF data
-        existing_metadata_map = batch_read_existing_metadata(file_paths)
-        requests = _build_metadata_requests(file_info)
-        batch_write_metadata_requests(requests, existing_metadata_map)
+        exif_rebuilt_count = IMessageProcessor.batch_process_exif(
+            file_paths, file_info, _build_metadata_requests
+        )
         logger.info(f"EXIF metadata written for {len(file_info)} files")
 
     # Print summary using shared utility
@@ -897,3 +854,8 @@ def _process_working_directory(
     )
 
     return True
+
+
+def get_processor():
+    """Return processor class for auto-discovery."""
+    return IMessageProcessor

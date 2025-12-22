@@ -13,7 +13,6 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
-import argparse
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 
@@ -483,11 +482,13 @@ class InstagramPreprocessor(PreprocessorBase):
                         "media_path": media_path,
                     }
 
-                    copy_tasks.append(CopyTask(
-                        source_path=source_path,
-                        dest_filename=filename,
-                        context=context,
-                    ))
+                    copy_tasks.append(
+                        CopyTask(
+                            source_path=source_path,
+                            dest_filename=filename,
+                            context=context,
+                        )
+                    )
                 else:
                     post_file_map[(post_idx, media_path)] = None
                     self.log_message(
@@ -696,20 +697,15 @@ class InstagramPreprocessor(PreprocessorBase):
             stats[f"{media_type}"] = type_stats["media_files"]
         print_preprocessing_stats("Preprocessing Stats", stats)
 
-    def process(self) -> bool:
-        """Main processing pipeline
+    def process_export(self) -> bool:
+        """Platform-specific preprocessing logic.
+
+        Processes all posts, matching media files to metadata
+        and performing deduplication.
 
         Returns:
             True if preprocessing succeeded, False otherwise
         """
-        logger.info("Starting Instagram Export Preprocessing")
-        logger.info("Export path: %s", self.export_path)
-        logger.info("Output path: %s", self.output_dir)
-
-        # Validate export structure
-        if not self.validate_export():
-            return False
-
         # Build file catalog
         file_catalog = self.build_file_catalog()
 
@@ -722,67 +718,4 @@ class InstagramPreprocessor(PreprocessorBase):
         # Save metadata
         self.save_metadata(metadata)
 
-        # Save log file
-        self.save_log()
-
-        # Handle failures (copy orphaned files, generate report)
-        self.failure_tracker.handle_failures(self.final_output_dir)
-
-        # Print statistics
-        self.print_statistics()
-
-        logger.info("Preprocessing complete!")
         return True
-
-
-def main():
-    """Main entry point"""
-    parser = argparse.ArgumentParser(
-        description="Preprocess Instagram export: organize media and create cleaned metadata",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Process in-place (creates media/ in export directory)
-  python preprocess_files.py instagram-username-2025-10-07
-
-  # Process to a separate output directory
-  python preprocess_files.py instagram-username-2025-10-07 -o processed/
-  
-  # Process with custom number of workers
-  python preprocess_files.py instagram-username-2025-10-07 --workers 8
-        """,
-    )
-
-    parser.add_argument(
-        "export_directory",
-        type=str,
-        help="Path to Instagram export directory (contains media/ and your_instagram_activity/)",
-    )
-
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=str,
-        required=True,
-        help="Output directory for preprocessed files (required to prevent writing to exports)",
-    )
-
-    parser.add_argument(
-        "--workers",
-        "-w",
-        type=int,
-        default=None,
-        help="Number of parallel workers (default: CPU count - 1)",
-    )
-
-    args = parser.parse_args()
-
-    export_path = Path(args.export_directory)
-    output_path = Path(args.output) if args.output else None
-
-    preprocessor = InstagramPreprocessor(export_path, output_path, workers=args.workers)
-    preprocessor.process()
-
-
-if __name__ == "__main__":
-    main()

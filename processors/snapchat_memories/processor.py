@@ -9,7 +9,6 @@ import json
 import logging
 import multiprocessing
 import os
-import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -20,9 +19,7 @@ from common.dedup.description import (
     PLATFORM_SNAPCHAT,
     SERVICE_MEMORIES,
 )
-from common.dedup.service import is_file_primary_by_hash
-from common.files.utils import batch_correct_extensions
-from common.dedup.hashing import compute_content_hash
+from common.files.utils import copy_file
 from common.dependency_checker import (
     check_exiftool,
     check_ffmpeg,
@@ -32,10 +29,6 @@ from common.dependency_checker import (
     print_pillow_error,
 )
 from common.media.exiftool import (
-    batch_validate_exif,
-    batch_rebuild_exif,
-    batch_read_existing_metadata,
-    batch_write_metadata_requests,
     DEFAULT_PREAMBLE,
     DescriptionWriteSpec,
     GPSData,
@@ -283,18 +276,6 @@ class SnapchatMemoriesProcessor(ProcessorBase):
             return False
 
 
-def get_processor():
-    """Return processor class for auto-discovery
-
-    This function is called by the unified memoria.py during
-    automatic processor discovery.
-
-    Returns:
-        SnapchatMemoriesProcessor class (not instance, as it uses static methods)
-    """
-    return SnapchatMemoriesProcessor
-
-
 # ============================================================================
 # Helper Functions
 # ============================================================================
@@ -425,7 +406,7 @@ def create_memory_file(args_tuple):
             logger.warning(f"Overlay file not found: {overlay_path}")
             # Copy file without overlay
             output_path = os.path.join(output_dir, output_filename)
-            shutil.copy2(media_path, output_path)
+            copy_file(media_path, output_path)
             _update_memory_timestamps(output_path, memory)
             return (True, output_path, False, memory, export_username, None)
 
@@ -451,7 +432,7 @@ def create_memory_file(args_tuple):
             else:
                 # Multi-track creation failed, copy original video with original extension
                 fallback_path = os.path.join(output_dir, output_filename)
-                shutil.copy2(media_path, fallback_path)
+                copy_file(media_path, fallback_path)
                 _update_memory_timestamps(fallback_path, memory)
                 # Fallback file needs batch EXIF processing
                 return (True, fallback_path, False, memory, export_username, None)
@@ -470,19 +451,19 @@ def create_memory_file(args_tuple):
                 return (True, output_path, False, memory, export_username, None)
             else:
                 # Image processing failed, copy original
-                shutil.copy2(media_path, output_path)
+                copy_file(media_path, output_path)
                 _update_memory_timestamps(output_path, memory)
                 return (True, output_path, False, memory, export_username, None)
         else:
             # Unknown file type with overlay - just copy
             output_path = os.path.join(output_dir, output_filename)
-            shutil.copy2(media_path, output_path)
+            copy_file(media_path, output_path)
             _update_memory_timestamps(output_path, memory)
             return (True, output_path, False, memory, export_username, None)
     else:
         # No overlay - just copy
         output_path = os.path.join(output_dir, output_filename)
-        shutil.copy2(media_path, output_path)
+        copy_file(media_path, output_path)
         _update_memory_timestamps(output_path, memory)
         # File needs batch EXIF processing
         return (True, output_path, False, memory, export_username, None)
@@ -547,8 +528,7 @@ def process_logic(
 
     # Load metadata
     logger.info(f"Loading metadata from {metadata_file}...")
-    with open(metadata_file, "r", encoding="utf-8") as f:
-        memories = json.load(f)
+    memories = SnapchatMemoriesProcessor.load_metadata(Path(metadata_file))
     logger.info(f"Found {len(memories)} memories to process")
 
     # Initialize banned files filter
@@ -624,13 +604,11 @@ def process_logic(
         full_media_path = os.path.join(raw_dir, "media", media_filename)
 
         # Skip secondary files based on dedup manifest (using hash-based lookup)
-        if dedup_manifest:
-            content_hash = compute_content_hash(full_media_path)
-            if not is_file_primary_by_hash(
-                dedup_manifest, content_hash, "Snapchat Memories"
-            ):
-                skipped_dedup += 1
-                continue
+        if SnapchatMemoriesProcessor.should_skip_for_dedup(
+            full_media_path, dedup_manifest, "Snapchat Memories"
+        ):
+            skipped_dedup += 1
+            continue
 
         file_ext = os.path.splitext(media_filename)[1].lower()
 
@@ -702,33 +680,17 @@ def process_logic(
     )
 
     # Phase 3: Correct file extensions based on actual content
-    if file_paths:
-        corrections = batch_correct_extensions([Path(p) for p in file_paths])
-        if corrections:
-            # Update file_paths and file_info with corrected paths
-            file_paths = [corrections.get(p, p) for p in file_paths]
-            file_info = [
-                (corrections.get(fp, fp), mem, eu) for fp, mem, eu in file_info
-            ]
+    file_paths, file_info = SnapchatMemoriesProcessor.correct_extensions_and_update_info(
+        file_paths, file_info, path_index=0
+    )
 
     # Phase 4: Batch process EXIF operations on non-MKV files
     exif_rebuilt_count = 0
     if file_paths:
         logger.info("Batch processing EXIF metadata...")
-
-        # Batch validate and rebuild
-        corrupted_files = batch_validate_exif(file_paths)
-        if corrupted_files:
-            logger.info(
-                f"Rebuilding {len(corrupted_files)} corrupted EXIF structures..."
-            )
-            batch_rebuild_exif(list(corrupted_files))
-            exif_rebuilt_count = len(corrupted_files)
-
-        # Batch read and write metadata
-        existing_metadata_map = batch_read_existing_metadata(file_paths)
-        requests = _build_metadata_requests(file_info)
-        batch_write_metadata_requests(requests, existing_metadata_map)
+        exif_rebuilt_count = SnapchatMemoriesProcessor.batch_process_exif(
+            file_paths, file_info, _build_metadata_requests
+        )
 
     # Handle failures - copy orphaned files and generate report
     failure_tracker.handle_failures(output_base_path)
@@ -749,3 +711,8 @@ def process_logic(
     logger.info("  - Track 0 (default): Video with overlay embedded")
     logger.info("  - Track 1: Original video without overlay")
     logger.info("  Switch tracks in VLC: Video > Video Track > Select track")
+
+
+def get_processor():
+    """Return processor class for auto-discovery."""
+    return SnapchatMemoriesProcessor

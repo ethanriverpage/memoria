@@ -3,7 +3,6 @@
 import json
 import logging
 import os
-import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -16,19 +15,14 @@ from common.dedup.description import (
     SERVICE_PHOTOS,
 )
 from common.dependency_checker import check_exiftool, print_exiftool_error
-from common.files.utils import batch_correct_extensions
-from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
+from common.files.utils import batch_correct_extensions, copy_file
+from common.dedup.service import save_dedup_metadata
 from common.dedup.hashing import (
-    compute_content_hash,
     is_live_photo_pair,
     LIVE_PHOTO_IMAGE_EXTENSIONS,
     LIVE_PHOTO_VIDEO_EXTENSIONS,
 )
 from common.media.exiftool import (
-    batch_validate_exif,
-    batch_rebuild_exif,
-    batch_read_existing_metadata,
-    batch_write_metadata_requests,
     DescriptionWriteSpec,
     GPSData,
     MetadataWriteRequest,
@@ -38,7 +32,6 @@ from common.output.logging import get_processor_logger
 from common.processing import (
     process_batches_parallel,
     print_processing_summary,
-    temp_processing_directory,
 )
 from common.utils import (
     ALL_MEDIA_EXTENSIONS,
@@ -256,11 +249,6 @@ class GooglePhotosProcessor(ProcessorBase):
             return False
 
 
-def get_processor():
-    """Return processor class for auto-discovery."""
-    return GooglePhotosProcessor
-
-
 def _clean_iso_timestamp(timestamp_str: str) -> str:
     """Remove timezone suffix from ISO 8601 timestamp for parsing."""
     if not timestamp_str:
@@ -366,7 +354,7 @@ def process_media_batch(batch_args):
             continue
 
         try:
-            shutil.copy2(media_path, output_path)
+            copy_file(media_path, output_path)
             file_paths.append(output_path)
             file_info.append((output_path, media_data, album_name, export_username))
         except Exception as e:
@@ -424,7 +412,9 @@ def process_logic(
         log.running_preprocessing()
 
         # Use context manager for temp directory with automatic cleanup
-        with temp_processing_directory(temp_dir, "gphotos") as temp_dir_path:
+        with GooglePhotosPreprocessor.temp_output_dir(
+            temp_dir, "gphotos"
+        ) as temp_dir_path:
             log.preprocessing_to(str(temp_dir_path))
 
             # Run preprocessing with final output directory for failure tracking
@@ -435,7 +425,8 @@ def process_logic(
                 workers=workers,
                 final_output_dir=final_output_path,
             )
-            preprocessor.process()
+            if not preprocessor.run():
+                return False
 
             log.preprocessing_done(str(temp_dir_path))
             _process_working_directory(
@@ -466,8 +457,7 @@ def _process_working_directory(
 
     # Load metadata
     log.loading_metadata(metadata_file)
-    with open(metadata_file, "r", encoding="utf-8") as f:
-        metadata_json = json.load(f)
+    metadata_json = GooglePhotosProcessor.load_metadata(Path(metadata_file))
 
     export_info = metadata_json.get("export_info", {})
     media_files = metadata_json.get("media_files", [])
@@ -486,13 +476,12 @@ def _process_working_directory(
             media_file = media_data.get("filename")
             if media_file:
                 full_path = os.path.join(media_dir, media_file)
-                content_hash = compute_content_hash(full_path)
-                if is_file_primary_by_hash(
-                    dedup_manifest, content_hash, "Google Photos"
+                if GooglePhotosProcessor.should_skip_for_dedup(
+                    full_path, dedup_manifest, "Google Photos"
                 ):
-                    filtered_media_files.append(media_data)
-                else:
                     skipped_secondary_files.append(full_path)
+                else:
+                    filtered_media_files.append(media_data)
         media_files = filtered_media_files
         skipped_count = original_count - len(media_files)
         log.skipped_secondary(skipped_count)
@@ -615,18 +604,9 @@ def _process_working_directory(
     exif_rebuilt_count = 0
     if file_paths:
         log.exif_batch_start()
-
-        # Validate and rebuild corrupted EXIF
-        corrupted_files = batch_validate_exif(file_paths)
-        if corrupted_files:
-            log.exif_rebuilding(len(corrupted_files))
-            batch_rebuild_exif(list(corrupted_files))
-            exif_rebuilt_count = len(corrupted_files)
-
-        # Batch read and write metadata
-        existing_metadata_map = batch_read_existing_metadata(file_paths)
-        requests = _build_metadata_requests(file_info)
-        batch_write_metadata_requests(requests, existing_metadata_map)
+        exif_rebuilt_count = GooglePhotosProcessor.batch_process_exif(
+            file_paths, file_info, _build_metadata_requests
+        )
         log.exif_written(len(file_info))
 
     # Save dedup references for skipped secondary files
@@ -646,3 +626,8 @@ def _process_working_directory(
         output_dir=output_dir,
         extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
     )
+
+
+def get_processor():
+    """Return processor class for auto-discovery."""
+    return GooglePhotosProcessor

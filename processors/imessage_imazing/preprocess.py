@@ -32,23 +32,13 @@ logger = logging.getLogger(__name__)
 # Standardized processor logger for consistent output
 log = get_processor_logger(__name__)
 
-# Media file extensions to process
-IMAGE_EXTENSIONS = {
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".heic",
-    ".heif",
-    ".tiff",
-    ".tif",
-    ".dng",
-    ".avif",
-}
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm", ".mkv", ".m4v"}
-AUDIO_EXTENSIONS = {".m4a", ".mp3", ".wav", ".aac", ".caf"}
-ALL_MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
+# Media file extensions - import from common (single source of truth)
+from common.utils import (
+    IMAGE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    AUDIO_EXTENSIONS,
+    ALL_EXTENSIONS as ALL_MEDIA_EXTENSIONS,
+)
 
 # Filename pattern for iMazing exports:
 # "YYYY-MM-DD HH MM SS - Contact Name - OriginalFile.ext"
@@ -135,7 +125,6 @@ class ImazingPreprocessor(PreprocessorBase):
     Attributes:
         export_path: Path to the iMazing export directory
         output_dir: Directory for processed output
-        content_hashes: Registry of file hashes for deduplication
     """
 
     def __init__(
@@ -144,6 +133,7 @@ class ImazingPreprocessor(PreprocessorBase):
         output_dir: Optional[Path] = None,
         workers: Optional[int] = None,
         owner_name: Optional[str] = None,
+        final_output_dir: Optional[Path] = None,
     ):
         """Initialize preprocessor.
 
@@ -152,6 +142,7 @@ class ImazingPreprocessor(PreprocessorBase):
             output_dir: Output directory for processed files
             workers: Number of parallel workers for hashing/copying (default: 8)
             owner_name: Override for device owner name
+            final_output_dir: Final output directory for failure tracking
         """
         # Handle default output_dir before calling super().__init__
         if output_dir is None:
@@ -162,7 +153,7 @@ class ImazingPreprocessor(PreprocessorBase):
             export_path=export_path,
             output_dir=output_dir,
             workers=workers,
-            final_output_dir=None,
+            final_output_dir=final_output_dir,
         )
 
         # Override media_dir to match expected name
@@ -410,6 +401,7 @@ class ImazingPreprocessor(PreprocessorBase):
         Returns:
             Tuple of (conversations dict, orphaned_media list)
         """
+
         # Sort files by parsed timestamp so oldest is processed first (becomes primary)
         def get_timestamp(file_path: Path) -> datetime:
             parsed = parse_imazing_filename(file_path.name)
@@ -428,7 +420,9 @@ class ImazingPreprocessor(PreprocessorBase):
 
             # Get additional info from CSV for context
             csv_timestamp = parsed["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
-            csv_info = self._lookup_csv_message(csv_timestamp, parsed["original_filename"])
+            csv_info = self._lookup_csv_message(
+                csv_timestamp, parsed["original_filename"]
+            )
 
             # Determine sender and is_sender
             conversation_name = parsed["conversation"]
@@ -461,11 +455,13 @@ class ImazingPreprocessor(PreprocessorBase):
                 "media_type": get_media_type(file_path),
             }
 
-            copy_tasks.append(CopyTask(
-                source_path=file_path,
-                dest_filename=file_path.name,
-                context=context,
-            ))
+            copy_tasks.append(
+                CopyTask(
+                    source_path=file_path,
+                    dest_filename=file_path.name,
+                    context=context,
+                )
+            )
 
         # Use copy_with_dedup for parallel hashing, deduplication, and copying
         self.media_dir.mkdir(parents=True, exist_ok=True)
@@ -521,16 +517,18 @@ class ImazingPreprocessor(PreprocessorBase):
 
                 # Add all occurrences to messages array
                 for ctx in merged_contexts:
-                    merged_message["messages"].append({
-                        "source_export": ctx.get("source_export"),
-                        "conversation_id": ctx.get("conversation_id"),
-                        "conversation_type": ctx.get("conversation_type"),
-                        "conversation_title": ctx.get("conversation_title"),
-                        "sender": ctx.get("sender"),
-                        "created": ctx.get("created"),
-                        "content": ctx.get("content"),
-                        "is_sender": ctx.get("is_sender"),
-                    })
+                    merged_message["messages"].append(
+                        {
+                            "source_export": ctx.get("source_export"),
+                            "conversation_id": ctx.get("conversation_id"),
+                            "conversation_type": ctx.get("conversation_type"),
+                            "conversation_title": ctx.get("conversation_title"),
+                            "sender": ctx.get("sender"),
+                            "created": ctx.get("created"),
+                            "content": ctx.get("content"),
+                            "is_sender": ctx.get("is_sender"),
+                        }
+                    )
 
                 conversations[conv_id]["messages"].append(merged_message)
                 conversations[conv_id]["message_count"] += 1
@@ -591,16 +589,14 @@ class ImazingPreprocessor(PreprocessorBase):
 
         return metadata
 
-    def process(self) -> bool:
-        """Run the preprocessing pipeline.
+    def process_export(self) -> bool:
+        """Platform-specific preprocessing logic.
+
+        Processes iMazing-format iMessage exports with flat file structure.
 
         Returns:
-            True if processing succeeded
+            True if processing succeeded, False otherwise
         """
-        log.preprocessor_start(
-            "iMazing iMessage", str(self.export_path), str(self.output_dir)
-        )
-
         # Phase 1: Load CSV message data for cross-reference
         log.logger.info("Loading CSV message data...")
         self._load_csv_messages()
@@ -641,12 +637,6 @@ class ImazingPreprocessor(PreprocessorBase):
 
         with open(self.metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
-
-        # Handle failures
-        self.failure_tracker.handle_failures(self.output_dir)
-
-        log.preprocessing_done(str(self.output_dir))
-        self.print_statistics()
 
         return True
 

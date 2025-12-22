@@ -25,6 +25,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from common.output.logging import setup_logging
+from common.utils import ALL_MEDIA_EXTENSIONS
 
 # Try to import tqdm for progress bars
 try:
@@ -439,28 +440,11 @@ class ExportComparator:
             return
 
         # Filter to only media files
-        media_extensions = {
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".gif",
-            ".mp4",
-            ".mov",
-            ".avi",
-            ".heic",
-            ".heif",
-            ".webp",
-            ".tiff",
-            ".tif",
-            ".3gp",
-            ".mkv",
-        }
-
         media_files = []
         for rel_path in sorted(common_files):
             file1 = files1[rel_path]
             ext = file1.suffix.lower()
-            if ext in media_extensions:
+            if ext in ALL_MEDIA_EXTENSIONS:
                 media_files.append((rel_path, file1, files2[rel_path]))
 
         if not media_files:

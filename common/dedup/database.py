@@ -257,9 +257,7 @@ class HashDatabase:
                 return True
             except sqlite3.IntegrityError:
                 # Duplicate entry (same content_hash + source_path)
-                logger.debug(
-                    f"Duplicate entry for {source_path} with hash {content_hash[:16]}..."
-                )
+                # Note: Caller should track duplicate counts if needed
                 return False
 
     def get_duplicates(self, content_hash: str) -> List[Dict[str, Any]]:

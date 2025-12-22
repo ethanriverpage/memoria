@@ -316,7 +316,7 @@ class TestInstaloaderOrphanDetection:
             output_dir=temp_output_dir,
             final_output_dir=temp_output_dir,
         )
-        preprocessor.process()
+        preprocessor.run()
 
         # Check that orphaned metadata was tracked
         assert len(preprocessor.failure_tracker.orphaned_metadata) >= 1
@@ -346,7 +346,7 @@ class TestInstaloaderOrphanDetection:
             output_dir=temp_output_dir,
             final_output_dir=temp_output_dir,
         )
-        preprocessor.process()
+        preprocessor.run()
 
         # Check that orphaned metadata was tracked
         assert len(preprocessor.failure_tracker.orphaned_metadata) >= 1
@@ -376,7 +376,7 @@ class TestInstaloaderOrphanDetection:
             output_dir=temp_output_dir,
             final_output_dir=temp_output_dir,
         )
-        preprocessor.process()
+        preprocessor.run()
 
         # No orphaned metadata should be tracked
         assert len(preprocessor.failure_tracker.orphaned_metadata) == 0

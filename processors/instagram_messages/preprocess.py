@@ -13,7 +13,6 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
-import argparse
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 
@@ -725,20 +724,15 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
         }
         print_preprocessing_stats("Preprocessing Stats", stats)
 
-    def process(self) -> bool:
-        """Main processing pipeline
+    def process_export(self) -> bool:
+        """Platform-specific preprocessing logic.
+
+        Processes all conversations, matching media files to messages
+        and performing deduplication.
 
         Returns:
-            True if preprocessing succeeded, False otherwise
+            True if processing succeeded, False otherwise
         """
-        log.preprocessor_start(
-            "Instagram Messages", str(self.export_path), str(self.output_dir)
-        )
-
-        # Validate export structure
-        if not self.validate_export():
-            return False
-
         # Build file catalog
         file_catalog = self.build_file_catalog()
 
@@ -751,69 +745,4 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
         # Save metadata
         self.save_metadata(conversations)
 
-        # Save log file
-        self.save_log()
-
-        # Handle failures (copy orphaned files, generate report)
-        self.failure_tracker.handle_failures(self.final_output_dir)
-
-        # Print statistics
-        self.print_statistics()
-
-        log.preprocessing_complete()
         return True
-
-
-def main():
-    """Main entry point"""
-    parser = argparse.ArgumentParser(
-        description="Preprocess Instagram messages export: organize media and create cleaned metadata",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Process in-place (creates media/ and metadata.json in export directory)
-  python modules/preprocess_files.py instagram-username-2025-10-07
-
-  # Process to a separate output directory
-  python modules/preprocess_files.py instagram-username-2025-10-07 -o processed/
-  
-  # Process with custom number of workers
-  python modules/preprocess_files.py instagram-username-2025-10-07 --workers 8
-        """,
-    )
-
-    parser.add_argument(
-        "export_directory",
-        type=str,
-        help="Path to Instagram export directory (contains your_instagram_activity/)",
-    )
-
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=str,
-        required=True,
-        help="Output directory for preprocessed files (required to prevent writing to exports)",
-    )
-
-    parser.add_argument(
-        "--workers",
-        "-w",
-        type=int,
-        default=None,
-        help="Number of parallel workers (default: CPU count - 1)",
-    )
-
-    args = parser.parse_args()
-
-    export_path = Path(args.export_directory)
-    output_path = Path(args.output) if args.output else None
-
-    preprocessor = InstagramMessagesPreprocessor(
-        export_path, output_path, workers=args.workers
-    )
-    preprocessor.process()
-
-
-if __name__ == "__main__":
-    main()

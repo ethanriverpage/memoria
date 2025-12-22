@@ -48,6 +48,32 @@ class TestGoogleVoiceConversations:
         # Check media file exists
         assert (calls_dir / "photo.jpg").exists()
 
+
+class TestGoogleVoiceFilenameMatching:
+    """Unit tests for Google Voice preprocessor attachment matching heuristics."""
+
+    def test_suffix_group_index_pattern_matches_disk_copy_variant(self, tmp_path):
+        """
+        Some exports encode attachment groups in the HTML src (e.g. "-10-1") while the
+        filesystem uses only the final index (e.g. "-1") and may add "(1)".
+        """
+        from processors.google_voice.preprocess import GoogleVoicePreprocessor
+
+        pre = GoogleVoicePreprocessor(export_path=tmp_path, output_dir=tmp_path / "out")
+
+        disk_name = (
+            "Catherine Hinojosa - Text - 2016-04-25T13_13_36Z-1(1).jpg"
+        )
+        file_catalog = {disk_name: tmp_path / disk_name}
+
+        media_src = "Catherine Hinojosa - Text - 2016-04-25T13_13_36Z-10-1"
+        result = pre.find_media_file(media_src, file_catalog)
+
+        assert result is not None
+        matched_filename, matched_path = result
+        assert matched_filename == disk_name
+        assert matched_path == file_catalog[disk_name]
+
     def test_text_only_conversation(
         self, google_voice_processor, temp_export_dir, temp_output_dir
     ):

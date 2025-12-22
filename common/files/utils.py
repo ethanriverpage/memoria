@@ -350,11 +350,6 @@ def batch_correct_extensions(
                 corrections[str(file_path)] = str(new_path)
                 corrected_count += 1
 
-                logger.info(
-                    f"Extension corrected: {file_path.name} -> {new_path.name} "
-                    f"(MIME: {mime})"
-                )
-
         except Exception as e:
             logger.debug(f"python-magic failed for {file_path.name}: {e}")
 

@@ -18,8 +18,6 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
-import sys
-import argparse
 from concurrent.futures import ThreadPoolExecutor
 
 from common.output.progress import PHASE_PREPROCESS, futures_progress
@@ -535,11 +533,13 @@ class InstaloaderPreprocessor(PreprocessorBase):
                     "timestamp": post.get("timestamp"),
                 }
 
-                copy_tasks.append(CopyTask(
-                    source_path=source_path,
-                    dest_filename=filename,
-                    context=context,
-                ))
+                copy_tasks.append(
+                    CopyTask(
+                        source_path=source_path,
+                        dest_filename=filename,
+                        context=context,
+                    )
+                )
 
         # Phase 2: Copy files with deduplication
         logger.info("Copying %d media files with deduplication...", len(copy_tasks))
@@ -604,7 +604,7 @@ class InstaloaderPreprocessor(PreprocessorBase):
             logger.info("Saved metadata to %s", self.metadata_file)
         except Exception as e:
             logger.error(f"Failed to save metadata: {e}")
-            sys.exit(1)
+            raise
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -620,16 +620,15 @@ class InstaloaderPreprocessor(PreprocessorBase):
         }
         print_preprocessing_stats("Preprocessing Stats", stats)
 
-    def process(self) -> bool:
-        """Main processing pipeline"""
-        logger.info("Starting Instaloader Preprocessing")
-        logger.info("Export path: %s", self.export_path)
-        logger.info("Output path: %s", self.output_dir)
+    def process_export(self) -> bool:
+        """Platform-specific preprocessing logic.
 
-        # Validate export structure
-        if not self.validate_export():
-            return False
+        Processes all posts, matching media files to metadata
+        and performing deduplication.
 
+        Returns:
+            True if processing succeeded, False otherwise
+        """
         # Build file catalog
         catalog = self.build_file_catalog()
 
@@ -642,69 +641,4 @@ class InstaloaderPreprocessor(PreprocessorBase):
         # Save metadata
         self.save_metadata(metadata)
 
-        # Save log file
-        self.save_log()
-
-        # Handle failures (copy orphaned files, generate report)
-        self.failure_tracker.handle_failures(self.final_output_dir)
-
-        # Print statistics
-        self.print_statistics()
-
-        logger.info("Preprocessing complete!")
         return True
-
-
-def main():
-    """Main entry point"""
-    parser = argparse.ArgumentParser(
-        description="Preprocess Instaloader scrape data: organize media and create cleaned metadata",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Process in-place (creates media/ and metadata.json in export directory)
-  python preprocess_files.py instaloader-username-2021-07-25
-
-  # Process to a separate output directory
-  python preprocess_files.py instaloader-username-2021-07-25 -o processed/
-  
-  # Process with custom number of workers
-  python preprocess_files.py instaloader-username-2021-07-25 --workers 8
-        """,
-    )
-
-    parser.add_argument(
-        "export_directory",
-        type=str,
-        help="Path to Instaloader scrape directory",
-    )
-
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=str,
-        required=True,
-        help="Output directory for preprocessed files (required to prevent writing to exports)",
-    )
-
-    parser.add_argument(
-        "--workers",
-        "-w",
-        type=int,
-        default=None,
-        help="Number of parallel workers (default: CPU count - 1)",
-    )
-
-    args = parser.parse_args()
-
-    export_path = Path(args.export_directory)
-    output_path = Path(args.output) if args.output else None
-
-    preprocessor = InstaloaderPreprocessor(
-        export_path, output_path, workers=args.workers
-    )
-    preprocessor.process()
-
-
-if __name__ == "__main__":
-    main()

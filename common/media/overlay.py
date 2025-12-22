@@ -588,11 +588,6 @@ def _pass2_apply_overlay_impl(
             stdin=subprocess.DEVNULL,
         )
 
-        if result.stderr:
-            logger.debug(
-                f"[{rotated_video_path.name}] Pass 2 ffmpeg stderr:\n{result.stderr}"
-            )
-
         if result.returncode != 0:
             temp_with_overlay_path.unlink(missing_ok=True)
             raise RuntimeError(f"Pass 2 overlay application failed: {result.stderr}")
@@ -692,11 +687,6 @@ def _pass3_combine_tracks(with_overlay_path: Path, original_video_path: Path) ->
         check=False,
         stdin=subprocess.DEVNULL,
     )
-
-    if result.stderr:
-        logger.debug(
-            f"[{with_overlay_path.name}] Pass 3 ffmpeg stderr:\n{result.stderr}"
-        )
 
     if result.returncode != 0:
         temp_dual_path.unlink(missing_ok=True)
@@ -908,9 +898,6 @@ def _pass4_embed_metadata(
         check=False,
         stdin=subprocess.DEVNULL,
     )
-
-    if result.stderr:
-        logger.debug(f"[{video_path.name}] Pass 4 ffmpeg stderr:\n{result.stderr}")
 
     if result.returncode != 0:
         logger.error(

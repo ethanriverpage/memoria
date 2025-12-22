@@ -211,7 +211,6 @@ class IMessagePreprocessor(PreprocessorBase):
         export_paths: List of export directories to process
         output_dir: Directory for processed output
         handle_to_name: Mapping of handle IDs to display names
-        content_hashes: Registry of file hashes for deduplication
     """
 
     def __init__(
@@ -220,6 +219,7 @@ class IMessagePreprocessor(PreprocessorBase):
         output_dir: Optional[Path] = None,
         workers: Optional[int] = None,
         owner_name: Optional[str] = None,
+        final_output_dir: Optional[Path] = None,
     ):
         """Initialize preprocessor.
 
@@ -228,6 +228,7 @@ class IMessagePreprocessor(PreprocessorBase):
             output_dir: Output directory for processed files
             workers: Number of parallel workers for hashing/copying (default: 8)
             owner_name: Override for device owner name
+            final_output_dir: Final output directory for failure tracking
         """
         # Normalize to list for unified handling
         if isinstance(export_paths, Path):
@@ -244,7 +245,7 @@ class IMessagePreprocessor(PreprocessorBase):
             export_path=export_paths_list[0],
             output_dir=output_dir,
             workers=workers,
-            final_output_dir=None,
+            final_output_dir=final_output_dir,
         )
 
         # Store all export paths (multi-export support)
@@ -596,12 +597,13 @@ class IMessagePreprocessor(PreprocessorBase):
 
         attachments = []
         export_type = self._detect_export_type(export_path)
+        attachments_not_found = 0
 
         for row in rows:
             # Resolve file path
             file_path = self._resolve_attachment_path(row["filename"], export_path)
             if not file_path:
-                logger.debug(f"Attachment not found: {row['filename']}")
+                attachments_not_found += 1
                 # Track as orphaned metadata (database entry with missing file)
                 self.failure_tracker.add_orphaned_metadata(
                     metadata_entry={
@@ -694,6 +696,10 @@ class IMessagePreprocessor(PreprocessorBase):
                     self.stats["live_photos"] += 1
 
         conn.close()
+
+        if attachments_not_found > 0:
+            logger.debug(f"Attachments not found: {attachments_not_found}")
+
         return attachments
 
     def _deduplicate_and_organize(self, attachments: List[Dict]) -> Dict[str, Dict]:
@@ -733,11 +739,13 @@ class IMessagePreprocessor(PreprocessorBase):
                 "is_live_photo_video": att.get("is_live_photo_video", False),
             }
 
-            copy_tasks.append(CopyTask(
-                source_path=source_path,
-                dest_filename=dest_filename,
-                context=context,
-            ))
+            copy_tasks.append(
+                CopyTask(
+                    source_path=source_path,
+                    dest_filename=dest_filename,
+                    context=context,
+                )
+            )
 
         self.stats["total_attachments"] = len(copy_tasks)
 
@@ -812,16 +820,18 @@ class IMessagePreprocessor(PreprocessorBase):
 
                 # Add all occurrences to messages array
                 for ctx in merged_contexts:
-                    merged_message["messages"].append({
-                        "source_export": ctx.get("source_export"),
-                        "conversation_id": ctx.get("conversation_id"),
-                        "conversation_type": ctx.get("conversation_type"),
-                        "conversation_title": ctx.get("conversation_title"),
-                        "sender": ctx.get("sender"),
-                        "created": ctx.get("created"),
-                        "content": ctx.get("content"),
-                        "is_sender": ctx.get("is_sender"),
-                    })
+                    merged_message["messages"].append(
+                        {
+                            "source_export": ctx.get("source_export"),
+                            "conversation_id": ctx.get("conversation_id"),
+                            "conversation_type": ctx.get("conversation_type"),
+                            "conversation_title": ctx.get("conversation_title"),
+                            "sender": ctx.get("sender"),
+                            "created": ctx.get("created"),
+                            "content": ctx.get("content"),
+                            "is_sender": ctx.get("is_sender"),
+                        }
+                    )
 
                 conversations[primary_conv_id]["messages"].append(merged_message)
                 conversations[primary_conv_id]["message_count"] += 1
@@ -980,16 +990,15 @@ class IMessagePreprocessor(PreprocessorBase):
 
         return metadata
 
-    def process(self) -> bool:
-        """Run the preprocessing pipeline.
+    def process_export(self) -> bool:
+        """Platform-specific preprocessing logic.
+
+        Processes iMessage exports, handling multiple export directories,
+        deduplication, and Live Photo pairs.
 
         Returns:
-            True if processing succeeded
+            True if processing succeeded, False otherwise
         """
-        logger.info(
-            f"Starting iMessage preprocessing for {len(self.export_paths)} export(s)"
-        )
-
         # Phase 1: Load all contacts
         for export_path in progress_bar(
             self.export_paths, PHASE_PREPROCESS, "Loading contacts", unit="export"
@@ -1045,12 +1054,6 @@ class IMessagePreprocessor(PreprocessorBase):
 
         with open(self.metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
-
-        # Handle failures
-        self.failure_tracker.handle_failures(self.output_dir)
-
-        logger.info(f"Preprocessing complete. Output: {self.output_dir}")
-        self.print_statistics()
 
         return True
 

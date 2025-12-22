@@ -258,10 +258,12 @@ def batch_validate_exif(file_paths: List[Optional[str]]) -> Set[str]:
                 if current_file and ("Warning" in line or "minor" in line.lower()):
                     if current_file not in corrupted_files:
                         corrupted_files.add(current_file)
-                        logger.debug(f"Corrupted EXIF: {short_path(current_file)}")
 
         except Exception as e:
             logger.warning(f"Failed to batch validate EXIF for chunk: {e}")
+
+    if corrupted_files:
+        logger.debug(f"Files with corrupted EXIF: {len(corrupted_files)}")
 
     return corrupted_files
 

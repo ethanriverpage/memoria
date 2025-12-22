@@ -40,7 +40,7 @@ IMAGE_EXTENSIONS = {
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm", ".mkv", ".m4v"}
 
 # Supported audio extensions (for messaging processors)
-AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a"}
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".caf"}
 
 # Combined extension sets for convenience
 ALL_MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS

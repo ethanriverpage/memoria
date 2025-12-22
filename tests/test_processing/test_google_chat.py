@@ -70,6 +70,60 @@ class TestGoogleChatConversations:
         assert (dm_dir / "messages.json").exists()
         assert (dm_dir / "document.png").exists()
 
+
+class TestGoogleChatFilenameMatching:
+    """Unit tests for Google Chat preprocessor attachment matching heuristics."""
+
+    def test_common_prefix_match_handles_copy_suffix_and_tail_differences(
+        self, tmp_path
+    ):
+        """
+        Real exports sometimes include long File-* names where the export_name and filesystem
+        filename differ in the tail (and the filesystem may add "(1)").
+
+        We should still match using a strong common-prefix heuristic.
+        """
+        from processors.google_chat.preprocess import GoogleChatPreprocessor
+
+        pre = GoogleChatPreprocessor(export_path=tmp_path, output_dir=tmp_path / "out")
+
+        export_name = "File-10356259_299725040193726_4259086571886135715_n.jpg"
+        disk_name = "File-10356259_299725040193726_42590865718861357(1).jpg"
+
+        file_catalog = {disk_name: tmp_path / disk_name}
+
+        result = pre.find_media_file(export_name, file_catalog)
+        assert result is not None
+        matched_filename, matched_path = result
+        assert matched_filename == disk_name
+        assert matched_path == file_catalog[disk_name]
+
+    def test_copy_suffix_allocation_is_stable_by_message_order(self, tmp_path):
+        """
+        If multiple messages reference the same export_name (no copy suffix), but the
+        filesystem has multiple copies (base, (1), (2)), we must allocate them in order:
+        base -> (1) -> (2).
+        """
+        from processors.google_chat.preprocess import GoogleChatPreprocessor
+
+        pre = GoogleChatPreprocessor(export_path=tmp_path, output_dir=tmp_path / "out")
+
+        export_name = "File-2017-06-03.jpg"
+        file_catalog = {
+            "File-2017-06-03.jpg": tmp_path / "File-2017-06-03.jpg",
+            "File-2017-06-03(1).jpg": tmp_path / "File-2017-06-03(1).jpg",
+            "File-2017-06-03(2).jpg": tmp_path / "File-2017-06-03(2).jpg",
+        }
+
+        r1 = pre.find_media_file(export_name, file_catalog)
+        r2 = pre.find_media_file(export_name, file_catalog)
+        r3 = pre.find_media_file(export_name, file_catalog)
+
+        assert r1 is not None and r2 is not None and r3 is not None
+        assert r1[0] == "File-2017-06-03.jpg"
+        assert r2[0] == "File-2017-06-03(1).jpg"
+        assert r3[0] == "File-2017-06-03(2).jpg"
+
     def test_conversation_without_attachments(
         self, google_chat_processor, temp_export_dir, temp_output_dir
     ):
