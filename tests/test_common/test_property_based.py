@@ -11,13 +11,10 @@ Tests cover:
 - Path handling robustness
 """
 
-import shutil
 import string
 import tempfile
 from pathlib import Path
-from typing import Optional
 
-import pytest
 from hypothesis import given, assume, settings, strategies as st, HealthCheck
 
 from common.utils import sanitize_filename, FilenameGenerator

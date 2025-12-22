@@ -879,9 +879,9 @@ class IMessagePreprocessor(PreprocessorBase):
         # Build set of processed file paths (resolved paths from database)
         processed_paths: set = set()
         for attachment in processed_attachments:
-            source_path = attachment.get("source_path")
-            if source_path:
-                processed_paths.add(Path(source_path).resolve())
+            resolved_path = attachment.get("resolved_path")
+            if resolved_path:
+                processed_paths.add(Path(resolved_path).resolve())
 
         orphaned_media: List[Dict] = []
         orphaned_count = 0

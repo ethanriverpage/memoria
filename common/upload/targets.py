@@ -4,10 +4,19 @@ Build upload targets (path + album name) based on processor OutputInfo.
 
 Uses the processor's OutputInfo to build consistent Platform/User/Service
 album names that match the output directory structure.
+
+Album naming follows the description.py format:
+    {Platform}/{username}[/{service}]
+
+Examples:
+    Google/john.doe@gmail.com/photos
+    Instagram/johndoe/messages
+    iMessage/mac
+    Discord/johndoe
 """
 
 from pathlib import Path
-from typing import List, Tuple, Union, TYPE_CHECKING
+from typing import List, Optional, Tuple, Union, TYPE_CHECKING
 
 from common.output.paths import OutputInfo
 from common.utils import extract_username_from_export_dir
@@ -15,9 +24,23 @@ from common.utils import extract_username_from_export_dir
 if TYPE_CHECKING:
     from processors.base import ProcessorBase
 
+# Processor name that requires special subfolder handling
+_INSTAGRAM_PUBLIC_MEDIA_NAME = "Instagram Public Media"
+
 
 def _ig_public_media_targets(output_base: Path, username: str) -> List[Tuple[str, str]]:
-    """Instagram public media: per-subfolder albums under Instagram/{username}/*"""
+    """Instagram public media: per-subfolder albums under Instagram/{username}/*
+
+    This processor outputs to multiple service subfolders (posts, stories, reels, etc.)
+    and each subfolder should be uploaded to a separate album.
+
+    Args:
+        output_base: Base output directory for the processor.
+        username: Extracted username from export directory.
+
+    Returns:
+        List of (path, album) tuples for each existing subfolder.
+    """
     targets: List[Tuple[str, str]] = []
     # Expected subfolders - each becomes its own service
     subfolders = [
@@ -43,6 +66,8 @@ def build_upload_targets(
 ) -> List[Tuple[str, str]]:
     """Build upload targets using processor's OutputInfo.
 
+    Album names follow the description.py format: Platform/username[/service]
+
     Args:
         processor: Processor instance, OutputInfo, or processor name (deprecated)
         input_dir: Path to export directory (for username extraction)
@@ -53,6 +78,9 @@ def build_upload_targets(
     """
     out_base = Path(output_base)
 
+    # Track processor name for special handling
+    processor_name: Optional[str] = None
+
     # Get OutputInfo from processor
     if isinstance(processor, OutputInfo):
         output_info = processor
@@ -61,14 +89,18 @@ def build_upload_targets(
         # Fall back to returning the base path with no album
         return [(str(out_base), "")]
     else:
-        # Processor instance
+        # Processor instance - get both name and output info
+        processor_name = processor.get_name()
         output_info = processor.get_output_info()
 
     # Extract username using the prefix from OutputInfo
     username = extract_username_from_export_dir(input_dir, output_info.username_prefix)
 
     # Handle Instagram Public Media specially (has nested subfolder structure)
-    if output_info.platform == "Instagram" and output_info.service == "posts":
+    # Note: Only apply to "Instagram Public Media" processor, NOT "Instaloader"
+    # Instagram Public Media outputs to public-media/{service} subfolders
+    # while Instaloader outputs directly to posts/
+    if processor_name == _INSTAGRAM_PUBLIC_MEDIA_NAME:
         return _ig_public_media_targets(out_base, username)
 
     # Build album name: Platform/username[/service]

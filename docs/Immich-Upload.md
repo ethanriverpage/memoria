@@ -91,23 +91,38 @@ Upload previously processed exports to Immich without re-processing.
 
 ### Usage
 
+**Recommended (scans Platform/Username/Service structure):**
+
+```bash
+./memoria.py --upload-only <processed_output_dir>
+```
+
+**Legacy (uses original export for processor detection):**
+
 ```bash
 ./memoria.py <original_export_dir> --upload-only <processed_output_dir>
 ```
 
 #### Arguments
 
-- `<original_export_dir>`: Original unprocessed export (for processor detection and username extraction)
-- `--upload-only <processed_output_dir>`: Path to processed output directory
+- `--upload-only <processed_output_dir>`: Path to processed output directory (required)
+- `<original_export_dir>`: Optional original export for legacy processor detection
 
 #### Requirements
 
 - Valid Immich configuration (URL and API key)
-- Original export directory must exist
-- Processed output directory must exist
+- Processed output directory must exist with Platform/Username/Service structure
 - Cannot be used with `--originals` or `--skip-upload`
 
 ### How It Works
+
+**New mode (recommended for cross-processor dedup outputs):**
+
+1. Scans the processed output directory for Platform/Username/Service structure
+2. Builds album names directly from the directory structure
+3. Uploads each discovered target with the correct album name
+
+**Legacy mode (when original export is provided):**
 
 1. Detects which processor(s) match the original export structure
 2. Maps processors to their expected output subdirectories
@@ -117,25 +132,51 @@ Upload previously processed exports to Immich without re-processing.
 ### Examples
 
 ```bash
-# Original processing
-./memoria.py instagram-johndoe-20251027 -o /mnt/media/processed/output1
+# Process with cross-processor dedup
+./memoria.py instagram-johndoe-20251027 -o /mnt/media/processed
 
-# Later, upload-only mode
+# Later, upload using directory structure scanning (recommended)
+./memoria.py --upload-only /mnt/media/processed
+
+# The above scans the structure and finds:
+#   /mnt/media/processed/Instagram/johndoe/messages -> Instagram/johndoe/messages
+#   /mnt/media/processed/Instagram/johndoe/posts    -> Instagram/johndoe/posts
+```
+
+```bash
+# Legacy mode with original export for processor detection
 ./memoria.py instagram-johndoe-20251027 --upload-only /mnt/media/processed/output1
+```
+
+### Directory Structure
+
+Upload-only mode expects a Platform/Username/Service directory structure:
+
+```
+processed_output/
+  Google/
+    johndoe/
+      photos/     -> Album: Google/johndoe/photos
+      chat/       -> Album: Google/johndoe/chat
+  Instagram/
+    janedoe/
+      messages/   -> Album: Instagram/janedoe/messages
+      posts/      -> Album: Instagram/janedoe/posts
+  Discord/
+    user123/      -> Album: Discord/user123
 ```
 
 ### Troubleshooting Upload-Only Mode
 
-**"No processors matched original export directory"**
+**"No Platform/Username/Service structure found"**
+
+- Verify the processed output has the expected structure (Platform/username/service)
+- Check that platform names are recognized: Google, Instagram, Snapchat, Discord, iMessage
+
+**"No processors matched original export directory"** (legacy mode)
 
 - Ensure directory is the actual original export (not processed output)
 - Verify export structure matches a supported format
-
-**"Expected output directory does not exist"**
-
-- Processor may have failed during original processing
-- Output structure may have been manually modified
-- Wrong processed output directory specified
 
 **"Upload-only mode requires valid Immich configuration"**
 

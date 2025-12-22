@@ -1499,6 +1499,87 @@ def get_merged_description_for_file(
     return None
 
 
+def get_secondary_sources_for_hash(
+    manifest: Dict[str, Any],
+    content_hash: str,
+    primary_processor: str,
+) -> List[SourceEntry]:
+    """Get deduplicated secondary sources for a content hash.
+
+    Looks up the duplicate group by content hash and returns unique
+    (processor, username) combinations, excluding duplicates from the
+    same processor/username as the primary.
+
+    Args:
+        manifest: Deduplication manifest.
+        content_hash: Content hash to look up.
+        primary_processor: Processor name of the primary file (to exclude
+            same-processor duplicates from appearing as secondary sources).
+
+    Returns:
+        List of SourceEntry objects for unique secondary sources.
+    """
+    duplicates = manifest.get("duplicates", {})
+
+    # Look up by content hash (exact match groups use hash as key)
+    group = duplicates.get(content_hash)
+
+    # Also check perceptual groups if not found
+    if group is None:
+        for key, grp in duplicates.items():
+            if key.startswith("perceptual_"):
+                primary = grp.get("primary", {})
+                if primary.get("content_hash") == content_hash:
+                    group = grp
+                    break
+                # Check secondaries too
+                for sec in grp.get("secondary", []):
+                    if sec.get("content_hash") == content_hash:
+                        group = grp
+                        break
+                if group:
+                    break
+
+    if group is None:
+        return []
+
+    # Get primary info for deduplication
+    primary = group.get("primary", {})
+    primary_key = (primary.get("processor", ""), "")  # Primary has no username in manifest
+
+    # Deduplicate secondary sources by (processor, username)
+    # Only include sources from different processors than the primary
+    seen = set()
+    seen.add((primary_processor, ""))  # Exclude primary processor entirely
+    unique_entries = []
+
+    for sec in group.get("secondary", []):
+        sec_processor = sec.get("processor", "Unknown")
+        sec_context = sec.get("context", {})
+        sec_username = sec_context.get("username", "")
+
+        # Create dedup key - for non-messaging processors, just use processor name
+        dedup_key = (sec_processor, sec_username)
+
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+
+        # Skip same processor as primary (e.g., multiple Google Photos albums)
+        if sec_processor == primary_processor:
+            continue
+
+        # Create source entry from context
+        entry = create_source_entry(
+            processor=sec_processor,
+            metadata=sec_context,
+            is_primary=False,
+        )
+        unique_entries.append(entry)
+
+    return unique_entries
+
+
 def get_duplicate_group_for_file(
     manifest: Dict[str, Any],
     source_path: str,

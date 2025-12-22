@@ -235,6 +235,7 @@ class ProcessorBase(ABC):
         file_paths: List[str],
         file_info: List[Tuple],
         metadata_request_builder: Callable[[List[Tuple]], List],
+        dedup_manifest: Optional[Dict[str, Any]] = None,
     ) -> int:
         """Batch validate, rebuild, and write EXIF metadata.
 
@@ -249,6 +250,8 @@ class ProcessorBase(ABC):
             file_info: List of tuples containing file metadata for building requests.
             metadata_request_builder: Callable that takes file_info and returns
                 a list of MetadataWriteRequest objects.
+            dedup_manifest: Optional deduplication manifest for merging descriptions
+                from cross-processor duplicates.
 
         Returns:
             Count of files with rebuilt EXIF structures.
@@ -289,6 +292,6 @@ class ProcessorBase(ABC):
 
         # Build and write metadata requests
         requests = metadata_request_builder(file_info)
-        batch_write_metadata_requests(requests, existing_metadata_map)
+        batch_write_metadata_requests(requests, existing_metadata_map, dedup_manifest)
 
         return exif_rebuilt_count

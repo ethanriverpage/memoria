@@ -11,7 +11,7 @@ This module provides:
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type
+from typing import Dict, List, Optional, Type
 
 import pytest
 

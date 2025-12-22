@@ -12,12 +12,8 @@ Categories:
 - Resource limits
 """
 
-import json
 import os
-import tempfile
 from pathlib import Path
-from typing import Any, Dict
-from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -211,7 +207,7 @@ class TestFilesystemEdgeCases:
         from tests.fixtures.media_samples import write_media_file
 
         upper = tmp_path / "photo.JPG"
-        mixed = tmp_path / "photo.JpG"
+        _mixed = tmp_path / "photo.JpG"  # noqa: F841 - Reserved for mixed-case testing
         write_media_file(upper, "jpeg")
 
         # Create another file to avoid collision

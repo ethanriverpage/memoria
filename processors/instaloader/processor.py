@@ -6,12 +6,10 @@ It is NOT an official Instagram export format - it processes scrape data from th
 Handles renaming media files, embedding metadata, and updating filesystem timestamps.
 """
 
-import json
 import logging
 import multiprocessing
 import os
 import re
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -27,7 +25,7 @@ from common.dedup.description import (
     SERVICE_REELS,
 )
 from common.output.console import console
-from common.files.utils import batch_correct_extensions, copy_file, short_path
+from common.files.utils import batch_correct_extensions, copy_file
 from common.processing import print_processing_summary
 from common.output.progress import PHASE_PROCESS, progress_bar
 from processors.instaloader.preprocess import InstaloaderPreprocessor
@@ -531,7 +529,7 @@ def process_logic(
         if file_paths:
             logger.info("Batch processing EXIF metadata...")
             exif_rebuilt_count = InstaloaderProcessor.batch_process_exif(
-                file_paths, file_info, _build_metadata_requests
+                file_paths, file_info, _build_metadata_requests, dedup_manifest
             )
             logger.info(f"EXIF metadata written for {len(file_info)} files")
 

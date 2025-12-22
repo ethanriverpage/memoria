@@ -90,6 +90,38 @@ def extract_username_from_export_dir(input_dir: str, prefix: str) -> str:
     return result if result else "unknown"
 
 
+# Unicode quote characters to normalize to ASCII equivalents
+_QUOTE_REPLACEMENTS = {
+    "\u2018": "'",  # LEFT SINGLE QUOTATION MARK
+    "\u2019": "'",  # RIGHT SINGLE QUOTATION MARK
+    "\u201C": '"',  # LEFT DOUBLE QUOTATION MARK
+    "\u201D": '"',  # RIGHT DOUBLE QUOTATION MARK
+    "\u2032": "'",  # PRIME (single)
+    "\u2033": '"',  # DOUBLE PRIME
+}
+
+
+def normalize_text(text: str) -> str:
+    """Normalize Unicode characters in text to ASCII equivalents.
+
+    Replaces common "smart" or "curly" quotes with standard ASCII quotes.
+    This ensures consistent text storage and display across systems.
+
+    Args:
+        text: The input text to normalize.
+
+    Returns:
+        Text with Unicode quotes replaced by ASCII equivalents.
+    """
+    if not text:
+        return text
+
+    for unicode_char, ascii_char in _QUOTE_REPLACEMENTS.items():
+        text = text.replace(unicode_char, ascii_char)
+
+    return text
+
+
 def sanitize_filename(name: str, max_length: int = 50) -> str:
     """Sanitize a string for safe use in filenames."""
     # Replace whitespace with underscores

@@ -520,7 +520,7 @@ def process_logic(
         if file_paths:
             logger.info("Batch processing EXIF metadata...")
             exif_rebuilt_count = GoogleVoiceProcessor.batch_process_exif(
-                file_paths, file_info, _build_metadata_requests
+                file_paths, file_info, _build_metadata_requests, dedup_manifest
             )
             logger.info(f"EXIF metadata written for {len(file_info)} files")
 

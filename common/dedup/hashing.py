@@ -43,7 +43,7 @@ if PERCEPTION_AVAILABLE:
     try:
         from perception import tools
 
-        tools.set_backend("PIL")
+        tools.set_backend("PIL")  # type: ignore[attr-defined]
     except (ImportError, AttributeError):
         # Older versions may not have set_backend or may use different config
         pass
@@ -161,7 +161,8 @@ def compute_image_hash(
 
             # perception returns base64-encoded hashes; convert to hex for
             # compatibility with existing hamming_distance/hash_similarity functions
-            hash_bytes = base64.b64decode(hash_b64)
+            # perception's type stubs are imprecise - compute() returns str at runtime
+            hash_bytes = base64.b64decode(str(hash_b64))
             return hash_bytes.hex()
 
     except Exception as e:
@@ -236,7 +237,8 @@ def compute_image_hash_with_dims(
 
             # perception returns base64-encoded hashes; convert to hex for
             # compatibility with existing hamming_distance/hash_similarity functions
-            hash_bytes = base64.b64decode(hash_b64)
+            # perception's type stubs are imprecise - compute() returns str at runtime
+            hash_bytes = base64.b64decode(str(hash_b64))
             return (hash_bytes.hex(), original_dimensions)
 
     except Exception as e:

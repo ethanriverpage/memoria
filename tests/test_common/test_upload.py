@@ -384,6 +384,85 @@ class TestInstagramPublicMediaTargets:
             assert f"Instagram/testuser/{folder}" in albums
 
 
+class TestInstaloaderVsInstagramPublicMedia:
+    """Tests for proper differentiation between Instaloader and Instagram Public Media."""
+
+    def test_instaloader_gets_single_posts_album(self, tmp_path: Path) -> None:
+        """Instaloader should get a single Instagram/{username}/posts album."""
+        from unittest.mock import MagicMock
+
+        # Mock an Instaloader processor
+        mock_processor = MagicMock()
+        mock_processor.get_name.return_value = "Instaloader"
+        mock_processor.get_output_info.return_value = OutputInfo(
+            platform="Instagram",
+            service="posts",
+            username_prefix="instagram",
+        )
+
+        targets = build_upload_targets(
+            mock_processor,
+            input_dir="instagram-testuser-20240101",
+            output_base=str(tmp_path),
+        )
+
+        assert len(targets) == 1
+        path, album = targets[0]
+        assert album == "Instagram/testuser/posts"
+
+    def test_instagram_public_media_uses_subfolders(self, tmp_path: Path) -> None:
+        """Instagram Public Media should use per-subfolder albums."""
+        from unittest.mock import MagicMock
+
+        # Create some subfolders
+        (tmp_path / "posts").mkdir()
+        (tmp_path / "stories").mkdir()
+
+        # Mock an Instagram Public Media processor
+        mock_processor = MagicMock()
+        mock_processor.get_name.return_value = "Instagram Public Media"
+        mock_processor.get_output_info.return_value = OutputInfo(
+            platform="Instagram",
+            service="posts",
+            username_prefix="instagram",
+        )
+
+        targets = build_upload_targets(
+            mock_processor,
+            input_dir="instagram-testuser-20240101",
+            output_base=str(tmp_path),
+        )
+
+        # Should have targets for each subfolder
+        assert len(targets) == 2
+        albums = {album for _, album in targets}
+        assert "Instagram/testuser/posts" in albums
+        assert "Instagram/testuser/stories" in albums
+
+    def test_output_info_alone_does_not_trigger_subfolders(self, tmp_path: Path) -> None:
+        """OutputInfo alone (without processor name) should not trigger subfolder logic."""
+        # Create subfolders that would match Instagram Public Media pattern
+        (tmp_path / "posts").mkdir()
+        (tmp_path / "stories").mkdir()
+
+        # Use OutputInfo directly (no processor name available)
+        output_info = OutputInfo(
+            platform="Instagram",
+            service="posts",
+            username_prefix="instagram",
+        )
+
+        targets = build_upload_targets(
+            output_info,
+            input_dir="instagram-testuser-20240101",
+            output_base=str(tmp_path),
+        )
+
+        # Should get single album (can't distinguish without processor name)
+        assert len(targets) == 1
+        assert targets[0][1] == "Instagram/testuser/posts"
+
+
 class TestIntegration:
     """Integration tests combining multiple upload functions."""
 

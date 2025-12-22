@@ -12,9 +12,7 @@ Tests cover:
 
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from typing import Optional
 
-import pytest
 
 from common.media.encoder import (
     VideoEncoder,

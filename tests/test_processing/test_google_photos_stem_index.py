@@ -90,7 +90,7 @@ class TestStemIndexConstruction:
 
         # Cleaned stem without trailing dash should also be indexed
         # The stem without extension for trailing chars matcher
-        has_cleaned = any(
+        _has_cleaned = any(  # noqa: F841 - Verified via stem_index length check
             "photo_with_trailing" in key and not key.endswith("-")
             for key in stem_index.keys()
         )
@@ -358,4 +358,122 @@ class TestStemIndexPerformance:
 
         assert result is not None
         assert "IMG_0500" in str(result)
+
+
+class TestEditedFileMatching:
+    """Tests for matching -edited files to their original metadata."""
+
+    @pytest.fixture
+    def preprocessor(self, tmp_path):
+        """Create a GooglePhotosPreprocessor instance for testing."""
+        from processors.google_photos.preprocess import GooglePhotosPreprocessor
+
+        return GooglePhotosPreprocessor(
+            export_path=tmp_path,
+            output_dir=tmp_path / "out",
+        )
+
+    @pytest.fixture
+    def album_with_edited_files(self, tmp_path) -> Path:
+        """Create an album with original and edited versions of files."""
+        album_dir = tmp_path / "Edited Photos Album"
+        album_dir.mkdir()
+
+        # Create original file and its metadata
+        write_media_file(album_dir / "IMG_6205.JPG", "jpeg")
+        metadata = {"title": "IMG_6205.JPG", "photoTakenTime": {"timestamp": "1609459200"}}
+        (album_dir / "IMG_6205.JPG.supplemental-metadata.json").write_text(
+            json.dumps(metadata)
+        )
+
+        # Create edited version (no dedicated metadata for edited files in Google Photos)
+        write_media_file(album_dir / "IMG_6205-edited.JPG", "jpeg")
+
+        # Create another example with -effects suffix
+        write_media_file(album_dir / "photo_001.jpg", "jpeg")
+        (album_dir / "photo_001.jpg.json").write_text(
+            json.dumps({"title": "photo_001.jpg", "photoTakenTime": {"timestamp": "1609459200"}})
+        )
+        write_media_file(album_dir / "photo_001-effects.jpg", "jpeg")
+
+        return album_dir
+
+    def test_edited_file_matches_original_metadata(self, preprocessor, album_with_edited_files):
+        """An -edited file should match the original file's metadata."""
+        catalog = preprocessor.build_album_catalog(album_with_edited_files)
+
+        # The edited file should find the original's metadata
+        result = preprocessor.find_metadata_for_media("IMG_6205-edited.JPG", catalog)
+
+        assert result is not None
+        assert "IMG_6205" in result.name
+        assert "edited" not in result.name.lower()
+
+    def test_effects_file_matches_original_metadata(self, preprocessor, album_with_edited_files):
+        """An -effects file should match the original file's metadata."""
+        catalog = preprocessor.build_album_catalog(album_with_edited_files)
+
+        result = preprocessor.find_metadata_for_media("photo_001-effects.jpg", catalog)
+
+        assert result is not None
+        assert "photo_001" in result.name
+        assert "effects" not in result.name.lower()
+
+    def test_original_file_still_matches_directly(self, preprocessor, album_with_edited_files):
+        """Original file should still match its metadata directly."""
+        catalog = preprocessor.build_album_catalog(album_with_edited_files)
+
+        result = preprocessor.find_metadata_for_media("IMG_6205.JPG", catalog)
+
+        assert result is not None
+        assert "IMG_6205" in result.name
+
+    def test_edit_suffix_pattern_matches_known_suffixes(self, preprocessor):
+        """Verify the EDIT_SUFFIX_PATTERN matches expected suffixes."""
+        pattern = preprocessor.EDIT_SUFFIX_PATTERN
+
+        # Should match
+        assert pattern.search("img_6205-edited")
+        assert pattern.search("photo-effect")
+        assert pattern.search("photo-effects")
+        assert pattern.search("img-collage")
+        assert pattern.search("vid-animation")
+        assert pattern.search("clip-movie")
+
+        # Should not match
+        assert not pattern.search("img_6205")
+        assert not pattern.search("photo_edited_by_app")
+        assert not pattern.search("edited-photo")
+
+    def test_edited_file_with_internal_duplicate_index(self, preprocessor, tmp_path):
+        """An -edited file with internal duplicate index should match metadata.
+
+        Edge case: "26 (3)-edited.jpg" where the duplicate index (3) is BEFORE
+        the -edited suffix, not at the end of the filename.
+        """
+        album_dir = tmp_path / "Album with duplicates"
+        album_dir.mkdir()
+
+        # Create original file and duplicates with metadata
+        write_media_file(album_dir / "26.jpg", "jpeg")
+        (album_dir / "26.jpg.supplemental-metadata.json").write_text(
+            json.dumps({"title": "26.jpg", "photoTakenTime": {"timestamp": "1609459200"}})
+        )
+
+        write_media_file(album_dir / "26 (3).jpg", "jpeg")
+        (album_dir / "26 (3).jpg.supplemental-metadata.json").write_text(
+            json.dumps({"title": "26.jpg", "photoTakenTime": {"timestamp": "1609459200"}})
+        )
+
+        # Create edited version with internal duplicate index
+        write_media_file(album_dir / "26 (3)-edited.jpg", "jpeg")
+
+        catalog = preprocessor.build_album_catalog(album_dir)
+
+        # The edited file should match the (3) duplicate's metadata
+        result = preprocessor.find_metadata_for_media("26 (3)-edited.jpg", catalog)
+
+        assert result is not None
+        assert "26 (3)" in result.name
+        assert "edited" not in result.name.lower()
 

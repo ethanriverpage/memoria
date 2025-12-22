@@ -13,8 +13,8 @@ Tests cover:
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
-from unittest.mock import patch, MagicMock
+from typing import Dict, Optional
+from unittest.mock import patch
 
 import pytest
 
@@ -22,8 +22,6 @@ from processors.preprocess_base import (
     PreprocessorBase,
     CopyTask,
     CopyResult,
-    _copy_single_file,
-    _hash_single_file,
 )
 from common.detection import DetectionResult
 
@@ -445,7 +443,7 @@ class TestTempOutputDir:
 
         with patch.dict(os.environ, {"DISABLE_TEMP_CLEANUP": ""}):
             with ConcretePreprocessor.temp_output_dir(base_dir, "test") as temp_dir:
-                temp_path = temp_dir
+                _temp_path = temp_dir  # noqa: F841 - Captured for potential debugging
 
         # May or may not be cleaned up depending on environment
         # Just verify context manager completes without error

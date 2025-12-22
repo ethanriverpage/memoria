@@ -621,7 +621,7 @@ def _process_working_directory(
     if file_paths:
         log.exif_batch_start()
         exif_rebuilt_count = DiscordProcessor.batch_process_exif(
-            file_paths, file_info, _build_metadata_requests
+            file_paths, file_info, _build_metadata_requests, dedup_manifest
         )
 
     # Handle unmatched files

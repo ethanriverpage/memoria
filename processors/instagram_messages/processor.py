@@ -5,7 +5,6 @@ This processor is designed to be used through memoria.py.
 It handles renaming Instagram message media files, embedding metadata, and updating filesystem timestamps.
 """
 
-import json
 import logging
 import os
 import re
@@ -574,7 +573,7 @@ def _process_working_directory(
     if file_paths:
         logger.info("Batch processing EXIF metadata...")
         exif_rebuilt_count = InstagramMessagesProcessor.batch_process_exif(
-            file_paths, file_info, _build_metadata_requests
+            file_paths, file_info, _build_metadata_requests, dedup_manifest
         )
         logger.info(f"EXIF metadata written for {len(file_info)} files")
 

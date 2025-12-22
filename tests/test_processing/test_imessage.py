@@ -468,8 +468,9 @@ class TestIMessageOrphanDetection:
         )
 
         # Simulate that this file was processed from the database
+        # Note: _query_attachments uses "resolved_path" key
         processed_attachments = [
-            {"source_path": str(media_file.resolve())}
+            {"resolved_path": str(media_file.resolve())}
         ]
 
         orphaned_media = preprocessor._detect_orphaned_media(processed_attachments)

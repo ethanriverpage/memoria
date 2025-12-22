@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from common.output.progress import PHASE_EXIF, chunked_progress
 from common.utils import get_media_type, get_gps_format
@@ -61,6 +61,7 @@ class MetadataWriteRequest:
     gps: Optional[GPSData] = None
     description: Optional[DescriptionWriteSpec] = None
     processor_name: str = "unknown"
+    content_hash: Optional[str] = None  # For dedup description lookup
 
 
 # Default preamble used by most processors
@@ -142,11 +143,13 @@ def batch_write_metadata_requests(
 
                     # Write description if provided (always overwrites existing)
                     if request.description:
-                        # Apply dedup merged description override
+                        # Apply dedup merged description enhancement
                         final_description = _get_description_for_file(
                             request.file_path,
                             request.description.default_description,
                             dedup_manifest,
+                            request.content_hash,
+                            request.processor_name,
                         )
 
                         media_type = get_media_type(request.file_path)
@@ -193,18 +196,48 @@ def _get_description_for_file(
     file_path: str,
     default_description: str,
     dedup_manifest: Optional[Dict[str, Any]] = None,
+    content_hash: Optional[str] = None,
+    processor_name: str = "unknown",
 ) -> str:
-    """Get merged description from dedup manifest if applicable, else default."""
-    if dedup_manifest is None:
+    """Enhance description with secondary sources from dedup manifest.
+
+    Rather than replacing the processor's rich description, this function
+    appends secondary source lines for cross-processor duplicates. This
+    preserves the processor's context (sender, conversation, content) while
+    adding provenance from other platforms.
+
+    Args:
+        file_path: Path to the file (unused, kept for API compatibility).
+        default_description: The processor's rich description to enhance.
+        dedup_manifest: Optional deduplication manifest.
+        content_hash: Content hash for manifest lookup (more reliable than path).
+        processor_name: Name of the processor that owns this file.
+
+    Returns:
+        Enhanced description with secondary sources appended, or default
+        if no manifest or no cross-processor duplicates found.
+    """
+    if dedup_manifest is None or content_hash is None:
         return default_description
 
     # Import here to avoid circular imports
-    from common.dedup.service import get_merged_description_for_file
+    from common.dedup.service import get_secondary_sources_for_hash
+    from common.dedup.description import format_secondary_source
 
-    merged = get_merged_description_for_file(dedup_manifest, file_path)
-    if merged:
-        return merged
-    return default_description
+    # Get deduplicated secondary sources (excludes same-processor duplicates)
+    secondary_sources = get_secondary_sources_for_hash(
+        dedup_manifest, content_hash, processor_name
+    )
+
+    if not secondary_sources:
+        return default_description
+
+    # Append secondary source lines to processor's description
+    lines = [default_description]
+    for entry in secondary_sources:
+        lines.append(format_secondary_source(entry))
+
+    return "\n".join(lines)
 
 
 # =============================================================================
@@ -212,7 +245,7 @@ def _get_description_for_file(
 # =============================================================================
 
 
-def batch_validate_exif(file_paths: List[Optional[str]]) -> Set[str]:
+def batch_validate_exif(file_paths: Sequence[Optional[str]]) -> Set[str]:
     """Return set of file paths with corrupted EXIF that need rebuilding."""
     from common.utils import EXIF_BEARING_EXTENSIONS
 
@@ -348,7 +381,7 @@ def batch_rebuild_exif(file_paths: List[str]) -> None:
 # =============================================================================
 
 
-def batch_read_existing_metadata(file_paths: List[Optional[str]]) -> Dict[str, Dict[str, bool]]:
+def batch_read_existing_metadata(file_paths: Sequence[Optional[str]]) -> Dict[str, Dict[str, bool]]:
     """Read existing metadata fields from files, returning presence map."""
     # Filter out None values first
     valid_paths = [p for p in file_paths if p is not None]

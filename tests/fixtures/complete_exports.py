@@ -13,7 +13,7 @@ Unlike the minimal generators in generators.py, these create exports with:
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict
 
 from tests.fixtures.media_samples import write_media_file
 from tests.fixtures.generators import (
@@ -378,7 +378,7 @@ def create_large_export(base_path: Path, num_files: int = 100) -> Path:
         Path to created export
     """
     export_dir = base_path / "large_export"
-    photos_dir = export_dir / "Google Photos"
+    _photos_dir = export_dir / "Google Photos"  # noqa: F841 - Reserved for future use
 
     # Distribute files across multiple albums
     num_albums = max(1, num_files // 20)

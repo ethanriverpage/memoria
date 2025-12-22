@@ -25,20 +25,18 @@ from common.output.logging import get_processor_logger
 from common.preprocess.context_mergers import merge_imessage_context
 from common.processing import print_preprocessing_stats
 from common.output.progress import PHASE_PREPROCESS, progress_bar
-from processors.preprocess_base import CopyTask, PreprocessorBase
-
-# Standard logger for worker processes and exception logging
-logger = logging.getLogger(__name__)
-# Standardized processor logger for consistent output
-log = get_processor_logger(__name__)
-
-# Media file extensions - import from common (single source of truth)
 from common.utils import (
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
     AUDIO_EXTENSIONS,
     ALL_EXTENSIONS as ALL_MEDIA_EXTENSIONS,
 )
+from processors.preprocess_base import CopyTask, PreprocessorBase
+
+# Standard logger for worker processes and exception logging
+logger = logging.getLogger(__name__)
+# Standardized processor logger for consistent output
+log = get_processor_logger(__name__)
 
 # Filename pattern for iMazing exports:
 # "YYYY-MM-DD HH MM SS - Contact Name - OriginalFile.ext"

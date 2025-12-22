@@ -316,7 +316,7 @@ def run_phased_dedup_processing(
     args,
     temp_dir: str,
     log_file: Optional[Path] = None,
-) -> tuple[int, int, list]:
+) -> tuple[int, int, list, list]:
     """Run phased processing with cross-processor deduplication.
 
     Phase 1: CATALOG - Build catalogs from all processors (streaming to DB)
@@ -335,7 +335,8 @@ def run_phased_dedup_processing(
         log_file: Optional path to log file for worker process logging
 
     Returns:
-        Tuple of (success_count, failed_count, results_list)
+        Tuple of (success_count, failed_count, results_list, upload_targets)
+        where upload_targets is a list of (path, album, processor_name) tuples
     """
     import uuid
 
@@ -500,6 +501,7 @@ def run_phased_dedup_processing(
     success_count = 0
     failed_count = 0
     results = []
+    upload_targets = []  # Collect upload targets: (path, album, processor_name)
 
     for export_dir in dirs_to_process:
         section_header(f"Processing: {export_dir.name}")
@@ -534,6 +536,22 @@ def run_phased_dedup_processing(
                     results.append(
                         (f"{export_dir.name}/{processor.get_name()}", "SUCCESS")
                     )
+
+                    # Collect upload targets for successful processing
+                    if output_dir:
+                        output_info = processor.get_output_info()
+                        if output_info.service:
+                            effective_output = str(Path(output_dir) / output_info.service)
+                        else:
+                            effective_output = output_dir
+
+                        targets = build_upload_targets(
+                            processor, str(export_dir), effective_output
+                        )
+                        for up_path, album_name in targets:
+                            upload_targets.append(
+                                (up_path, album_name, processor.get_name())
+                            )
                 else:
                     failed_count += 1
                     results.append(
@@ -556,7 +574,7 @@ def run_phased_dedup_processing(
     # Clean up catalog entries from this run to free database space
     db.clear_run(run_id)
 
-    return success_count, failed_count, results
+    return success_count, failed_count, results, upload_targets
 
 
 def show_supported_formats() -> None:
@@ -1027,8 +1045,146 @@ def _collect_upload_files(path: Path, ignore_patterns: list[str]) -> list[Path]:
     return sorted(files_to_upload)
 
 
+def _scan_platform_username_service_structure(
+    output_path: Path,
+) -> list[tuple[str, str]]:
+    """Scan Platform/Username/Service directory structure and build upload targets.
+
+    This function scans a processed output directory that follows the
+    Platform/Username/Service structure and builds album names directly
+    from the directory structure.
+
+    Directory structure:
+        output_path/
+            Platform1/
+                username1/
+                    service1/  -> Album: Platform1/username1/service1
+                    service2/  -> Album: Platform1/username1/service2
+                    public-media/  (intermediate folder)
+                        posts/   -> Album: Platform1/username1/posts
+                        stories/ -> Album: Platform1/username1/stories
+                username2/
+                    (files)    -> Album: Platform1/username2 (no service)
+            iMessage/
+                device/
+                    messages/  -> Album: iMessage/device (messages is implicit)
+            Discord/
+                username/
+                    messages/  -> Album: Discord/username (messages is implicit)
+
+    Args:
+        output_path: Root of processed output directory.
+
+    Returns:
+        List of (path, album) tuples for upload.
+    """
+    # Known platforms (match description.py constants)
+    known_platforms = {"Google", "Instagram", "Snapchat", "Discord", "iMessage"}
+
+    # Platforms where "messages" is implicit and should not appear in album name
+    # For these, we upload from the messages/ subdirectory but use simplified album name
+    messaging_only_platforms = {"Discord", "iMessage"}
+
+    # Known services (helps distinguish service dirs from other content)
+    known_services = {
+        "photos",
+        "chat",
+        "voice",
+        "messages",
+        "memories",
+        "stories",
+        "posts",
+        "reels",
+        "archived_posts",
+        "profile",
+        "other",
+    }
+
+    # Intermediate folders that may contain services (e.g., public-media)
+    intermediate_folders = {"public-media"}
+
+    targets = []
+
+    def _add_service_targets(
+        base_dir: Path, platform: str, username: str
+    ) -> list[tuple[str, str]]:
+        """Scan a directory for service subdirectories and return targets."""
+        result = []
+        for item in base_dir.iterdir():
+            if not item.is_dir():
+                continue
+            item_name = item.name.lower()
+            if item_name in known_services:
+                album = f"{platform}/{username}/{item_name}"
+                result.append((str(item), album))
+        return result
+
+    # Scan for Platform directories
+    for platform_dir in output_path.iterdir():
+        if not platform_dir.is_dir():
+            continue
+
+        platform_name = platform_dir.name
+        if platform_name not in known_platforms:
+            # Not a recognized platform, skip
+            continue
+
+        # Scan for username directories under this platform
+        for username_dir in platform_dir.iterdir():
+            if not username_dir.is_dir():
+                continue
+
+            username = username_dir.name
+
+            # Handle messaging-only platforms (Discord, iMessage)
+            # These have implicit "messages" - upload from messages/ but use simple album name
+            if platform_name in messaging_only_platforms:
+                messages_dir = username_dir / "messages"
+                if messages_dir.exists() and messages_dir.is_dir():
+                    # Upload from messages/ subdirectory with simplified album name
+                    album = f"{platform_name}/{username}"
+                    targets.append((str(messages_dir), album))
+                else:
+                    # No messages subdir, upload username dir directly
+                    album = f"{platform_name}/{username}"
+                    targets.append((str(username_dir), album))
+                continue
+
+            # Handle other platforms with explicit service directories
+            found_services = False
+
+            # Scan for service directories and intermediate folders
+            for item in username_dir.iterdir():
+                if not item.is_dir():
+                    continue
+
+                item_name = item.name.lower()
+
+                if item_name in known_services:
+                    # Direct service directory
+                    album = f"{platform_name}/{username}/{item_name}"
+                    targets.append((str(item), album))
+                    found_services = True
+
+                elif item_name in intermediate_folders:
+                    # Intermediate folder (e.g., public-media) - scan inside
+                    nested_targets = _add_service_targets(
+                        item, platform_name, username
+                    )
+                    if nested_targets:
+                        targets.extend(nested_targets)
+                        found_services = True
+
+            if not found_services:
+                # No service subdirs found, upload the username dir directly
+                album = f"{platform_name}/{username}"
+                targets.append((str(username_dir), album))
+
+    return targets
+
+
 def upload_only_mode(
-    input_path: Path,
+    input_path: Optional[Path],
     upload_path: Path,
     registry: ProcessorRegistry,
     immich_url: str,
@@ -1036,10 +1192,16 @@ def upload_only_mode(
     immich_concurrency: int,
     immich_skip_hash: bool,
 ) -> int:
-    """Handle upload-only mode: detect processors and upload existing processed files.
+    """Handle upload-only mode: upload existing processed files to Immich.
+
+    Supports two modes:
+    1. If input_path is provided: Uses original export for processor detection
+       and username extraction (legacy mode for backwards compatibility)
+    2. If input_path is None: Scans the Platform/Username/Service directory
+       structure directly (new mode for cross-processor dedup outputs)
 
     Args:
-        input_path: Original export directory (for processor detection and username extraction)
+        input_path: Optional original export directory (for legacy mode)
         upload_path: Path to processed output directory to upload
         registry: ProcessorRegistry instance
         immich_url: Immich server URL
@@ -1053,7 +1215,8 @@ def upload_only_mode(
     from datetime import datetime
 
     logger.info("Upload-only mode")
-    logger.info("Original export: %s", input_path)
+    if input_path:
+        logger.info("Original export: %s", input_path)
     logger.info("Processed output: %s", upload_path)
 
     # Create logs directory and upload log file
@@ -1061,13 +1224,13 @@ def upload_only_mode(
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_filename = f"upload_only_{input_path.name}_{timestamp}.log"
+    log_filename = f"upload_only_{upload_path.name}_{timestamp}.log"
     log_file = logs_dir / log_filename
 
     logger.info("Upload log will be saved to: %s", log_file)
 
     # Validate paths
-    if not input_path.exists():
+    if input_path and not input_path.exists():
         logger.error("Original export directory does not exist: %s", input_path)
         return 1
 
@@ -1075,166 +1238,149 @@ def upload_only_mode(
         logger.error("Processed output directory does not exist: %s", upload_path)
         return 1
 
-    # Detect processors from original export
-    logger.info("Analyzing original export to detect processor types...")
-    matching_processors = registry.detect_all(input_path)
-
-    if not matching_processors:
-        logger.error("No processors matched original export directory: %s", input_path)
-        show_supported_formats()
-        return 1
-
-    logger.info("Detected %d processor(s):", len(matching_processors))
-    for processor in matching_processors:
-        logger.info("  - %s", processor.get_name())
-
-    # Map processor names to their expected output subdirectories within upload_path
-    processor_output_map = {}
-
-    for processor in matching_processors:
-        pname = processor.get_name()
-
-        # Get effective output directory using centralized config
-        effective_output_str = get_effective_output_dir(pname, str(upload_path))
-
-        if not effective_output_str:
-            logger.warning("Unknown processor '%s', skipping uploads", pname)
-            continue
-
-        effective_output = Path(effective_output_str)
-
-        # Verify the directory exists
-        if not effective_output.exists():
-            logger.warning(
-                "Expected output directory does not exist: %s", effective_output
-            )
-            logger.warning("         Skipping uploads for %s", pname)
-            continue
-
-        processor_output_map[pname] = str(effective_output)
-
-    if not processor_output_map:
-        logger.error("No valid output directories found for detected processors")
-        return 1
-
     # Get default ignore patterns (same as used by immich_upload)
     env_ignore = os.environ.get("IMMICH_IGNORE_PATTERNS")
     if env_ignore:
         ignore_patterns = [p.strip() for p in env_ignore.split(",") if p.strip()]
     else:
-        # Note: needs_matching requires **/*matching/** pattern due to underscore handling
         ignore_patterns = ["issues/**", "**/*matching/**"]
+
+    # Build upload targets - either from directory structure or from processor detection
+    if input_path is None:
+        # New mode: scan Platform/Username/Service structure directly
+        logger.info("Scanning directory structure for upload targets...")
+        all_targets = _scan_platform_username_service_structure(upload_path)
+
+        if not all_targets:
+            logger.error(
+                "No Platform/Username/Service structure found in: %s", upload_path
+            )
+            logger.error(
+                "Expected structure: Platform/username/service (e.g., Google/johndoe/photos)"
+            )
+            return 1
+
+        logger.info("Found %d upload target(s):", len(all_targets))
+        for up_path, album_name in all_targets:
+            logger.info("  - %s -> %s", Path(up_path).name, album_name)
+    else:
+        # Legacy mode: detect processors from original export
+        logger.info("Analyzing original export to detect processor types...")
+        matching_processors = registry.detect_all(input_path)
+
+        if not matching_processors:
+            logger.error(
+                "No processors matched original export directory: %s", input_path
+            )
+            show_supported_formats()
+            return 1
+
+        logger.info("Detected %d processor(s):", len(matching_processors))
+        for processor in matching_processors:
+            logger.info("  - %s", processor.get_name())
+
+        # Map processor names to their expected output subdirectories
+        all_targets = []
+        for processor in matching_processors:
+            pname = processor.get_name()
+
+            # Get effective output directory using centralized config
+            effective_output_str = get_effective_output_dir(pname, str(upload_path))
+
+            if not effective_output_str:
+                logger.warning("Unknown processor '%s', skipping uploads", pname)
+                continue
+
+            effective_output = Path(effective_output_str)
+
+            # Verify the directory exists
+            if not effective_output.exists():
+                logger.warning(
+                    "Expected output directory does not exist: %s", effective_output
+                )
+                continue
+
+            # Build upload targets
+            targets = build_upload_targets(pname, str(input_path), effective_output_str)
+            all_targets.extend(targets)
+
+        if not all_targets:
+            logger.error("No valid output directories found for detected processors")
+            return 1
 
     # Open log file for writing
     with open(log_file, "w", encoding="utf-8") as log:
         log.write("Upload-Only Mode Log\n")
         log.write(f"{'=' * 70}\n")
         log.write(f"Timestamp: {timestamp}\n")
-        log.write(f"Original export: {input_path}\n")
+        if input_path:
+            log.write(f"Original export: {input_path}\n")
         log.write(f"Processed output: {upload_path}\n")
         log.write(f"Ignore patterns: {', '.join(ignore_patterns)}\n")
         log.write(f"{'=' * 70}\n\n")
 
-        # Perform uploads for each processor
+        # Perform uploads
         logger.info("Starting Immich uploads:")
 
         success_count = 0
         failed_count = 0
         total_files_uploaded = 0
 
-        for idx, processor in enumerate(matching_processors, 1):
-            pname = processor.get_name()
-
-            if pname not in processor_output_map:
-                continue
-
-            effective_output = processor_output_map[pname]
-
+        for idx, (up_path, album_name) in enumerate(all_targets, 1):
             separator = "=" * 70
             logger.info(separator)
-            logger.info("[%d/%d] Uploading: %s", idx, len(matching_processors), pname)
+            logger.info("[%d/%d] Uploading: %s", idx, len(all_targets), album_name)
             logger.info(separator)
 
             try:
-                # Build upload targets using the original export path and effective output
-                targets = build_upload_targets(pname, str(input_path), effective_output)
+                # Collect files that will be uploaded
+                files_to_upload = _collect_upload_files(Path(up_path), ignore_patterns)
 
-                if not targets:
-                    logger.info("No upload targets derived for %s", pname)
-                    log.write(f"Processor: {pname}\n")
-                    log.write("  No upload targets\n\n")
-                    continue
+                # Log upload details
+                log.write(f"Album: {album_name}\n")
+                log.write(f"Upload path: {up_path}\n")
+                log.write(f"Files ({len(files_to_upload)}):\n")
 
-                logger.info("Found %d upload target(s):", len(targets))
-                for up_path, album_name in targets:
-                    logger.info("  - %s -> %s", up_path, album_name)
+                for file_path in files_to_upload:
+                    log.write(f"  {file_path}\n")
+                log.write("\n")
 
-                # Perform uploads
-                for up_path, album_name in targets:
-                    try:
-                        # Collect files that will be uploaded
-                        files_to_upload = _collect_upload_files(
-                            Path(up_path), ignore_patterns
-                        )
+                total_files_uploaded += len(files_to_upload)
 
-                        # Log upload details
-                        log.write(f"Processor: {pname}\n")
-                        log.write(f"Upload path: {up_path}\n")
-                        log.write(f"Album: {album_name}\n")
-                        log.write(f"Files ({len(files_to_upload)}):\n")
+                # Perform the actual upload
+                rc = immich_upload(
+                    path=up_path,
+                    album=album_name,
+                    url=immich_url,
+                    key=immich_key,
+                    skip_hash=immich_skip_hash,
+                    concurrency=immich_concurrency,
+                    include_hidden=False,
+                    recursive=True,
+                )
+                if rc == 0:
+                    logger.info("  %s: completed (%d files)", album_name, len(files_to_upload))
+                else:
+                    logger.warning(
+                        "  %s: completed with issues (rc=%d, %d files)",
+                        album_name,
+                        rc,
+                        len(files_to_upload),
+                    )
 
-                        for file_path in files_to_upload:
-                            log.write(f"  {file_path}\n")
-                        log.write("\n")
+                # Log result
+                log.write(
+                    f"  Upload result: {'SUCCESS' if rc == 0 else f'FAILED (rc={rc})'}\n\n"
+                )
 
-                        total_files_uploaded += len(files_to_upload)
-
-                        # Perform the actual upload
-                        rc = immich_upload(
-                            path=up_path,
-                            album=album_name,
-                            url=immich_url,
-                            key=immich_key,
-                            skip_hash=immich_skip_hash,
-                            concurrency=immich_concurrency,
-                            include_hidden=False,
-                            recursive=True,
-                        )
-                        if rc == 0:
-                            logger.info(
-                                "  %s -> %s (%d files)",
-                                pname,
-                                album_name,
-                                len(files_to_upload),
-                            )
-                        else:
-                            logger.warning(
-                                "  %s -> %s (%d files) - rc=%d",
-                                pname,
-                                album_name,
-                                len(files_to_upload),
-                                rc,
-                            )
-
-                        # Log result
-                        log.write(
-                            f"  Upload result: {'SUCCESS' if rc == 0 else f'FAILED (rc={rc})'}\n\n"
-                        )
-
-                        if rc == 0:
-                            success_count += 1
-                        else:
-                            failed_count += 1
-                    except Exception as e:
-                        logger.error(
-                            "  Upload failed for %s -> %s: %s", up_path, album_name, e
-                        )
-                        log.write(f"  Upload result: EXCEPTION - {e}\n\n")
-                        failed_count += 1
+                if rc == 0:
+                    success_count += 1
+                else:
+                    failed_count += 1
 
             except Exception as e:
-                logger.error("Failed to upload %s: %s", pname, e)
-                log.write(f"Processor: {pname}\n")
+                logger.error("  Upload failed for %s: %s", album_name, e)
+                log.write(f"Album: {album_name}\n")
                 log.write(f"  ERROR: {e}\n\n")
                 failed_count += 1
 
@@ -1272,7 +1418,10 @@ Examples:
   # Process with custom output base directory
   %(prog)s /path/to/export -o /path/to/output
   
-  # Upload previously processed export (skips processing)
+  # Upload previously processed export (scans Platform/Username/Service structure)
+  %(prog)s --upload-only /path/to/processed/output
+  
+  # Upload with original export for legacy processor detection
   %(prog)s /path/to/original/export --upload-only /path/to/processed/output
   
   # Process multiple exports sequentially
@@ -1343,8 +1492,9 @@ Examples:
     parser.add_argument(
         "--upload-only",
         metavar="PATH",
-        help="Upload-only mode: provide path to processed output directory (skips processing). "
-        "Still requires input_dir to detect processor type and extract username for album naming.",
+        help="Upload-only mode: upload processed output to Immich (skips processing). "
+        "Scans Platform/Username/Service directory structure to determine album names. "
+        "Optionally provide input_dir for legacy processor-based detection.",
     )
     parser.add_argument(
         "--immich-url",
@@ -1385,11 +1535,9 @@ Examples:
                 "--upload-only is not compatible with --originals (process multiple exports separately)"
             )
             return 1
-        if not args.input_dir:
-            parser.error(
-                "--upload-only requires input_dir to detect processor type and extract username"
-            )
-            return 1
+        # input_dir is now optional for --upload-only
+        # If provided, uses legacy processor detection mode
+        # If not provided, scans Platform/Username/Service structure directly
 
     # Load .env early (CLI > env > .env precedence is enforced later when reading values)
     load_dotenv_file(args.env_file)
@@ -1598,7 +1746,8 @@ Examples:
             logger.error("Upload-only mode requires valid Immich configuration")
             return 1
 
-        input_path = Path(args.input_dir).resolve()
+        # input_dir is optional - if provided, uses legacy processor detection
+        input_path = Path(args.input_dir).resolve() if args.input_dir else None
         upload_path = Path(args.upload_only).resolve()
 
         # Type guard: immich_enabled is True only if these are set (checked at line 1579)
@@ -1629,7 +1778,7 @@ Examples:
             "Cross-processor deduplication enabled (CROSS_PROCESSOR_DEDUP=true)"
         )
 
-        success_count, failed_count, results = run_phased_dedup_processing(
+        success_count, failed_count, results, upload_targets = run_phased_dedup_processing(
             dirs_to_process,
             registry,
             args,
@@ -1638,9 +1787,37 @@ Examples:
         )
 
         # Handle uploads if enabled
-        if immich_enabled and args.output:
+        if immich_enabled and args.output and upload_targets:
             logger.info("Uploading processed files...")
-            # Upload logic would go here
+            logger.info("Found %d upload target(s):", len(upload_targets))
+            for up_path, album_name, proc_name in upload_targets:
+                logger.info("  - %s -> %s", proc_name, album_name)
+
+            for up_path, album_name, proc_name in upload_targets:
+                try:
+                    rc = immich_upload(
+                        path=up_path,
+                        album=album_name,
+                        url=immich_url,
+                        key=immich_key,
+                        skip_hash=immich_skip_hash,
+                        concurrency=immich_concurrency,
+                        include_hidden=False,
+                        recursive=True,
+                    )
+                    if rc == 0:
+                        logger.info("  %s -> %s: completed", proc_name, album_name)
+                    else:
+                        logger.warning(
+                            "  %s -> %s: completed with issues (rc=%d)",
+                            proc_name,
+                            album_name,
+                            rc,
+                        )
+                except Exception as e:
+                    logger.error("  Upload failed for %s -> %s: %s", proc_name, album_name, e)
+        elif immich_enabled and args.output:
+            logger.info("No upload targets found.")
 
         return 0 if failed_count == 0 else 1
 

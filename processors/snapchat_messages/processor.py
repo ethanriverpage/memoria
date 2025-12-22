@@ -571,27 +571,20 @@ def _create_file_worker(args_tuple):
         if overlay_path:
             if is_video:
                 # Video with overlay - create multi-track MKV
-                # Handle both single and merged message formats
+                # Build video metadata for date/GPS embedding
                 if "primary_created" in message:
                     # Merged message format
                     video_metadata = {
                         "date": message["primary_created"],
-                        "conversation_type": "multiple",
-                        "conversation_id": "merged",
-                        "conversation_title": f"{len(message['messages'])} conversations",
-                        "sender": "multiple",
-                        "content": message.get("content", ""),
                     }
                 else:
                     # Single message format
                     video_metadata = {
                         "date": message.get("created"),
-                        "conversation_type": message.get("conversation_type"),
-                        "conversation_id": message.get("conversation_id"),
-                        "conversation_title": message.get("conversation_title"),
-                        "sender": message.get("sender"),
-                        "content": message.get("content", ""),
                     }
+
+                # Build description with full message context (handles merged messages)
+                video_description = _build_description(message, export_username)
 
                 success = create_video_with_overlay(
                     media_path,
@@ -599,6 +592,7 @@ def _create_file_worker(args_tuple):
                     output_path,
                     video_metadata,
                     export_username=export_username,
+                    description=video_description,
                 )
 
                 if success:
@@ -930,7 +924,7 @@ def _process_snapchat_working_directory(
     if file_paths:
         logger.info("Batch processing EXIF metadata...")
         exif_rebuilt_count = SnapchatMessagesProcessor.batch_process_exif(
-            file_paths, file_info, _build_metadata_requests
+            file_paths, file_info, _build_metadata_requests, dedup_manifest
         )
 
     # Handle unmatched files - copy to failed-matching directory

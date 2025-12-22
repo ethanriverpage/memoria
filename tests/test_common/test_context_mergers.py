@@ -10,7 +10,6 @@ Tests cover:
 
 from typing import Any, Dict
 
-import pytest
 
 from common.preprocess.context_mergers import (
     merge_albums,

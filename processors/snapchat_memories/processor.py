@@ -170,6 +170,21 @@ class SnapchatMemoriesProcessor(ProcessorBase):
         return True
 
     @staticmethod
+    def load_memories_metadata(metadata_path: Path) -> List[Dict[str, Any]]:
+        """Load and parse metadata.json for Snapchat Memories.
+
+        Snapchat Memories metadata is a list of memory objects, not a dict.
+
+        Args:
+            metadata_path: Path to metadata.json file.
+
+        Returns:
+            List of memory dictionaries.
+        """
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    @staticmethod
     def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata."""
         input_path = Path(input_dir)
@@ -528,7 +543,7 @@ def process_logic(
 
     # Load metadata
     logger.info(f"Loading metadata from {metadata_file}...")
-    memories = SnapchatMemoriesProcessor.load_metadata(Path(metadata_file))
+    memories = SnapchatMemoriesProcessor.load_memories_metadata(Path(metadata_file))
     logger.info(f"Found {len(memories)} memories to process")
 
     # Initialize banned files filter
@@ -680,8 +695,10 @@ def process_logic(
     )
 
     # Phase 3: Correct file extensions based on actual content
-    file_paths, file_info = SnapchatMemoriesProcessor.correct_extensions_and_update_info(
-        file_paths, file_info, path_index=0
+    file_paths, file_info = (
+        SnapchatMemoriesProcessor.correct_extensions_and_update_info(
+            file_paths, file_info, path_index=0
+        )
     )
 
     # Phase 4: Batch process EXIF operations on non-MKV files
@@ -689,7 +706,7 @@ def process_logic(
     if file_paths:
         logger.info("Batch processing EXIF metadata...")
         exif_rebuilt_count = SnapchatMemoriesProcessor.batch_process_exif(
-            file_paths, file_info, _build_metadata_requests
+            file_paths, file_info, _build_metadata_requests, dedup_manifest
         )
 
     # Handle failures - copy orphaned files and generate report

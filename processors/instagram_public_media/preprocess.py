@@ -20,6 +20,7 @@ from common.detection import resolve_username, detect_from_dirname, DetectionRes
 from common.preprocess.context_mergers import merge_first_occurrence
 from common.processing import print_preprocessing_stats
 from common.output.progress import PHASE_PREPROCESS, futures_progress
+from common.utils import normalize_text
 from processors.preprocess_base import CopyTask, PreprocessorBase
 
 # Set up logging
@@ -346,9 +347,8 @@ class InstagramPreprocessor(PreprocessorBase):
                     caption_elem = container.find(
                         "div", class_="_3-95 _2pim _a6-h _a6-i"
                     )
-                post_data["caption"] = (
-                    caption_elem.get_text(strip=True) if caption_elem else ""
-                )
+                caption_text = caption_elem.get_text(strip=True) if caption_elem else ""
+                post_data["caption"] = normalize_text(caption_text)
 
                 # Extract timestamp
                 timestamp_elem = container.find("div", class_="_3-94 _a6-o")

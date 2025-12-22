@@ -49,6 +49,15 @@ from common.media.encoder import (
     is_hardware_acceleration_error,
 )
 
+# Import unified description format utilities
+from common.dedup.description import (
+    PLATFORM_SNAPCHAT,
+    SERVICE_MESSAGES,
+    SourceEntry,
+    build_source_line,
+    build_message_context,
+)
+
 # Set up logging
 logger = logging.getLogger(__name__)
 
@@ -630,44 +639,60 @@ def _pass2_apply_overlay_impl(
 
 def _build_message_description(metadata: Optional[dict], export_username: str) -> str:
     """
-    Build rich description for Snapchat Messages.
+    Build rich description for Snapchat Messages using unified format.
+
+    Uses the standard description format from common/dedup/description.py:
+        Source: Snapchat/{username}/messages
+          - {sender} in "{conversation}": "{content}"
 
     Args:
         metadata: Metadata dict with conversation fields (can be None)
         export_username: Username for source path
 
     Returns:
-        Multi-line description string
+        Multi-line description string with &#xa; separators
     """
+    # Build source line using unified format
+    source_entry = SourceEntry(
+        processor=PLATFORM_SNAPCHAT,
+        username=export_username,
+        service=SERVICE_MESSAGES,
+    )
+    source_line = build_source_line(source_entry)
+
     if metadata is None:
-        return f"Source: Snapchat/{export_username}/messages"
+        return source_line
 
     conv_type = metadata.get("conversation_type")
     conv_id = metadata.get("conversation_id")
 
     if conv_id is None or conv_type is None:
         # Orphaned media - minimal metadata (only Source)
-        return f"Source: Snapchat/{export_username}/messages"
+        return source_line
 
-    # Normal message with full context
+    # Build conversation name
     if conv_type == "dm":
-        conversation_context = f"DM with {conv_id}"
+        conversation_name = f"DM with {conv_id}"
     else:
-        conversation_context = metadata.get("conversation_title", "Unknown Group")
+        conversation_name = metadata.get("conversation_title", "Unknown Group")
 
     sender = metadata.get("sender", "unknown")
     content = metadata.get("content", "")
 
-    description_parts = [
-        f"Source: Snapchat/{export_username}/messages",
-        f'Conversation: "{conversation_context}"',
-        f'Sender: "{sender}"',
-    ]
+    # Build message context using unified format
+    msg_entry = SourceEntry(
+        processor=PLATFORM_SNAPCHAT,
+        sender=sender,
+        conversation=conversation_name,
+        content=content,
+    )
+    msg_line = build_message_context(msg_entry)
 
-    if content:
-        description_parts.append(f'Content: "{content}"')
+    description_parts = [source_line]
+    if msg_line:
+        description_parts.append(msg_line)
 
-    return "\n".join(description_parts)
+    return "&#xa;".join(description_parts)
 
 
 def _pass3_combine_and_embed(
@@ -676,6 +701,7 @@ def _pass3_combine_and_embed(
     output_path: Path,
     metadata: Optional[dict] = None,
     export_username: Optional[str] = None,
+    description: Optional[str] = None,
 ) -> bool:
     """
     PASS 3: Combine videos into dual-track MKV and embed metadata.
@@ -687,8 +713,9 @@ def _pass3_combine_and_embed(
     - Track 1: Original video without overlay
     - Container metadata: creation time, GPS coordinates, source description
 
-    Auto-detects whether to use rich message metadata or simple memory metadata
-    based on the presence of conversation_type and conversation_id fields.
+    If a description is provided, it is used directly. Otherwise, auto-detects
+    whether to use rich message metadata or simple memory metadata based on
+    the presence of conversation_type and conversation_id fields.
 
     Args:
         with_overlay_path: Path to video with overlay from Pass 2
@@ -698,6 +725,7 @@ def _pass3_combine_and_embed(
                   For messages: also 'conversation_type', 'conversation_id',
                   'conversation_title', 'sender', 'content'
         export_username: Optional username for source metadata
+        description: Optional pre-built description string (takes precedence)
 
     Returns:
         True if successful, False otherwise
@@ -772,7 +800,11 @@ def _pass3_combine_and_embed(
             logger.debug(f"[{with_overlay_path.name}] Adding GPS: {location_value}")
 
     # Add source description metadata
-    if export_username:
+    if description:
+        # Use pre-built description (from processor with full message context)
+        final_description = description
+        logger.debug(f"[{with_overlay_path.name}] Using provided description")
+    elif export_username:
         # Auto-detect: if metadata has conversation fields, use rich format
         has_conversation_data = (
             metadata
@@ -782,25 +814,28 @@ def _pass3_combine_and_embed(
 
         if has_conversation_data:
             # Rich format for messages
-            description = _build_message_description(metadata, export_username)
+            final_description = _build_message_description(metadata, export_username)
             logger.debug(f"[{with_overlay_path.name}] Using rich message description")
         else:
             # Simple format for memories
-            description = f"Source: Snapchat/{export_username}/memories"
+            final_description = f"Source: Snapchat/{export_username}/memories"
             logger.debug(
                 f"[{with_overlay_path.name}] Using simple memories description"
             )
+    else:
+        final_description = None
 
+    if final_description:
         logger.debug(
-            f"[{with_overlay_path.name}] Final description: {repr(description)}"
+            f"[{with_overlay_path.name}] Final description: {repr(final_description)}"
         )
 
         cmd.extend(
             [
                 "-metadata",
-                f"comment={description}",
+                f"comment={final_description}",
                 "-metadata",
-                f"description={description}",
+                f"description={final_description}",
             ]
         )
 
@@ -956,6 +991,7 @@ def create_video_with_overlay(
     output_path: Path,
     metadata: Optional[dict] = None,
     export_username: Optional[str] = None,
+    description: Optional[str] = None,
 ) -> bool:
     """
     Create an MKV video with dual tracks using a multi-pass approach.
@@ -967,8 +1003,9 @@ def create_video_with_overlay(
     - Track 0 (default): Video with overlay embedded
     - Track 1: Original video without overlay
 
-    Auto-detects whether to use rich message metadata or simple memory metadata
-    based on the presence of conversation_type and conversation_id fields.
+    If a description is provided, it is used directly. Otherwise, auto-detects
+    whether to use rich message metadata or simple memory metadata based on
+    the presence of conversation_type and conversation_id fields.
 
     Uses a single FFprobe call to get all video metadata (rotation, dimensions,
     bitrate) for better performance.
@@ -981,6 +1018,7 @@ def create_video_with_overlay(
                   For messages: also 'conversation_type', 'conversation_id',
                   'conversation_title', 'sender', 'content'
         export_username: Optional username for source metadata
+        description: Optional pre-built description string (takes precedence)
 
     Returns:
         True if successful, False otherwise
@@ -1031,6 +1069,7 @@ def create_video_with_overlay(
                 output_path,
                 metadata,
                 export_username,
+                description,
             )
             if not success:
                 return False

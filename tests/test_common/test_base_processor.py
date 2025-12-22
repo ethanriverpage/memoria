@@ -119,7 +119,7 @@ class TestBatchProcessExif:
         # Capture the metadata map passed to write
         captured_metadata_map = None
 
-        def capture_write(requests, metadata_map):
+        def capture_write(requests, metadata_map, dedup_manifest=None):
             nonlocal captured_metadata_map
             captured_metadata_map = metadata_map
 

@@ -34,7 +34,10 @@ class GooglePhotosPreprocessor(PreprocessorBase):
     SUPPLEMENTAL_WITH_DUP_PATTERN = re.compile(r"(\.[^.]+)\.supp[^.]*\((\d+)\)\.json$")
     SUPPLEMENTAL_PATTERN = re.compile(r"\.supp[^.]*\.json$")
     FILE_INDEX_PATTERN = re.compile(r"\((\d+)\)(\.[^.]+)$")
-    # Used to build fast candidate sets for “long common prefix” matchers without O(n) scans
+    # Pattern to match Google Photos edit suffixes (e.g., -edited, -effects, -collage)
+    # These are appended by Google Photos when saving edited versions
+    EDIT_SUFFIX_PATTERN = re.compile(r"-(?:edited|effect[s]?|collage|animation|movie)$", re.IGNORECASE)
+    # Used to build fast candidate sets for "long common prefix" matchers without O(n) scans
     _PREFIX_INDEX_LEN_STRONG = 40
     _PREFIX_INDEX_LEN_WEAK = 30
 
@@ -506,20 +509,19 @@ class GooglePhotosPreprocessor(PreprocessorBase):
 
         Based on immich-go's matchEditedName logic.
 
-        Example:
+        Examples:
         - JSON: PXL_20220405_090123740.PORTRAIT.jpg.json
         - metadata_name: PXL_20220405_090123740.PORTRAIT.jpg
         - media_name: PXL_20220405_090123740.PORTRAIT-modifie.jpg
+
+        Also handles edited duplicates:
+        - media: IMG_3661-edited(1).JPG -> metadata: IMG_3661(1).JPG
+        - media: 26 (3)-edited.jpg -> metadata: 26 (3).jpg
 
         This matcher checks if the metadata name contains a media extension,
         strips it, and checks if the media file name (without extension) starts
         with the metadata base (without media extension).
         """
-        # Don't match if media has numbered duplicates like IMG_0001(1).JPG
-        _, media_idx = self.get_file_index(media_name)
-        if media_idx:
-            return False
-
         # Define media extensions
         media_extensions = ALL_MEDIA_EXTENSIONS
 
@@ -527,17 +529,55 @@ class GooglePhotosPreprocessor(PreprocessorBase):
         metadata_ext = Path(metadata_name).suffix.lower()
 
         # Check if metadata_name has a media extension as its last extension
-        # This is the key difference from matchForgottenDuplicates
-        if metadata_ext and metadata_ext in media_extensions:
-            # Strip the media extension from both
-            metadata_base = Path(metadata_name).stem
-            media_base = Path(media_name).stem
+        if metadata_ext and metadata_ext not in media_extensions:
+            return False
 
-            # Check if media base starts with metadata base
-            # AND that media base is actually different (longer) than metadata base
-            # This prevents matching regular Live Photos where bases are identical
-            if media_base.startswith(metadata_base) and media_base != metadata_base:
-                return True
+        # Strip the media extension from both
+        metadata_base = Path(metadata_name).stem
+        media_base = Path(media_name).stem
+
+        # Handle files with duplicate indices (e.g., IMG_3661-edited(1).JPG)
+        media_base_no_idx, media_idx = self.get_file_index(media_name)
+        metadata_base_no_idx, metadata_idx = self.get_file_index(metadata_name)
+
+        # Special case: media has edit suffix AFTER an internal duplicate index
+        # e.g., "26 (3)-edited.jpg" - get_file_index returns no idx because -edited is at end
+        # but "26 (3).jpg" - get_file_index returns idx='3'
+        # Check if stripping the edit suffix reveals a matching duplicate index
+        if not media_idx and metadata_idx:
+            edit_match = self.EDIT_SUFFIX_PATTERN.search(media_base)
+            if edit_match:
+                media_base_stripped = media_base[: edit_match.start()]
+                # Try to extract duplicate index from stripped media base
+                internal_match = self.FILE_INDEX_PATTERN.search(
+                    media_base_stripped + Path(media_name).suffix
+                )
+                if internal_match and internal_match.group(1) == metadata_idx:
+                    # Both have same duplicate index - compare base names
+                    media_base = media_base_stripped[: -len(f"({metadata_idx})")]
+                    media_base = media_base.rstrip(" ")  # Handle space before (N)
+                    metadata_base = Path(metadata_base_no_idx).stem.rstrip(" ")
+                    # Since we're comparing base names and they're both stripped,
+                    # they should be equal (not startswith) for this case
+                    return media_base == metadata_base
+
+        if media_idx or metadata_idx:
+            # If both have indices at the end, they must match
+            if media_idx and metadata_idx and media_idx != metadata_idx:
+                return False
+            # If only metadata has an index (and we didn't handle internal idx above),
+            # they can't match via this matcher
+            if not media_idx and metadata_idx:
+                return False
+            # Both have the same index - compare base names without index
+            media_base = Path(media_base_no_idx).stem
+            metadata_base = Path(metadata_base_no_idx).stem
+
+        # Check if media base starts with metadata base
+        # AND that media base is actually different (longer) than metadata base
+        # This prevents matching regular Live Photos where bases are identical
+        if media_base.startswith(metadata_base) and media_base != metadata_base:
+            return True
 
         return False
 
@@ -671,6 +711,47 @@ class GooglePhotosPreprocessor(PreprocessorBase):
         if stem_clean != media_stem:
             for metadata_name, metadata_path in stem_index.get(stem_clean, []):
                 candidates[metadata_name] = metadata_path
+
+        # Check for Google Photos edit suffixes (e.g., IMG_6205-edited -> IMG_6205)
+        # This handles cases where edited photos have no dedicated metadata
+        # and should inherit metadata from the original file
+        edit_match = self.EDIT_SUFFIX_PATTERN.search(media_stem)
+        if edit_match:
+            original_stem = media_stem[: edit_match.start()]
+            for metadata_name, metadata_path in stem_index.get(original_stem, []):
+                candidates[metadata_name] = metadata_path
+
+        # Also handle edited files with duplicate indices: IMG_3661-edited(1).JPG
+        # Strip the duplicate index first, check for edit suffix, then search with both
+        # the base stem and the base stem + duplicate index
+        if idx:
+            # base is already the name without the duplicate index (e.g., IMG_3661-edited.JPG)
+            base_stem_only = Path(base).stem.lower()
+            edit_match_base = self.EDIT_SUFFIX_PATTERN.search(base_stem_only)
+            if edit_match_base:
+                # Found edit suffix in the base name (without duplicate index)
+                original_base = base_stem_only[: edit_match_base.start()]
+                # Look for original stem (IMG_3661)
+                for metadata_name, metadata_path in stem_index.get(original_base, []):
+                    candidates[metadata_name] = metadata_path
+
+        # Handle files with INTERNAL duplicate indices followed by edit suffix:
+        # e.g., "26 (3)-edited.jpg" -> should match "26 (3).jpg"
+        # These have the duplicate number BEFORE the edit suffix, not at the end
+        # The edit suffix is at the end of the stem (no idx extracted)
+        if not idx and edit_match:
+            # Already stripped the -edited suffix above; now check if what remains
+            # has a duplicate index pattern: "26 (3)" -> base="26", idx="3"
+            original_stem_with_idx = media_stem[: edit_match.start()]
+            # Try to extract duplicate index from the remaining stem
+            # Pattern: match "name (N)" at end of stem
+            import re
+            internal_idx_match = re.search(r"^(.*?)\s*\((\d+)\)$", original_stem_with_idx)
+            if internal_idx_match:
+                # Found internal duplicate index: "26 (3)" -> stem_with_idx = "26 (3)"
+                # Look for metadata with the same stem including the index
+                for metadata_name, metadata_path in stem_index.get(original_stem_with_idx, []):
+                    candidates[metadata_name] = metadata_path
 
         # If no candidates from stem index, fall back to prefix-index candidate generation.
         # This enables match_truncated and match_live_photo_variants for cases where the

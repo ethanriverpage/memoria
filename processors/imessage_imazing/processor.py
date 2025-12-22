@@ -683,7 +683,7 @@ def process_logic(
         if file_paths:
             log.exif_batch_start()
             exif_rebuilt_count = ImazingProcessor.batch_process_exif(
-                file_paths, file_info, _build_metadata_requests
+                file_paths, file_info, _build_metadata_requests, dedup_manifest
             )
             log.exif_written(len(file_info))
 

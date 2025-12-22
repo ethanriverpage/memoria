@@ -682,7 +682,7 @@ class TestVideoOverlayErrors:
             str(output_path),
         ]
         probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
-        probe_data = json.loads(probe_result.stdout)
+        _probe_data = json.loads(probe_result.stdout)  # noqa: F841 - Parsed for validation
         # May or may not have audio depending on implementation
         # Just verify the process completed successfully
 
