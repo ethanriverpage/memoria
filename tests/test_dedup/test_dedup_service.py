@@ -12,6 +12,7 @@ from common.dedup.service import (
     is_file_primary_by_hash,
     get_primary_for_file,
     get_merged_description_for_file,
+    get_merged_metadata_for_hash,
     get_secondary_reference,
     build_dedup_references,
     get_skipped_secondary_files,
@@ -447,16 +448,26 @@ class TestIsFilePrimaryByHash:
 
     This function enables hash-based deduplication lookup, which works correctly
     even when files are preprocessed to temporary directories.
+
+    IMPORTANT: The function uses best_quality.processor (not primary.processor)
+    to determine which processor should copy the file. This ensures the highest
+    quality version is always outputted. Primary attribution (earliest timestamp)
+    is preserved in merged_metadata for timestamps and descriptions.
     """
 
-    def test_primary_by_hash_exact_match(self):
-        """Test that primary processor returns True for exact hash match."""
+    def test_best_quality_processor_returns_true(self):
+        """Test that best_quality processor returns True for exact hash match."""
         manifest = {
             "duplicates": {
                 "abc123": {
                     "match_type": "exact",
                     "primary": {
-                        "processor": "Google Photos",
+                        "processor": "iMessage",  # Earliest timestamp
+                        "source_path": "/imessage/photo.jpg",
+                        "content_hash": "abc123",
+                    },
+                    "best_quality": {
+                        "processor": "Google Photos",  # Largest file
                         "source_path": "/google/photo.jpg",
                         "content_hash": "abc123",
                     },
@@ -471,16 +482,23 @@ class TestIsFilePrimaryByHash:
             }
         }
 
-        # Primary processor should return True
+        # Best quality processor should return True
         assert is_file_primary_by_hash(manifest, "abc123", "Google Photos") is True
+        # Primary (earliest timestamp) but not best quality should return False
+        assert is_file_primary_by_hash(manifest, "abc123", "iMessage") is False
 
-    def test_secondary_by_hash_exact_match(self):
+    def test_secondary_processor_returns_false(self):
         """Test that secondary processor returns False for exact hash match."""
         manifest = {
             "duplicates": {
                 "abc123": {
                     "match_type": "exact",
                     "primary": {
+                        "processor": "iMessage",
+                        "source_path": "/imessage/photo.jpg",
+                        "content_hash": "abc123",
+                    },
+                    "best_quality": {
                         "processor": "Google Photos",
                         "source_path": "/google/photo.jpg",
                         "content_hash": "abc123",
@@ -499,6 +517,37 @@ class TestIsFilePrimaryByHash:
         # Secondary processor should return False
         assert is_file_primary_by_hash(manifest, "abc123", "Instagram") is False
 
+    def test_same_primary_and_best_quality(self):
+        """Test when primary and best_quality are from same processor."""
+        manifest = {
+            "duplicates": {
+                "abc123": {
+                    "match_type": "exact",
+                    "primary": {
+                        "processor": "Google Photos",
+                        "source_path": "/google/photo.jpg",
+                        "content_hash": "abc123",
+                    },
+                    "best_quality": {
+                        "processor": "Google Photos",
+                        "source_path": "/google/photo.jpg",
+                        "content_hash": "abc123",
+                    },
+                    "secondary": [
+                        {
+                            "processor": "Instagram",
+                            "source_path": "/instagram/photo.jpg",
+                            "content_hash": "abc123",
+                        }
+                    ],
+                }
+            }
+        }
+
+        # When primary = best_quality, that processor should return True
+        assert is_file_primary_by_hash(manifest, "abc123", "Google Photos") is True
+        assert is_file_primary_by_hash(manifest, "abc123", "Instagram") is False
+
     def test_hash_not_in_manifest(self):
         """Test that unknown hash returns True (not a duplicate)."""
         manifest = {"duplicates": {}}
@@ -506,14 +555,19 @@ class TestIsFilePrimaryByHash:
             is_file_primary_by_hash(manifest, "unknown_hash", "Any Processor") is True
         )
 
-    def test_perceptual_hash_group_primary(self):
-        """Test primary detection in perceptual hash groups."""
+    def test_perceptual_hash_group_best_quality(self):
+        """Test best_quality detection in perceptual hash groups."""
         manifest = {
             "duplicates": {
                 "perceptual_def456": {
                     "match_type": "perceptual",
                     "primary": {
-                        "processor": "Google Photos",
+                        "processor": "iMessage",  # Earliest
+                        "source_path": "/imessage/photo.jpg",
+                        "content_hash": "ghi789",
+                    },
+                    "best_quality": {
+                        "processor": "Google Photos",  # Largest
                         "source_path": "/google/photo.jpg",
                         "content_hash": "def456",
                     },
@@ -528,7 +582,7 @@ class TestIsFilePrimaryByHash:
             }
         }
 
-        # Primary file's hash should return True for primary processor
+        # Best quality file's hash should return True for best quality processor
         assert is_file_primary_by_hash(manifest, "def456", "Google Photos") is True
 
     def test_perceptual_hash_group_secondary(self):
@@ -538,6 +592,11 @@ class TestIsFilePrimaryByHash:
                 "perceptual_def456": {
                     "match_type": "perceptual",
                     "primary": {
+                        "processor": "iMessage",
+                        "source_path": "/imessage/photo.jpg",
+                        "content_hash": "ghi789",
+                    },
+                    "best_quality": {
                         "processor": "Google Photos",
                         "source_path": "/google/photo.jpg",
                         "content_hash": "def456",
@@ -553,7 +612,7 @@ class TestIsFilePrimaryByHash:
             }
         }
 
-        # Secondary file's hash should return False
+        # Secondary/primary file's hash (not best quality) should return False
         assert is_file_primary_by_hash(manifest, "ghi789", "iMessage") is False
 
     def test_path_agnostic_lookup(self):
@@ -568,7 +627,12 @@ class TestIsFilePrimaryByHash:
                     "match_type": "exact",
                     "primary": {
                         "processor": "Google Photos",
-                        "source_path": "/exports/google/photo.jpg",  # Original path
+                        "source_path": "/exports/google/photo.jpg",
+                        "content_hash": "abc123",
+                    },
+                    "best_quality": {
+                        "processor": "Google Photos",
+                        "source_path": "/exports/google/photo.jpg",
                         "content_hash": "abc123",
                     },
                     "secondary": [
@@ -589,13 +653,18 @@ class TestIsFilePrimaryByHash:
         # The file could be at /tmp/discord_xyz/media/photo.jpg now
         # but it still has the same hash and should still be detected as secondary
 
-    def test_different_processor_same_hash_not_primary(self):
-        """Test that a different processor with matching secondary hash returns False."""
+    def test_different_processor_same_hash_not_best_quality(self):
+        """Test that processors without best quality return False."""
         manifest = {
             "duplicates": {
                 "abc123": {
                     "match_type": "exact",
                     "primary": {
+                        "processor": "Google Photos",
+                        "source_path": "/google/photo.jpg",
+                        "content_hash": "abc123",
+                    },
+                    "best_quality": {
                         "processor": "Google Photos",
                         "source_path": "/google/photo.jpg",
                         "content_hash": "abc123",
@@ -616,9 +685,135 @@ class TestIsFilePrimaryByHash:
             }
         }
 
-        # All secondary processors should return False
+        # All non-best-quality processors should return False
         assert is_file_primary_by_hash(manifest, "abc123", "Instagram") is False
         assert is_file_primary_by_hash(manifest, "abc123", "iMessage") is False
+
+    def test_best_quality_wins_over_primary(self):
+        """Test that best_quality processor wins even when different from primary.
+
+        This is the key semantic change: we output the highest quality file,
+        but use primary's timestamp for attribution.
+        """
+        # Scenario: iMessage has older file (primary by timestamp)
+        # but Google Photos has higher quality version
+        manifest = {
+            "duplicates": {
+                "abc123": {
+                    "match_type": "exact",
+                    "primary": {
+                        "processor": "iMessage",  # Earliest timestamp (2018)
+                        "source_path": "/imessage/photo.jpg",
+                        "content_hash": "abc123",
+                        "file_size": 500000,  # 500KB
+                    },
+                    "best_quality": {
+                        "processor": "Google Photos",  # Larger file
+                        "source_path": "/google/photo.jpg",
+                        "content_hash": "abc123",
+                        "file_size": 2000000,  # 2MB
+                    },
+                    "secondary": [],
+                    "merged_metadata": {
+                        "timestamp": "2018-03-15T10:00:00+00:00",  # From primary
+                    },
+                }
+            }
+        }
+
+        # Google Photos (best quality) should copy
+        assert is_file_primary_by_hash(manifest, "abc123", "Google Photos") is True
+        # iMessage (primary but lower quality) should NOT copy
+        assert is_file_primary_by_hash(manifest, "abc123", "iMessage") is False
+
+
+class TestGetMergedMetadataForHash:
+    """Tests for get_merged_metadata_for_hash function.
+
+    This function retrieves merged metadata from all sources for a content hash,
+    enabling the "super-image" pattern where the best quality file is outputted
+    with the earliest timestamp and merged metadata from all sources.
+    """
+
+    def test_get_merged_metadata_exact_match(self):
+        """Test getting merged metadata for exact hash match."""
+        manifest = {
+            "duplicates": {
+                "abc123": {
+                    "match_type": "exact",
+                    "primary": {
+                        "processor": "iMessage",
+                        "source_path": "/imessage/photo.jpg",
+                        "content_hash": "abc123",
+                    },
+                    "best_quality": {
+                        "processor": "Google Photos",
+                        "source_path": "/google/photo.jpg",
+                        "content_hash": "abc123",
+                    },
+                    "merged_metadata": {
+                        "timestamp": "2018-03-15T10:00:00+00:00",
+                        "gps": {"latitude": 40.7128, "longitude": -74.0060},
+                        "camera_info": {"make": "Apple", "model": "iPhone 12"},
+                        "people": ["Alice", "Bob"],
+                    },
+                }
+            }
+        }
+
+        result = get_merged_metadata_for_hash(manifest, "abc123")
+        assert result is not None
+        assert result["timestamp"] == "2018-03-15T10:00:00+00:00"
+        assert result["gps"]["latitude"] == 40.7128
+        assert "Alice" in result["people"]
+
+    def test_get_merged_metadata_perceptual_match(self):
+        """Test getting merged metadata for perceptual hash group."""
+        manifest = {
+            "duplicates": {
+                "perceptual_def456": {
+                    "match_type": "perceptual",
+                    "primary": {
+                        "processor": "iMessage",
+                        "content_hash": "ghi789",
+                    },
+                    "best_quality": {
+                        "processor": "Google Photos",
+                        "content_hash": "def456",
+                    },
+                    "merged_metadata": {
+                        "timestamp": "2020-01-01T00:00:00+00:00",
+                        "gps": {"latitude": 51.5074, "longitude": -0.1278},
+                    },
+                }
+            }
+        }
+
+        # Should find by best_quality content hash
+        result = get_merged_metadata_for_hash(manifest, "def456")
+        assert result is not None
+        assert result["gps"]["latitude"] == 51.5074
+
+    def test_get_merged_metadata_not_found(self):
+        """Test that unknown hash returns None."""
+        manifest = {"duplicates": {}}
+        result = get_merged_metadata_for_hash(manifest, "unknown_hash")
+        assert result is None
+
+    def test_get_merged_metadata_no_merged_data(self):
+        """Test when group exists but has no merged_metadata."""
+        manifest = {
+            "duplicates": {
+                "abc123": {
+                    "match_type": "exact",
+                    "primary": {"processor": "Google Photos"},
+                    "best_quality": {"processor": "Google Photos"},
+                }
+            }
+        }
+
+        result = get_merged_metadata_for_hash(manifest, "abc123")
+        assert result is None
 
 
 class TestMergedDescription:
@@ -874,11 +1069,16 @@ class TestFilterPrimaryFiles:
 
         file_hash = compute_content_hash(file1)
 
-        # This processor is the primary
+        # This processor has the best quality file
         manifest = {
             "duplicates": {
                 file_hash: {
                     "primary": {
+                        "processor": "Test Processor",
+                        "source_path": str(file1),
+                        "content_hash": file_hash,
+                    },
+                    "best_quality": {
                         "processor": "Test Processor",
                         "source_path": str(file1),
                         "content_hash": file_hash,
@@ -925,11 +1125,16 @@ class TestLivePhotoVideoLinking:
 
         image_hash = compute_content_hash(image_file)
 
-        # Manifest where this processor owns the primary image
+        # Manifest where this processor has the best quality image
         manifest = {
             "duplicates": {
                 image_hash: {
                     "primary": {
+                        "processor": "Test Processor",
+                        "source_path": str(image_file),
+                        "content_hash": image_hash,
+                    },
+                    "best_quality": {
                         "processor": "Test Processor",
                         "source_path": str(image_file),
                         "content_hash": image_hash,
@@ -942,7 +1147,7 @@ class TestLivePhotoVideoLinking:
             },
         }
 
-        # Video should be included since its image is primary for this processor
+        # Video should be included since its image is best quality for this processor
         files = [video_file]
         filtered, skipped = filter_primary_files(files, manifest, "Test Processor")
 
@@ -950,8 +1155,8 @@ class TestLivePhotoVideoLinking:
         assert video_file in filtered
         assert skipped == 0
 
-    def test_live_photo_video_skipped_when_image_secondary(self, tmp_path):
-        """Test that Live Photo video is skipped when its image is secondary."""
+    def test_live_photo_video_skipped_when_image_not_best_quality(self, tmp_path):
+        """Test that Live Photo video is skipped when its image is not best quality."""
         from common.dedup.hashing import compute_content_hash
 
         # Create image and video files
@@ -962,12 +1167,17 @@ class TestLivePhotoVideoLinking:
 
         image_hash = compute_content_hash(image_file)
 
-        # Manifest where another processor owns the primary image
+        # Manifest where another processor has the best quality image
         manifest = {
             "duplicates": {
                 image_hash: {
                     "primary": {
-                        "processor": "Other Processor",
+                        "processor": "Test Processor",  # Earliest timestamp
+                        "source_path": str(image_file),
+                        "content_hash": image_hash,
+                    },
+                    "best_quality": {
+                        "processor": "Other Processor",  # Best quality is elsewhere
                         "source_path": "/other/photo.heic",
                         "content_hash": image_hash,
                     },
@@ -985,7 +1195,7 @@ class TestLivePhotoVideoLinking:
             },
         }
 
-        # Video should be skipped since its image is not primary for this processor
+        # Video should be skipped since its image is not best quality for this processor
         files = [video_file]
         filtered, skipped = filter_primary_files(files, manifest, "Test Processor")
 

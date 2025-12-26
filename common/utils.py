@@ -68,7 +68,6 @@ def get_media_type(file_path) -> Optional[str]:
 
 
 def is_supported_media(file_path) -> bool:
-    """Check if file is a supported media type."""
     ext = os.path.splitext(str(file_path))[1].lower()
     return ext in ALL_MEDIA_EXTENSIONS
 
@@ -94,8 +93,8 @@ def extract_username_from_export_dir(input_dir: str, prefix: str) -> str:
 _QUOTE_REPLACEMENTS = {
     "\u2018": "'",  # LEFT SINGLE QUOTATION MARK
     "\u2019": "'",  # RIGHT SINGLE QUOTATION MARK
-    "\u201C": '"',  # LEFT DOUBLE QUOTATION MARK
-    "\u201D": '"',  # RIGHT DOUBLE QUOTATION MARK
+    "\u201c": '"',  # LEFT DOUBLE QUOTATION MARK
+    "\u201d": '"',  # RIGHT DOUBLE QUOTATION MARK
     "\u2032": "'",  # PRIME (single)
     "\u2033": '"',  # DOUBLE PRIME
 }

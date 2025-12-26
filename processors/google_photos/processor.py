@@ -14,7 +14,6 @@ from common.dedup.description import (
     PLATFORM_GOOGLE,
     SERVICE_PHOTOS,
 )
-from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.files.utils import batch_correct_extensions, copy_file
 from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
 from common.dedup.hashing import (
@@ -26,6 +25,7 @@ from common.media.exiftool import (
     GPSData,
     MetadataWriteRequest,
     PREAMBLE_WITH_IGNORE_ERRORS,
+    build_datetime_tags,
 )
 from common.output.logging import get_processor_logger
 from common.processing import (
@@ -231,8 +231,9 @@ class GooglePhotosProcessor(ProcessorBase):
             metadata_extractor=extract_google_photos_metadata,
         )
 
-    @staticmethod
+    @classmethod
     def process(
+        cls,
         input_dir: str,
         output_dir: Optional[str] = None,
         dedup_manifest: Optional[Dict[str, Any]] = None,
@@ -240,8 +241,7 @@ class GooglePhotosProcessor(ProcessorBase):
     ) -> bool:
         """Process Google Photos export."""
         # Check for required dependencies
-        if not check_exiftool():
-            print_exiftool_error()
+        if not cls.check_dependencies():
             return False
 
         try:
@@ -299,17 +299,8 @@ def _build_metadata_requests(
     requests: List[MetadataWriteRequest] = []
 
     for file_path, media_data, _album_name, export_username, content_hash in file_info:
-        # Build datetime tags
-        datetime_tags: List[Tuple[str, str]] = []
-        timestamp_str = media_data.get("capture_timestamp")
-        if timestamp_str:
-            date_obj = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            exif_date = date_obj.strftime("%Y:%m:%d %H:%M:%S")
-            datetime_tags = [
-                ("DateTimeOriginal", exif_date),
-                ("CreateDate", exif_date),
-                ("ModifyDate", exif_date),
-            ]
+        # Build datetime tags (ISO format)
+        datetime_tags = build_datetime_tags(media_data.get("capture_timestamp"))
 
         # Build GPS data
         gps: Optional[GPSData] = None
@@ -390,7 +381,9 @@ def process_media_batch(batch_args):
         try:
             copy_file(media_path, output_path)
             file_paths.append(output_path)
-            file_info.append((output_path, media_data, album_name, export_username, content_hash))
+            file_info.append(
+                (output_path, media_data, album_name, export_username, content_hash)
+            )
         except Exception as e:
             log.copy_error(media_file, e)
             results.append((False, None, None))
@@ -404,7 +397,8 @@ def process_media_batch(batch_args):
         # Update file_paths and file_info with corrected paths
         file_paths = [corrections.get(p, p) for p in file_paths]
         file_info = [
-            (corrections.get(fp, fp), md, an, eu, ch) for fp, md, an, eu, ch in file_info
+            (corrections.get(fp, fp), md, an, eu, ch)
+            for fp, md, an, eu, ch in file_info
         ]
 
     # Phase 3: Update timestamps and compile results
@@ -414,7 +408,11 @@ def process_media_batch(batch_args):
         if timestamp_str:
             update_file_timestamps(output_path, timestamp_str, "%Y-%m-%dT%H:%M:%S")
         results.append(
-            (True, output_path, (output_path, media_data, album_name, export_username, content_hash))
+            (
+                True,
+                output_path,
+                (output_path, media_data, album_name, export_username, content_hash),
+            )
         )
 
     return results
@@ -433,8 +431,7 @@ def process_logic(
     """
 
     # Check for exiftool
-    if not check_exiftool():
-        print_exiftool_error()
+    if not GooglePhotosProcessor.check_dependencies():
         return
 
     log.processor_start("Google Photos Media Processor")
@@ -515,7 +512,10 @@ def _process_working_directory(
                     # Use cached hash from preprocessing (avoids re-hashing)
                     # Pass source_path for within-processor dedup
                     if is_file_primary_by_hash(
-                        dedup_manifest, content_hash, "Google Photos", source_path_for_dedup
+                        dedup_manifest,
+                        content_hash,
+                        "Google Photos",
+                        source_path_for_dedup,
                     ):
                         filtered_media_files.append(media_data)
                     else:
@@ -643,29 +643,21 @@ def _process_working_directory(
     )
 
     # Collect successful files for EXIF processing
-    success_count = 0
-    failed_count = 0
-    file_paths = []
-    file_info = []
+    collected = GooglePhotosProcessor.collect_processing_results(results)
 
-    for success, output_path, info_tuple in results:
-        if success and output_path:
-            success_count += 1
-            file_paths.append(output_path)
-            file_info.append(info_tuple)
-        else:
-            failed_count += 1
-
-    log.copied_files(success_count, failed_count)
+    log.copied_files(collected.success_count, collected.failed_count)
 
     # Consolidated EXIF processing
     exif_rebuilt_count = 0
-    if file_paths:
+    if collected.file_paths:
         log.exif_batch_start()
         exif_rebuilt_count = GooglePhotosProcessor.batch_process_exif(
-            file_paths, file_info, _build_metadata_requests, dedup_manifest
+            collected.file_paths,
+            collected.file_info,
+            _build_metadata_requests,
+            dedup_manifest,
         )
-        log.exif_written(len(file_info))
+        log.exif_written(len(collected.file_info))
 
     # Save dedup references for skipped secondary files
     if dedup_manifest and skipped_secondary_files:
@@ -678,8 +670,8 @@ def _process_working_directory(
 
     # Print summary using shared utility
     print_processing_summary(
-        success=success_count,
-        failed=failed_count,
+        success=collected.success_count,
+        failed=collected.failed_count,
         total=len(processing_tasks),
         output_dir=output_dir,
         extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
@@ -687,5 +679,4 @@ def _process_working_directory(
 
 
 def get_processor():
-    """Return processor class for auto-discovery."""
     return GooglePhotosProcessor

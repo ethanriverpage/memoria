@@ -10,7 +10,6 @@ import logging
 import multiprocessing
 import os
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -29,7 +28,6 @@ from common.files.utils import batch_correct_extensions, copy_file
 from common.processing import print_processing_summary
 from common.output.progress import PHASE_PROCESS, progress_bar
 from processors.instaloader.preprocess import InstaloaderPreprocessor
-from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
 from common.utils import (
@@ -42,6 +40,7 @@ from common.media.exiftool import (
     DescriptionWriteSpec,
     MetadataWriteRequest,
     PREAMBLE_WITH_IGNORE_ERRORS,
+    build_datetime_tags,
 )
 from common.output.logging import get_processor_logger
 
@@ -98,18 +97,15 @@ class InstaloaderProcessor(ProcessorBase):
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        """Check if this processor can handle the input"""
         return detect(input_path)
 
     @staticmethod
     def get_name() -> str:
-        """Return processor name"""
         return "Instaloader"
 
     @staticmethod
     def get_priority() -> int:
-        """Return priority (higher = run first)"""
-        return 30  # Low priority - least specific pattern
+        return 30
 
     @staticmethod
     def get_output_info() -> OutputInfo:
@@ -121,7 +117,6 @@ class InstaloaderProcessor(ProcessorBase):
 
     @staticmethod
     def supports_dedup() -> bool:
-        """Return True - Instaloader supports cross-processor deduplication."""
         return True
 
     @staticmethod
@@ -201,8 +196,9 @@ class InstaloaderProcessor(ProcessorBase):
             metadata_extractor=extract_instaloader_metadata,
         )
 
-    @staticmethod
+    @classmethod
     def process(
+        cls,
         input_dir: str,
         output_dir: Optional[str] = None,
         dedup_manifest: Optional[Dict[str, Any]] = None,
@@ -220,8 +216,7 @@ class InstaloaderProcessor(ProcessorBase):
             True if processing succeeded, False otherwise
         """
         # Check for required dependencies
-        if not check_exiftool():
-            print_exiftool_error()
+        if not cls.check_dependencies():
             return False
 
         try:
@@ -265,17 +260,8 @@ def _build_metadata_requests(
     requests: List[MetadataWriteRequest] = []
 
     for file_path, post_data, export_username, media_type, content_hash in file_info:
-        # Build datetime tags
-        datetime_tags: List[Tuple[str, str]] = []
-        timestamp_str = post_data.get("timestamp")
-        if timestamp_str:
-            date_obj = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            exif_date = date_obj.strftime("%Y:%m:%d %H:%M:%S")
-            datetime_tags = [
-                ("DateTimeOriginal", exif_date),
-                ("CreateDate", exif_date),
-                ("ModifyDate", exif_date),
-            ]
+        # Build datetime tags (ISO format)
+        datetime_tags = build_datetime_tags(post_data.get("timestamp"))
 
         # Build description using unified format
         # Map media_type to service name (story->stories, post->posts, reel->reels)
@@ -416,8 +402,7 @@ def process_logic(
     # Verbose mode enables detailed logging to file
 
     # Check for exiftool
-    if not check_exiftool():
-        print_exiftool_error()
+    if not InstaloaderProcessor.check_dependencies():
         return
 
     logger.info("Instaloader Media Processor")
@@ -585,39 +570,33 @@ def process_logic(
             )
 
         # Flatten results and collect successful files for EXIF processing
-        success_count = 0
-        failed_count = 0
-        file_paths = []
-        file_info = []
-
-        for batch_result in batch_results:
-            for success, output_path, info_tuple in batch_result:
-                if success and output_path:
-                    success_count += 1
-                    file_paths.append(output_path)
-                    file_info.append(info_tuple)
-                else:
-                    failed_count += 1
+        collected = InstaloaderProcessor.collect_batch_processing_results(batch_results)
 
         processing_time = time.time() - start_time
         logger.debug(
-            f"Processing completed in {processing_time:.2f} seconds ({len(processing_tasks)/processing_time:.2f} files/sec)"
+            f"Processing completed in {processing_time:.2f} seconds "
+            f"({len(processing_tasks)/processing_time:.2f} files/sec)"
         )
-        logger.info(f"Copied {success_count} files ({failed_count} failed)")
+        logger.info(
+            f"Copied {collected.success_count} files ({collected.failed_count} failed)"
+        )
 
         # Consolidated EXIF processing
         exif_rebuilt_count = 0
-        if file_paths:
+        if collected.file_paths:
             logger.info("Batch processing EXIF metadata...")
             exif_rebuilt_count = InstaloaderProcessor.batch_process_exif(
-                file_paths, file_info, _build_metadata_requests, dedup_manifest
+                collected.file_paths,
+                collected.file_info,
+                _build_metadata_requests,
+                dedup_manifest,
             )
-            logger.info(f"EXIF metadata written for {len(file_info)} files")
+            logger.info(f"EXIF metadata written for {len(collected.file_info)} files")
 
         # Print summary using shared utility
         print_processing_summary(
-            success=success_count,
-            failed=failed_count,
+            success=collected.success_count,
+            failed=collected.failed_count,
             total=len(processing_tasks),
             output_dir=output_dir,
             extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
@@ -642,5 +621,4 @@ def process_logic(
 
 
 def get_processor():
-    """Return processor class for auto-discovery."""
     return InstaloaderProcessor

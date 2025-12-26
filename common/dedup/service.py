@@ -1346,6 +1346,11 @@ def is_file_primary_by_hash(
     even when files are preprocessed to temporary directories (where path-based
     matching would fail due to path mismatch between catalog and process phases).
 
+    The processor with the BEST QUALITY file is the one that should copy,
+    ensuring the highest quality version is always outputted. Primary attribution
+    (earliest timestamp) is preserved in merged_metadata for timestamps and
+    description provenance.
+
     When source_path is provided, this function also handles within-processor
     deduplication (e.g., same file in multiple iMessage exports). Without
     source_path, only cross-processor deduplication is checked.
@@ -1356,29 +1361,31 @@ def is_file_primary_by_hash(
         processor_name: Name of the processor checking the file.
         source_path: Optional path to the source file. When provided, enables
             within-processor deduplication by checking if this specific file
-            is the primary copy.
+            is the best quality copy.
 
     Returns:
-        True if this processor should copy the file (primary or not in manifest).
-        False if another processor/file is the primary for this file.
+        True if this processor should copy the file (best quality or not in manifest).
+        False if another processor/file has the best quality for this file.
     """
     duplicates = manifest.get("duplicates", {})
 
     # For exact hash matches, the content_hash is the dictionary key
     if content_hash in duplicates:
         group = duplicates[content_hash]
-        primary = group.get("primary", {})
-        primary_processor = primary.get("processor")
+        # Use best_quality processor to determine who copies the file
+        # This ensures highest quality file is always outputted
+        best_quality = group.get("best_quality", {})
+        best_processor = best_quality.get("processor")
 
-        # Cross-processor check: different processor owns the primary
-        if primary_processor != processor_name:
+        # Cross-processor check: different processor has the best quality
+        if best_processor != processor_name:
             return False
 
         # Same processor - check source_path for within-processor dedup
         if source_path is not None:
-            primary_source = primary.get("source_path")
-            if primary_source and primary_source != source_path:
-                # Same processor but different source file - this is secondary
+            best_source = best_quality.get("source_path")
+            if best_source and best_source != source_path:
+                # Same processor but different source file - this is not best quality
                 return False
 
         return True
@@ -1388,27 +1395,35 @@ def is_file_primary_by_hash(
         if not key.startswith("perceptual_"):
             continue
 
-        # Check if primary has this content_hash
-        primary = group.get("primary", {})
-        if primary.get("content_hash") == content_hash:
-            primary_processor = primary.get("processor")
+        # Use best_quality for perceptual groups too
+        best_quality = group.get("best_quality", {})
+
+        # Check if best_quality has this content_hash
+        if best_quality.get("content_hash") == content_hash:
+            best_processor = best_quality.get("processor")
 
             # Cross-processor check
-            if primary_processor != processor_name:
+            if best_processor != processor_name:
                 return False
 
             # Within-processor check
             if source_path is not None:
-                primary_source = primary.get("source_path")
-                if primary_source and primary_source != source_path:
+                best_source = best_quality.get("source_path")
+                if best_source and best_source != source_path:
                     return False
 
             return True
 
+        # Check if primary has this content_hash (but is not best quality)
+        primary = group.get("primary", {})
+        if primary.get("content_hash") == content_hash:
+            # This file is part of a perceptual group but not the best quality
+            return False
+
         # Check if any secondary has this content_hash
         for secondary in group.get("secondary", []):
             if secondary.get("content_hash") == content_hash:
-                # This file is a secondary - another processor has the primary
+                # This file is a secondary - not the best quality
                 return False
 
     # Not in manifest = treat as primary (not a duplicate)
@@ -1675,6 +1690,64 @@ def get_secondary_sources_for_hash(
         unique_entries.append(entry)
 
     return unique_entries
+
+
+def get_merged_metadata_for_hash(
+    manifest: Dict[str, Any],
+    content_hash: str,
+) -> Optional[Dict[str, Any]]:
+    """Get merged metadata for a content hash from all duplicate sources.
+
+    When a file is part of a duplicate group, this returns the merged metadata
+    that combines information from all sources:
+    - timestamp: Earliest occurrence across all sources (primary attribution)
+    - gps: First non-zero GPS coordinates found
+    - camera_info: Most detailed camera information
+    - people: Union of all people tags
+    - albums: All albums with source attribution
+    - provenance: List of all source processors and paths
+
+    This enables the "super-image" pattern where the best quality file is
+    outputted with the earliest timestamp and merged metadata from all sources.
+
+    Args:
+        manifest: Deduplication manifest.
+        content_hash: Content hash to look up.
+
+    Returns:
+        Merged metadata dictionary if file is in a duplicate group, None otherwise.
+    """
+    duplicates = manifest.get("duplicates", {})
+
+    # Look up by content hash (exact match groups use hash as key)
+    group = duplicates.get(content_hash)
+
+    # Also check perceptual groups if not found
+    if group is None:
+        for key, grp in duplicates.items():
+            if key.startswith("perceptual_"):
+                # Check best_quality first (this is the file that will be copied)
+                best = grp.get("best_quality", {})
+                if best.get("content_hash") == content_hash:
+                    group = grp
+                    break
+                # Check primary
+                primary = grp.get("primary", {})
+                if primary.get("content_hash") == content_hash:
+                    group = grp
+                    break
+                # Check secondaries
+                for sec in grp.get("secondary", []):
+                    if sec.get("content_hash") == content_hash:
+                        group = grp
+                        break
+                if group:
+                    break
+
+    if group is None:
+        return None
+
+    return group.get("merged_metadata")
 
 
 def get_duplicate_group_for_file(

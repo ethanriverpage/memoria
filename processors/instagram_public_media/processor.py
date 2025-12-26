@@ -9,7 +9,6 @@ import logging
 import multiprocessing
 import os
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -23,12 +22,12 @@ from common.dedup.description import (
     SERVICE_POSTS,
     SERVICE_REELS,
 )
-from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.files.utils import batch_correct_extensions, copy_file
 from common.media.exiftool import (
     DescriptionWriteSpec,
     MetadataWriteRequest,
     PREAMBLE_WITH_IGNORE_ERRORS,
+    build_datetime_tags,
 )
 from common.processing import (
     print_processing_summary,
@@ -121,18 +120,15 @@ class InstagramPublicMediaProcessor(ProcessorBase):
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        """Check if this processor can handle the input"""
         return detect(input_path)
 
     @staticmethod
     def get_name() -> str:
-        """Return processor name"""
         return "Instagram Public Media"
 
     @staticmethod
     def get_priority() -> int:
-        """Return priority (higher = run first)"""
-        return 60  # Medium priority
+        return 60
 
     @staticmethod
     def get_output_info() -> OutputInfo:
@@ -146,7 +142,6 @@ class InstagramPublicMediaProcessor(ProcessorBase):
 
     @staticmethod
     def supports_dedup() -> bool:
-        """Return True - Instagram Public Media supports cross-processor deduplication."""
         return True
 
     @staticmethod
@@ -235,8 +230,9 @@ class InstagramPublicMediaProcessor(ProcessorBase):
             metadata_extractor=extract_instagram_metadata,
         )
 
-    @staticmethod
+    @classmethod
     def process(
+        cls,
         input_dir: str,
         output_dir: Optional[str] = None,
         dedup_manifest: Optional[Dict[str, Any]] = None,
@@ -254,8 +250,7 @@ class InstagramPublicMediaProcessor(ProcessorBase):
             True if processing succeeded, False otherwise
         """
         # Check for required dependencies
-        if not check_exiftool():
-            print_exiftool_error()
+        if not cls.check_dependencies():
             return False
 
         try:
@@ -298,17 +293,8 @@ def _build_metadata_requests(
     requests: List[MetadataWriteRequest] = []
 
     for file_path, post_data, export_username, media_type, content_hash in file_info:
-        # Build datetime tags
-        datetime_tags: List[Tuple[str, str]] = []
-        timestamp_str = post_data.get("timestamp")
-        if timestamp_str:
-            date_obj = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            exif_date = date_obj.strftime("%Y:%m:%d %H:%M:%S")
-            datetime_tags = [
-                ("DateTimeOriginal", exif_date),
-                ("CreateDate", exif_date),
-                ("ModifyDate", exif_date),
-            ]
+        # Build datetime tags (ISO format)
+        datetime_tags = build_datetime_tags(post_data.get("timestamp"))
 
         # Build description using unified format
         # Map media_type to service name (story->stories, post->posts, reel->reels)
@@ -435,8 +421,7 @@ def process_logic(
         dedup_manifest: Optional deduplication manifest for filtering secondary files
     """
     # Check for exiftool
-    if not check_exiftool():
-        print_exiftool_error()
+    if not InstagramPublicMediaProcessor.check_dependencies():
         return
 
     logger.info("Instagram Media Processor")
@@ -621,35 +606,30 @@ def _process_working_directory(
         )
 
     # Flatten results and collect successful files for EXIF processing
-    success_count = 0
-    failed_count = 0
-    file_paths = []
-    file_info = []
+    collected = InstagramPublicMediaProcessor.collect_batch_processing_results(
+        batch_results
+    )
 
-    for batch_result in batch_results:
-        for success, output_path, info_tuple in batch_result:
-            if success and output_path:
-                success_count += 1
-                file_paths.append(output_path)
-                file_info.append(info_tuple)
-            else:
-                failed_count += 1
-
-    logger.info(f"Copied {success_count} files ({failed_count} failed)")
+    logger.info(
+        f"Copied {collected.success_count} files ({collected.failed_count} failed)"
+    )
 
     # Consolidated EXIF processing
     exif_rebuilt_count = 0
-    if file_paths:
+    if collected.file_paths:
         logger.info("Batch processing EXIF metadata...")
         exif_rebuilt_count = InstagramPublicMediaProcessor.batch_process_exif(
-            file_paths, file_info, _build_metadata_requests, dedup_manifest
+            collected.file_paths,
+            collected.file_info,
+            _build_metadata_requests,
+            dedup_manifest,
         )
-        logger.info(f"EXIF metadata written for {len(file_info)} files")
+        logger.info(f"EXIF metadata written for {len(collected.file_info)} files")
 
     # Print summary using shared utility
     print_processing_summary(
-        success=success_count,
-        failed=failed_count,
+        success=collected.success_count,
+        failed=collected.failed_count,
         total=len(processing_tasks),
         output_dir=output_dir,
         extra_stats={
@@ -660,5 +640,4 @@ def _process_working_directory(
 
 
 def get_processor():
-    """Return processor class for auto-discovery."""
     return InstagramPublicMediaProcessor

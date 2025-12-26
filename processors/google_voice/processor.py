@@ -9,7 +9,6 @@ import logging
 import multiprocessing
 import os
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -27,7 +26,6 @@ from common.output.progress import PHASE_PROCESS, progress_bar
 from common.output.paths import OutputInfo
 from processors.google_voice.preprocess import GoogleVoicePreprocessor
 from processors.base import ProcessorBase
-from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.utils import (
     ALL_MEDIA_EXTENSIONS,
     FilenameGenerator,
@@ -39,6 +37,7 @@ from common.media.exiftool import (
     DescriptionWriteSpec,
     MetadataWriteRequest,
     PREAMBLE_WITH_IGNORE_ERRORS,
+    build_datetime_tags,
 )
 from common.output.logging import get_processor_logger
 
@@ -99,18 +98,15 @@ class GoogleVoiceProcessor(ProcessorBase):
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        """Check if this processor can handle the input"""
         return detect(input_path)
 
     @staticmethod
     def get_name() -> str:
-        """Return processor name"""
         return "Google Voice"
 
     @staticmethod
     def get_priority() -> int:
-        """Return priority (higher = run first)"""
-        return 50  # Medium priority
+        return 50
 
     @staticmethod
     def get_output_info() -> OutputInfo:
@@ -122,7 +118,6 @@ class GoogleVoiceProcessor(ProcessorBase):
 
     @staticmethod
     def supports_dedup() -> bool:
-        """Return True - Google Voice supports cross-processor deduplication."""
         return True
 
     @staticmethod
@@ -220,8 +215,9 @@ class GoogleVoiceProcessor(ProcessorBase):
             metadata_extractor=extract_metadata if metadata_index else None,
         )
 
-    @staticmethod
+    @classmethod
     def process(
+        cls,
         input_dir: str,
         output_dir: Optional[str] = None,
         dedup_manifest: Optional[Dict[str, Any]] = None,
@@ -239,8 +235,7 @@ class GoogleVoiceProcessor(ProcessorBase):
             True if processing succeeded, False otherwise
         """
         # Check for required dependencies
-        if not check_exiftool():
-            print_exiftool_error()
+        if not cls.check_dependencies():
             return False
 
         try:
@@ -289,17 +284,8 @@ def _build_metadata_requests(
         export_username,
         content_hash,
     ) in file_info:
-        # Build datetime tags
-        datetime_tags: List[Tuple[str, str]] = []
-        timestamp_str = message_data.get("timestamp")
-        if timestamp_str:
-            date_obj = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            exif_date = date_obj.strftime("%Y:%m:%d %H:%M:%S")
-            datetime_tags = [
-                ("DateTimeOriginal", exif_date),
-                ("CreateDate", exif_date),
-                ("ModifyDate", exif_date),
-            ]
+        # Build datetime tags (ISO format with Z suffix)
+        datetime_tags = build_datetime_tags(message_data.get("timestamp"))
 
         # Build description using unified format
         other_party = conversation_name.replace("Group: ", "")
@@ -341,20 +327,19 @@ def build_filename_index(metadata: dict) -> Dict[str, dict]:
     Returns:
         Dict mapping media_file -> {message, conversation_name}
     """
-    filename_index: Dict[str, dict] = {}
-    conversations = metadata.get("conversations", [])
 
-    for conversation in conversations:
-        conversation_name = conversation.get("conversation_name", "unknown")
-        for message in conversation.get("messages", []):
-            media_files = message.get("media_files", [])
-            for media_file in media_files:
-                filename_index[media_file] = {
-                    "message": message,
-                    "conversation_name": conversation_name,
-                }
+    def _google_voice_context_builder(conversation: dict, message: dict) -> dict:
+        """Build Google Voice context with conversation name."""
+        return {
+            "message": message,
+            "conversation_name": conversation.get("conversation_name", "unknown"),
+        }
 
-    return filename_index
+    return ProcessorBase.build_media_filename_index(
+        metadata,
+        media_keys=["media_files"],
+        context_builder=_google_voice_context_builder,
+    )
 
 
 def process_media_batch(batch_args):
@@ -473,8 +458,7 @@ def process_logic(
     # Verbose mode enables detailed logging to file
 
     # Check for exiftool
-    if not check_exiftool():
-        print_exiftool_error()
+    if not GoogleVoiceProcessor.check_dependencies():
         return
 
     logger.info("Google Voice Messages Media Processor")
@@ -657,35 +641,28 @@ def process_logic(
             )
 
         # Flatten results and collect successful files for EXIF processing
-        success_count = 0
-        failed_count = 0
-        file_paths = []
-        file_info = []
+        collected = GoogleVoiceProcessor.collect_batch_processing_results(batch_results)
 
-        for batch_result in batch_results:
-            for success, output_path, info_tuple in batch_result:
-                if success and output_path:
-                    success_count += 1
-                    file_paths.append(output_path)
-                    file_info.append(info_tuple)
-                else:
-                    failed_count += 1
-
-        logger.info(f"Copied {success_count} files ({failed_count} failed)")
+        logger.info(
+            f"Copied {collected.success_count} files ({collected.failed_count} failed)"
+        )
 
         # Consolidated EXIF processing
         exif_rebuilt_count = 0
-        if file_paths:
+        if collected.file_paths:
             logger.info("Batch processing EXIF metadata...")
             exif_rebuilt_count = GoogleVoiceProcessor.batch_process_exif(
-                file_paths, file_info, _build_metadata_requests, dedup_manifest
+                collected.file_paths,
+                collected.file_info,
+                _build_metadata_requests,
+                dedup_manifest,
             )
-            logger.info(f"EXIF metadata written for {len(file_info)} files")
+            logger.info(f"EXIF metadata written for {len(collected.file_info)} files")
 
         # Print summary using shared utility
         print_processing_summary(
-            success=success_count,
-            failed=failed_count,
+            success=collected.success_count,
+            failed=collected.failed_count,
             total=len(processing_tasks),
             output_dir=output_dir,
             extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
@@ -705,5 +682,4 @@ def process_logic(
 
 
 def get_processor():
-    """Return processor class for auto-discovery."""
     return GoogleVoiceProcessor

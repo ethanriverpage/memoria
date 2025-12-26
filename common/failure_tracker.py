@@ -136,7 +136,6 @@ class FailureTracker:
         self.processing_failures.append(entry)
 
     def has_failures(self) -> bool:
-        """Check if any failures have been tracked."""
         return bool(
             self.orphaned_media or self.orphaned_metadata or self.processing_failures
         )

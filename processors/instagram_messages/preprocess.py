@@ -269,6 +269,58 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
 
         return media_paths
 
+    def extract_message_content(self, message_element) -> Optional[str]:
+        """
+        Extract message text content from the message element.
+
+        HTML structure:
+            <div class="_3-95 _a6-p">
+              <div>
+                <div></div>
+                <div>Message text here</div>
+                <div></div>
+                <div></div>
+              </div>
+            </div>
+
+        Returns:
+            Message text content, or None if no text found.
+        """
+        try:
+            # Find the content container
+            content_container = message_element.find("div", class_="_3-95 _a6-p")
+            if not content_container:
+                return None
+
+            # The content is inside nested divs - find direct text content
+            # Get all div children and look for ones with actual text
+            inner_div = content_container.find("div", recursive=False)
+            if not inner_div:
+                return None
+
+            # Look through child divs for text content
+            for child_div in inner_div.find_all("div", recursive=False):
+                text = child_div.get_text(strip=True)
+                if text:
+                    # Filter out reaction notifications
+                    if text.startswith("Reacted ") and " to your message" in text:
+                        continue
+                    # Filter out "Liked a message" notifications
+                    if text == "Liked a message":
+                        continue
+                    # Return the first meaningful text found
+                    return text
+
+            return None
+
+        except Exception as e:
+            self.log_message(
+                "CONTENT_EXTRACT_ERROR",
+                "Failed to extract message content",
+                str(e),
+            )
+            return None
+
     def parse_html_file(self, html_path: Path, _conversation_id: str) -> List[Dict]:
         """
         Parse an HTML file and extract messages with media.
@@ -310,6 +362,9 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
                 # Extract media paths
                 media_paths = self.extract_media_paths(container)
 
+                # Extract message content
+                content = self.extract_message_content(container)
+
                 # Only include messages with media
                 if media_paths:
                     message_data = {
@@ -317,6 +372,7 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
                         "timestamp": timestamp,
                         "timestamp_raw": timestamp_raw,
                         "media_paths": media_paths,
+                        "content": content,
                     }
 
                     # Log constructed metadata
@@ -325,6 +381,7 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
                     )
                     logger.debug(f"  Sender: {sender}")
                     logger.debug(f"  Timestamp: {timestamp} (raw: {timestamp_raw})")
+                    logger.debug(f"  Content: {content}")
                     logger.debug(f"  Media files: {len(media_paths)} file(s)")
                     for media_path in media_paths:
                         logger.debug(f"    - {media_path}")
@@ -637,7 +694,9 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
                                 msg["source_paths"] = {}
                             if result.dest_filename not in msg["media_files"]:
                                 msg["media_files"].append(result.dest_filename)
-                                msg["source_paths"][result.dest_filename] = str(result.source_path)
+                                msg["source_paths"][result.dest_filename] = str(
+                                    result.source_path
+                                )
 
             # Update stats
             unique_files = sum(1 for r in results.values() if not r.is_duplicate)

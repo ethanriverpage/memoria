@@ -21,14 +21,11 @@ from common.dedup.description import (
 )
 from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
 from common.files.utils import copy_file
-from common.dependency_checker import (
-    check_exiftool,
-    print_exiftool_error,
-)
 from common.media.exiftool import (
     DEFAULT_PREAMBLE,
     DescriptionWriteSpec,
     MetadataWriteRequest,
+    build_datetime_tags,
 )
 from common.output.logging import get_processor_logger
 from common.processing import (
@@ -278,8 +275,9 @@ class DiscordProcessor(ProcessorBase):
             metadata_extractor=extract_metadata if metadata_index else None,
         )
 
-    @staticmethod
+    @classmethod
     def process(
+        cls,
         input_dir: str,
         output_dir: Optional[str] = None,
         dedup_manifest: Optional[Dict[str, Any]] = None,
@@ -287,8 +285,7 @@ class DiscordProcessor(ProcessorBase):
     ) -> bool:
         """Process Discord export."""
         # Check for required dependencies
-        if not check_exiftool():
-            print_exiftool_error()
+        if not cls.check_dependencies():
             return False
 
         try:
@@ -371,18 +368,10 @@ def _build_metadata_requests(
             continue
         message = message_info.get("message", {})
 
-        # Build datetime tags
-        datetime_tags: List[Tuple[str, str]] = []
-        timestamp = message.get("timestamp", "")
-        if timestamp:
-            # Discord format: "YYYY-MM-DD HH:MM:SS UTC"
-            date_str = timestamp.replace(" UTC", "").strip()
-            exif_date = date_str.replace("-", ":")
-            datetime_tags = [
-                ("DateTimeOriginal", exif_date),
-                ("CreateDate", exif_date),
-                ("ModifyDate", exif_date),
-            ]
+        # Build datetime tags (Discord format: "YYYY-MM-DD HH:MM:SS UTC")
+        datetime_tags = build_datetime_tags(
+            message.get("timestamp", ""), strip_utc=True
+        )
 
         # Build description
         default_description = _build_description(message_info, export_username)
@@ -406,22 +395,21 @@ def _build_metadata_requests(
 
 def build_filename_index(metadata: dict) -> Dict[str, dict]:
     """Build index mapping media filename to message metadata."""
-    filename_index = {}
 
-    for channel_id, conv_data in metadata.get("conversations", {}).items():
-        for message in conv_data.get("messages", []):
-            media_files = message.get("media_files", [])
-            for filename in media_files:
-                # Store both message and channel context
-                filename_index[filename] = {
-                    "message": message,
-                    "channel_id": channel_id,
-                    "channel_type": conv_data.get("type"),
-                    "channel_title": conv_data.get("title"),
-                    "guild_name": conv_data.get("guild_name"),
-                }
+    def _discord_context_builder(conversation: dict, message: dict) -> dict:
+        """Build Discord-specific context with channel information."""
+        return {
+            "message": message,
+            "channel_type": conversation.get("type"),
+            "channel_title": conversation.get("title"),
+            "guild_name": conversation.get("guild_name"),
+        }
 
-    return filename_index
+    return ProcessorBase.build_media_filename_index(
+        metadata,
+        media_keys=["media_files"],
+        context_builder=_discord_context_builder,
+    )
 
 
 def _build_discord_identifier(message_info: dict, export_username: str) -> str:
@@ -501,8 +489,7 @@ def process_logic(
         return
 
     # Check for required tools
-    if not check_exiftool():
-        print_exiftool_error()
+    if not DiscordProcessor.check_dependencies():
         return
 
     log.processor_start("Discord Processor")
@@ -649,9 +636,6 @@ def _process_working_directory(
         )
 
     # Process files in parallel
-    success_count = 0
-    failed_count = 0
-
     if num_workers > 1:
         with Pool(processes=num_workers) as pool:
             results = list(
@@ -669,22 +653,22 @@ def _process_working_directory(
             results.append(_process_file_worker(args_tuple))
 
     # Collect results for EXIF processing
-    file_paths = []
-    file_info = []
+    # Result tuple: (success, output_path, message_info, exp_username, content_hash)
+    def extract_info(r):
+        return (
+            r[1],
+            r[2],
+            r[3],
+            r[4],
+        )  # (output_path, message_info, exp_username, hash)
 
-    for success, output_path, message_info, exp_username, content_hash in results:
-        if success and output_path:
-            success_count += 1
-            file_paths.append(output_path)
-            file_info.append((output_path, message_info, exp_username, content_hash))
-        else:
-            failed_count += 1
+    collected = DiscordProcessor.collect_processing_results(results, extract_info)
 
-    log.copied_files(success_count, failed_count)
+    log.copied_files(collected.success_count, collected.failed_count)
 
     # Correct file extensions based on actual content
     file_paths, file_info = DiscordProcessor.correct_extensions_and_update_info(
-        file_paths, file_info, path_index=0
+        collected.file_paths, collected.file_info, path_index=0
     )
 
     # Batch process EXIF operations
@@ -718,8 +702,8 @@ def _process_working_directory(
 
     # Print summary using shared utility
     print_processing_summary(
-        success=success_count,
-        failed=failed_count,
+        success=collected.success_count,
+        failed=collected.failed_count,
         total=len(media_files),
         output_dir=str(output_dir),
         extra_stats={
@@ -736,5 +720,4 @@ def _process_working_directory(
 
 
 def get_processor():
-    """Return processor class for auto-discovery."""
     return DiscordProcessor

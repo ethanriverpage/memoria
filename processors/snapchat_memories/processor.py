@@ -20,19 +20,12 @@ from common.dedup.description import (
     SERVICE_MEMORIES,
 )
 from common.files.utils import copy_file
-from common.dependency_checker import (
-    check_exiftool,
-    check_ffmpeg,
-    check_pillow,
-    print_exiftool_error,
-    print_ffmpeg_error,
-    print_pillow_error,
-)
 from common.media.exiftool import (
     DEFAULT_PREAMBLE,
     DescriptionWriteSpec,
     GPSData,
     MetadataWriteRequest,
+    build_datetime_tags,
 )
 from common.failure_tracker import FailureTracker
 from common.files.filter import BannedFilesFilter
@@ -146,18 +139,19 @@ class SnapchatMemoriesProcessor(ProcessorBase):
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        """Check if this processor can handle the input"""
         return detect(input_path)
 
     @staticmethod
     def get_name() -> str:
-        """Return processor name"""
         return "Snapchat Memories"
 
     @staticmethod
     def get_priority() -> int:
-        """Return priority (higher = run first)"""
-        return 80  # High priority - specific structure
+        return 80
+
+    @staticmethod
+    def get_required_dependencies() -> List[str]:
+        return ["exiftool", "ffmpeg", "pillow"]
 
     @staticmethod
     def get_output_info() -> OutputInfo:
@@ -169,7 +163,6 @@ class SnapchatMemoriesProcessor(ProcessorBase):
 
     @staticmethod
     def supports_dedup() -> bool:
-        """Return True - Snapchat Memories supports cross-processor deduplication."""
         return True
 
     @staticmethod
@@ -256,8 +249,9 @@ class SnapchatMemoriesProcessor(ProcessorBase):
             metadata_extractor=extract_metadata if metadata_index else None,
         )
 
-    @staticmethod
+    @classmethod
     def process(
+        cls,
         input_dir: str,
         output_dir: Optional[str] = None,
         dedup_manifest: Optional[Dict[str, Any]] = None,
@@ -275,12 +269,7 @@ class SnapchatMemoriesProcessor(ProcessorBase):
             True if processing succeeded, False otherwise
         """
         # Check for required dependencies
-        if not check_exiftool():
-            print_exiftool_error()
-            return False
-
-        if not check_ffmpeg():
-            print_ffmpeg_error()
+        if not cls.check_dependencies():
             return False
 
         try:
@@ -363,15 +352,7 @@ def _build_metadata_requests(
             continue
 
         # Build datetime tags
-        datetime_tags: List[Tuple[str, str]] = []
-        date_str = memory_data.get("date")
-        if date_str:
-            exif_date = date_str.replace("-", ":").replace(" UTC", "")
-            datetime_tags = [
-                ("DateTimeOriginal", exif_date),
-                ("CreateDate", exif_date),
-                ("ModifyDate", exif_date),
-            ]
+        datetime_tags = build_datetime_tags(memory_data.get("date"), strip_utc=True)
 
         # Build GPS data
         gps: Optional[GPSData] = None
@@ -415,12 +396,7 @@ def build_filename_index(memories: List[Dict[str, Any]]) -> Dict[str, Dict[str, 
     Returns:
         Dict mapping media_filename -> memory data
     """
-    filename_index: Dict[str, Dict[str, Any]] = {}
-    for memory in memories:
-        media_filename = memory.get("media_filename")
-        if media_filename:
-            filename_index[media_filename] = memory
-    return filename_index
+    return ProcessorBase.build_flat_filename_index(memories, filename_key="media_filename")
 
 
 def _update_memory_timestamps(file_path, memory_data):
@@ -621,19 +597,8 @@ def process_logic(
     raw_dir = input_dir
     metadata_file = os.path.join(raw_dir, "metadata.json")
 
-    # Check for exiftool
-    if not check_exiftool():
-        print_exiftool_error()
-        return
-
-    # Check for ffmpeg
-    if not check_ffmpeg():
-        print_ffmpeg_error()
-        return
-
-    # Check for Pillow (for image overlay processing)
-    if not check_pillow():
-        print_pillow_error()
+    # Check for required dependencies
+    if not SnapchatMemoriesProcessor.check_dependencies():
         return
 
     logger.info("Snapchat Memories Downloader - Step 2: Process")
@@ -788,9 +753,6 @@ def process_logic(
     )
     logger.info("=" * 50)
 
-    success_count = 0
-    failed_count = 0
-
     # Use multiprocessing pool with progress bar
     with multiprocessing.Pool(processes=num_workers) as pool:
         # Create files and show progress
@@ -804,43 +766,37 @@ def process_logic(
         )
 
     # Phase 2: Collect non-MKV files for batch EXIF processing
-    file_paths = []
-    file_info = []
+    # Result tuple: (success, output_path, is_mkv, memory, export_username, content_hash, failure_info)
+    # Skip MKV files in file_info (they already have metadata from overlay creation)
+    def extract_non_mkv_info(r):
+        is_mkv = r[2]
+        if is_mkv:
+            return None  # Skip MKV files from EXIF processing
+        return (r[1], r[3], r[4], r[5])  # (output_path, memory, export_username, hash)
 
-    for (
-        success,
-        output_path,
-        is_mkv,
-        memory,
-        export_username,
-        content_hash,
-        failure_info,
-    ) in results:
-        if success and output_path:
-            success_count += 1
-            # Only add non-MKV files to batch processing list
-            # (MKV files already have metadata from overlay creation)
-            if not is_mkv:
-                file_paths.append(output_path)
-                file_info.append((output_path, memory, export_username, content_hash))
-        else:
-            failed_count += 1
-            # Track orphaned metadata (metadata without corresponding media file)
-            if failure_info:
-                failure_tracker.add_orphaned_metadata(
-                    metadata_entry=memory,
-                    reason="Media file not found in filesystem",
-                    context={"expected_path": failure_info},
-                )
+    collected = SnapchatMemoriesProcessor.collect_processing_results(
+        results, extract_non_mkv_info
+    )
+
+    # Track orphaned metadata for failures (side effect not handled by collector)
+    for r in results:
+        success, output_path, is_mkv, memory, export_username, content_hash, failure_info = r
+        if not (success and output_path) and failure_info:
+            failure_tracker.add_orphaned_metadata(
+                metadata_entry=memory,
+                reason="Media file not found in filesystem",
+                context={"expected_path": failure_info},
+            )
 
     logger.info(
-        f"\nCreated {success_count} files ({len(file_info)} need EXIF processing)"
+        f"\nCreated {collected.success_count} files "
+        f"({len(collected.file_info)} need EXIF processing)"
     )
 
     # Phase 3: Correct file extensions based on actual content
     file_paths, file_info = (
         SnapchatMemoriesProcessor.correct_extensions_and_update_info(
-            file_paths, file_info, path_index=0
+            collected.file_paths, collected.file_info, path_index=0
         )
     )
 
@@ -857,9 +813,9 @@ def process_logic(
 
     # Print summary using shared utility
     print_processing_summary(
-        success=success_count,
-        failed=failed_count,
-        total=success_count + failed_count,
+        success=collected.success_count,
+        failed=collected.failed_count,
+        total=collected.success_count + collected.failed_count,
         output_dir=str(output_base_path),
         extra_stats={
             "EXIF structures rebuilt": exif_rebuilt_count,
@@ -874,5 +830,4 @@ def process_logic(
 
 
 def get_processor():
-    """Return processor class for auto-discovery."""
     return SnapchatMemoriesProcessor

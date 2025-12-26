@@ -411,6 +411,10 @@ class TestSecondaryReferencesIntegration:
 
         This test verifies that hash-based lookup works correctly,
         which is critical for processors that preprocess to temp directories.
+
+        Note: is_file_primary_by_hash now uses best_quality.processor (not primary.processor)
+        to determine which processor should copy the file, ensuring the highest quality
+        version is always outputted.
         """
         db_path = temp_dir / "dedup.db"
         config = DedupConfig(database_path=db_path, use_perceptual=False)
@@ -420,10 +424,11 @@ class TestSecondaryReferencesIntegration:
         manifest = service.analyze(mock_catalogs)
 
         # The duplicate file has content_hash "abc123" (from mock_catalogs)
-        # Google Photos is the primary processor (earlier timestamp)
+        # Google Photos is the best_quality processor (largest file: 1000000 bytes)
+        # and also happens to be primary (earliest timestamp)
         assert is_file_primary_by_hash(manifest, "abc123", "Google Photos") is True
 
-        # iMessage is secondary for the same hash
+        # iMessage has smaller file, so it should not copy
         assert is_file_primary_by_hash(manifest, "abc123", "iMessage") is False
 
         # Non-duplicate file's hash (def456) should return True for any processor
@@ -433,6 +438,73 @@ class TestSecondaryReferencesIntegration:
         assert (
             is_file_primary_by_hash(manifest, "unknown_hash", "Any Processor") is True
         )
+
+    def test_best_quality_wins_over_primary_integration(self, temp_dir):
+        """Test that best_quality processor wins even when primary has earlier timestamp.
+
+        This tests the "super-image" pattern where we output the highest quality file
+        but use primary's timestamp for attribution.
+        """
+        db_path = temp_dir / "dedup.db"
+        config = DedupConfig(database_path=db_path, use_perceptual=False)
+        db = HashDatabase(db_path)
+        service = DeduplicationService(db=db, config=config)
+
+        # Create catalogs where iMessage has earliest timestamp but Google Photos
+        # has the best quality (largest file)
+        catalogs = [
+            {
+                "processor": "iMessage",
+                "input_dir": "/exports/imessage",
+                "files": [
+                    {
+                        "source_path": "/exports/imessage/photo.jpg",
+                        "relative_path": "photo.jpg",
+                        "content_hash": "xyz789",
+                        "file_size": 500000,  # 500KB (lower quality)
+                        "dimensions": (1280, 720),
+                        "timestamp": "2018-03-15T10:00:00Z",  # EARLIEST
+                        "metadata": {"sender": "Alice"},
+                    },
+                ],
+            },
+            {
+                "processor": "Google Photos",
+                "input_dir": "/exports/google",
+                "files": [
+                    {
+                        "source_path": "/exports/google/photo.jpg",
+                        "relative_path": "photo.jpg",
+                        "content_hash": "xyz789",
+                        "file_size": 3000000,  # 3MB (highest quality)
+                        "dimensions": (4000, 3000),  # 12MP
+                        "timestamp": "2024-06-01T10:00:00Z",  # Later
+                        "metadata": {"albums": ["Camera Roll"]},
+                    },
+                ],
+            },
+        ]
+
+        manifest = service.analyze(catalogs)
+
+        # Verify primary is iMessage (earliest timestamp)
+        dup_group = manifest["duplicates"]["xyz789"]
+        assert dup_group["primary"]["processor"] == "iMessage"
+
+        # Verify best_quality is Google Photos (largest file)
+        assert dup_group["best_quality"]["processor"] == "Google Photos"
+        assert dup_group["best_quality"]["file_size"] == 3000000
+
+        # Now test is_file_primary_by_hash - should use best_quality!
+        # Google Photos should copy (has best quality)
+        assert is_file_primary_by_hash(manifest, "xyz789", "Google Photos") is True
+
+        # iMessage should NOT copy (even though it's primary by timestamp)
+        assert is_file_primary_by_hash(manifest, "xyz789", "iMessage") is False
+
+        # Verify merged_metadata has the earliest timestamp (from iMessage)
+        merged = dup_group["merged_metadata"]
+        assert "2018-03-15" in merged["timestamp"]
 
 
 class TestLivePhotoIntegration:

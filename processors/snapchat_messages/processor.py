@@ -20,18 +20,11 @@ from common.dedup.description import (
 )
 from common.files.utils import copy_file
 from common.utils import ALL_MEDIA_EXTENSIONS
-from common.dependency_checker import (
-    check_exiftool,
-    check_ffmpeg,
-    check_pillow,
-    print_exiftool_error,
-    print_ffmpeg_error,
-    print_pillow_error,
-)
 from common.media.exiftool import (
     DEFAULT_PREAMBLE,
     DescriptionWriteSpec,
     MetadataWriteRequest,
+    build_datetime_tags,
 )
 from common.output.logging import init_worker_logging
 from common.media.overlay import (
@@ -146,6 +139,10 @@ class SnapchatMessagesProcessor(ProcessorBase):
     @staticmethod
     def get_priority() -> int:
         return 85
+
+    @staticmethod
+    def get_required_dependencies() -> List[str]:
+        return ["exiftool", "ffmpeg", "pillow"]
 
     @staticmethod
     def get_output_info() -> OutputInfo:
@@ -282,8 +279,9 @@ class SnapchatMessagesProcessor(ProcessorBase):
             metadata_extractor=extract_metadata if metadata_index else None,
         )
 
-    @staticmethod
+    @classmethod
     def process(
+        cls,
         input_dir: str,
         output_dir: Optional[str] = None,
         dedup_manifest: Optional[Dict[str, Any]] = None,
@@ -291,12 +289,7 @@ class SnapchatMessagesProcessor(ProcessorBase):
     ) -> bool:
         """Process Snapchat Messages export."""
         # Check for required dependencies
-        if not check_exiftool():
-            print_exiftool_error()
-            return False
-
-        if not check_ffmpeg():
-            print_ffmpeg_error()
+        if not cls.check_dependencies():
             return False
 
         try:
@@ -435,25 +428,11 @@ def _build_metadata_requests(
         # Check if this is a merged message
         is_merged = "messages" in message and isinstance(message["messages"], list)
 
-        # Build datetime tags
-        datetime_tags: List[Tuple[str, str]] = []
-        if is_merged:
-            date_str = message.get("primary_created")
-        else:
-            date_str = message.get("created")
-
-        if date_str:
-            # Handle both legacy date-only and standard timestamp formats
-            if len(date_str) == 10 and date_str.count(":") == 0:
-                exif_date = date_str.replace("-", ":") + " 12:00:00"
-            else:
-                exif_date = date_str.replace("-", ":").replace(" UTC", "")
-
-            datetime_tags = [
-                ("DateTimeOriginal", exif_date),
-                ("CreateDate", exif_date),
-                ("ModifyDate", exif_date),
-            ]
+        # Build datetime tags (handles both legacy date-only and standard formats)
+        date_str = (
+            message.get("primary_created") if is_merged else message.get("created")
+        )
+        datetime_tags = build_datetime_tags(date_str, strip_utc=True)
 
         # Build description
         default_description = _build_description(message, export_username)
@@ -505,28 +484,11 @@ def build_media_index(metadata: dict) -> dict:
 
 def build_filename_index(metadata: dict) -> dict:
     """Build index mapping media_file to message metadata."""
-    filename_index = {}
-
-    # Index messages from conversations
-    for conv_data in metadata.get("conversations", {}).values():
-        for message in conv_data.get("messages", []):
-            # Handle both singular media_file and plural media_files
-            if "media_file" in message:
-                filename_index[message["media_file"]] = message
-            elif "media_files" in message:
-                for media_file in message["media_files"]:
-                    filename_index[media_file] = message
-
-    # Index orphaned media by filename
-    for message in metadata.get("orphaned_media", []):
-        # Handle both singular media_file and plural media_files
-        if "media_file" in message:
-            filename_index[message["media_file"]] = message
-        elif "media_files" in message:
-            for media_file in message["media_files"]:
-                filename_index[media_file] = message
-
-    return filename_index
+    return ProcessorBase.build_media_filename_index(
+        metadata,
+        media_keys=["media_file", "media_files"],
+        include_orphaned=True,
+    )
 
 
 def extract_media_id_from_filename(filename: str) -> Optional[str]:
@@ -778,16 +740,7 @@ def process_logic(
         return
 
     # Check for required tools
-    if not check_exiftool():
-        print_exiftool_error()
-        return
-
-    if not check_ffmpeg():
-        print_ffmpeg_error()
-        return
-
-    if not check_pillow():
-        print_pillow_error()
+    if not SnapchatMessagesProcessor.check_dependencies():
         return
 
     logger.info("Snapchat Messages Processor")
@@ -993,9 +946,6 @@ def _process_snapchat_working_directory(
 
     # Process files in parallel
     # Phase 1: Create all files with overlays in parallel
-    success_count = 0
-    failed_count = 0
-
     if num_workers > 1:
         # Specify app modules for DEBUG level in workers
         worker_app_modules = [
@@ -1024,28 +974,27 @@ def _process_snapchat_working_directory(
             results.append(_create_file_worker(args_tuple))
 
     # Phase 2: Collect non-MKV files for batch EXIF processing
-    file_paths = []
-    file_info = []
+    # Result tuple: (success, output_path, is_mkv, message, exp_username, content_hash)
+    # Skip MKV files in file_info (they already have metadata from overlay creation)
+    def extract_non_mkv_info(r):
+        is_mkv = r[2]
+        if is_mkv:
+            return None  # Skip MKV files from EXIF processing
+        return (r[1], r[3], r[4], r[5])  # (output_path, message, exp_username, hash)
 
-    for success, output_path, is_mkv, message, exp_username, content_hash in results:
-        if success and output_path:
-            success_count += 1
-            # Only add non-MKV files to batch processing list
-            # (MKV files already have metadata from overlay creation)
-            if not is_mkv:
-                file_paths.append(output_path)
-                file_info.append((output_path, message, exp_username, content_hash))
-        else:
-            failed_count += 1
+    collected = SnapchatMessagesProcessor.collect_processing_results(
+        results, extract_non_mkv_info
+    )
 
     logger.info(
-        f"\nCreated {success_count} files ({len(file_info)} need EXIF processing)"
+        f"\nCreated {collected.success_count} files "
+        f"({len(collected.file_info)} need EXIF processing)"
     )
 
     # Phase 3: Correct file extensions based on actual content
     file_paths, file_info = (
         SnapchatMessagesProcessor.correct_extensions_and_update_info(
-            file_paths, file_info, path_index=0
+            collected.file_paths, collected.file_info, path_index=0
         )
     )
 
@@ -1072,8 +1021,8 @@ def _process_snapchat_working_directory(
 
     # Print summary using shared utility
     print_processing_summary(
-        success=success_count,
-        failed=failed_count,
+        success=collected.success_count,
+        failed=collected.failed_count,
         total=len(media_files),
         output_dir=str(output_dir),
         extra_stats={
@@ -1123,5 +1072,4 @@ def _process_snapchat_working_directory(
 
 
 def get_processor():
-    """Return processor class for auto-discovery."""
     return SnapchatMessagesProcessor

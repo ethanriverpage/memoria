@@ -16,7 +16,6 @@ from common.dedup.description import (
     PLATFORM_IMESSAGE,
 )
 from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
-from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.files.utils import copy_file
 from common.dedup.hashing import (
     find_live_photo_video,
@@ -26,6 +25,7 @@ from common.media.exiftool import (
     DEFAULT_PREAMBLE,
     DescriptionWriteSpec,
     MetadataWriteRequest,
+    build_datetime_tags,
 )
 from common.output.logging import get_processor_logger
 from common.processing import print_processing_summary
@@ -417,19 +417,11 @@ def _build_metadata_requests(
             continue
         is_merged = "messages" in message and isinstance(message["messages"], list)
 
-        datetime_tags: List[Tuple[str, str]] = []
-        if is_merged:
-            date_str = message.get("primary_created")
-        else:
-            date_str = message.get("created")
-
-        if date_str:
-            exif_date = date_str.replace("-", ":").replace(" UTC", "")
-            datetime_tags = [
-                ("DateTimeOriginal", exif_date),
-                ("CreateDate", exif_date),
-                ("ModifyDate", exif_date),
-            ]
+        # Build datetime tags (iMessage format: "YYYY-MM-DD HH:MM:SS UTC")
+        date_str = (
+            message.get("primary_created") if is_merged else message.get("created")
+        )
+        datetime_tags = build_datetime_tags(date_str, strip_utc=True)
 
         default_description = _build_description(message, export_username)
 
@@ -451,7 +443,6 @@ def _build_metadata_requests(
 
 
 def is_preprocessed(input_path: Path) -> bool:
-    """Check if input directory is already preprocessed."""
     metadata_file = input_path / "metadata.json"
     media_dir = input_path / "media"
 
@@ -481,20 +472,11 @@ def is_preprocessed(input_path: Path) -> bool:
 
 def build_filename_index(metadata: dict) -> dict:
     """Build index mapping media_file to message metadata."""
-    filename_index = {}
-
-    for _conv_id, conv_data in metadata.get("conversations", {}).items():
-        for message in conv_data.get("messages", []):
-            media_file = message.get("media_file")
-            if media_file:
-                filename_index[media_file] = message
-
-    for message in metadata.get("orphaned_media", []):
-        media_file = message.get("media_file")
-        if media_file:
-            filename_index[media_file] = message
-
-    return filename_index
+    return ProcessorBase.build_media_filename_index(
+        metadata,
+        media_keys=["media_file"],
+        include_orphaned=True,
+    )
 
 
 def _build_imessage_identifier(message: dict) -> str:
@@ -573,8 +555,7 @@ def process_logic(
     or by calling ImazingProcessor.preprocess() directly).
     """
     # Check for required tools
-    if not check_exiftool():
-        print_exiftool_error()
+    if not ImazingProcessor.check_dependencies():
         return False
 
     log.processor_start("iMazing iMessage Processor")
@@ -751,24 +732,17 @@ def process_logic(
                 results.append(_process_file_worker(args))
 
         # Collect successful files for EXIF processing
-        success_count = 0
-        failed_count = 0
-        file_paths = []
-        file_info = []
+        # Result tuple: (success, output_path, message, exp_username, content_hash)
+        def extract_info(r):
+            return (r[1], r[2], r[3], r[4])  # (output_path, message, exp_username, hash)
 
-        for success, output_path, message, exp_username, content_hash in results:
-            if success and output_path:
-                success_count += 1
-                file_paths.append(output_path)
-                file_info.append((output_path, message, exp_username, content_hash))
-            else:
-                failed_count += 1
+        collected = ImazingProcessor.collect_processing_results(results, extract_info)
 
-        log.copied_files(success_count, failed_count)
+        log.copied_files(collected.success_count, collected.failed_count)
 
         # Phase 2: Correct file extensions based on actual content
         file_paths, file_info = ImazingProcessor.correct_extensions_and_update_info(
-            file_paths, file_info, path_index=0
+            collected.file_paths, collected.file_info, path_index=0
         )
 
         # Phase 3: Batch EXIF processing
@@ -782,9 +756,9 @@ def process_logic(
 
         # Print summary using shared utility
         print_processing_summary(
-            success=success_count,
-            failed=failed_count,
-            total=success_count + failed_count,
+            success=collected.success_count,
+            failed=collected.failed_count,
+            total=collected.success_count + collected.failed_count,
             output_dir=str(messages_output_dir),
             extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
         )
@@ -814,5 +788,4 @@ def process_logic(
 
 
 def get_processor():
-    """Return processor class for auto-discovery."""
     return ImazingProcessor

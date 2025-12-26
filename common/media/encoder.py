@@ -469,11 +469,9 @@ class VideoEncoder:
         return encoder_configs.get(self.encoder_name, self.encoder_args.copy())
 
     def get_encoder_name(self) -> str:
-        """Get the name of the detected encoder."""
         return self.encoder_name
 
     def is_hardware_accelerated(self) -> bool:
-        """Check if the encoder uses hardware acceleration."""
         return self.is_hardware
 
 
@@ -482,7 +480,6 @@ _global_encoder: Optional[VideoEncoder] = None
 
 
 def get_video_encoder() -> VideoEncoder:
-    """Get the global video encoder instance (singleton pattern)."""
     global _global_encoder
     if _global_encoder is None:
         _global_encoder = VideoEncoder()
@@ -490,7 +487,6 @@ def get_video_encoder() -> VideoEncoder:
 
 
 def get_encoder_args(target_bitrate: Optional[int] = None) -> list:
-    """Get encoder arguments for ffmpeg."""
     return get_video_encoder().get_encoder_args(target_bitrate)
 
 
@@ -500,12 +496,10 @@ def get_encoder_input_args() -> list:
 
 
 def get_encoder_name() -> str:
-    """Get the name of the detected encoder."""
     return get_video_encoder().get_encoder_name()
 
 
 def is_hardware_accelerated() -> bool:
-    """Check if hardware acceleration is available."""
     return get_video_encoder().is_hardware_accelerated()
 
 

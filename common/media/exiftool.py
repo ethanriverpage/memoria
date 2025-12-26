@@ -16,6 +16,7 @@ import os
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -67,6 +68,63 @@ class MetadataWriteRequest:
 # Default preamble used by most processors
 DEFAULT_PREAMBLE = ["-E", "-api", "largefilesupport=1", "-overwrite_original"]
 
+
+# =============================================================================
+# Datetime Tag Builder
+# =============================================================================
+
+
+def build_datetime_tags(
+    timestamp_str: Optional[str],
+    strip_utc: bool = False,
+    date_only_default_time: str = "12:00:00",
+) -> List[Tuple[str, str]]:
+    """Build standard EXIF datetime tags from a timestamp string.
+
+    Handles multiple timestamp formats:
+    - ISO format: "2024-01-15T12:30:00Z" or "2024-01-15T12:30:00+00:00"
+    - Standard: "YYYY-MM-DD HH:MM:SS" (with optional " UTC" suffix)
+    - Date only: "YYYY-MM-DD" (uses date_only_default_time)
+
+    Args:
+        timestamp_str: Timestamp string in various formats.
+        strip_utc: If True, strips " UTC" suffix before processing.
+        date_only_default_time: Time to use for date-only strings (default "12:00:00").
+
+    Returns:
+        List of (tag_name, exif_date) tuples for DateTimeOriginal, CreateDate,
+        ModifyDate. Returns empty list if timestamp_str is None or empty.
+    """
+    if not timestamp_str:
+        return []
+
+    # Strip UTC suffix if requested
+    if strip_utc:
+        timestamp_str = timestamp_str.replace(" UTC", "")
+
+    # Handle ISO format timestamps (with T separator and Z or timezone)
+    if "T" in timestamp_str:
+        try:
+            date_obj = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            exif_date = date_obj.strftime("%Y:%m:%d %H:%M:%S")
+        except ValueError:
+            # Fallback to simple replacement if parsing fails
+            exif_date = timestamp_str.replace("T", " ").replace("Z", "")
+            exif_date = exif_date.split("+")[0].replace("-", ":")
+    # Handle date-only format (YYYY-MM-DD)
+    elif len(timestamp_str) == 10 and timestamp_str.count("-") == 2:
+        exif_date = timestamp_str.replace("-", ":") + " " + date_only_default_time
+    # Handle standard format (YYYY-MM-DD HH:MM:SS)
+    else:
+        exif_date = timestamp_str.replace("-", ":")
+
+    return [
+        ("DateTimeOriginal", exif_date),
+        ("CreateDate", exif_date),
+        ("ModifyDate", exif_date),
+    ]
+
+
 # Preamble with ignoreMinorErrors (used by Google processors)
 PREAMBLE_WITH_IGNORE_ERRORS = [
     "-E",
@@ -88,7 +146,14 @@ def batch_write_metadata_requests(
     dedup_manifest: Optional[Dict[str, Any]] = None,
     chunk_size: int = 500,
 ) -> None:
-    """Write metadata for files in batches using exiftool argfiles."""
+    """Write metadata for files in batches using exiftool argfiles.
+
+    When a dedup_manifest is provided, merged metadata from all sources
+    is applied to create a "super-image" with:
+    - Earliest timestamp from all sources (primary attribution)
+    - GPS coordinates from any source that has them
+    - Description with cross-processor provenance
+    """
     if not requests:
         return
 
@@ -106,19 +171,29 @@ def batch_write_metadata_requests(
                 for request in chunk:
                     existing_fields = existing_metadata_map.get(request.file_path, {})
 
+                    # Get merged metadata from dedup manifest if available
+                    merged_meta = _get_merged_metadata_for_request(
+                        dedup_manifest, request.content_hash
+                    )
+
                     # Write preamble flags
                     for flag in request.arg_preamble:
                         argfile.write(f"{flag}\n")
 
                     # Write datetime tags (only if field is missing)
-                    for tag_name, tag_value in request.datetime_tags:
+                    # Use merged timestamp if available (earliest from all sources)
+                    datetime_tags = _get_datetime_tags_with_merged(
+                        request.datetime_tags, merged_meta
+                    )
+                    for tag_name, tag_value in datetime_tags:
                         if not existing_fields.get(tag_name, False):
                             argfile.write(f"-{tag_name}={tag_value}\n")
 
-                    # Write GPS data if provided and not already present
-                    if request.gps and not existing_fields.get("GPSLatitude", False):
-                        lat = request.gps.latitude
-                        lon = request.gps.longitude
+                    # Write GPS data - use merged GPS if request doesn't have it
+                    gps_to_write = _get_gps_with_merged(request.gps, merged_meta)
+                    if gps_to_write and not existing_fields.get("GPSLatitude", False):
+                        lat = gps_to_write.latitude
+                        lon = gps_to_write.longitude
 
                         gps_format = get_gps_format(request.file_path)
 
@@ -136,10 +211,10 @@ def batch_write_metadata_requests(
                             argfile.write(f"-GPSLongitude={lon}\n")
 
                         if (
-                            request.gps.altitude is not None
-                            and request.gps.altitude != 0.0
+                            gps_to_write.altitude is not None
+                            and gps_to_write.altitude != 0.0
                         ):
-                            argfile.write(f"-GPSAltitude={request.gps.altitude}\n")
+                            argfile.write(f"-GPSAltitude={gps_to_write.altitude}\n")
 
                     # Write description if provided (always overwrites existing)
                     if request.description:
@@ -190,6 +265,127 @@ def batch_write_metadata_requests(
                     os.unlink(argfile_path)
             except Exception:
                 pass
+
+
+def _get_merged_metadata_for_request(
+    dedup_manifest: Optional[Dict[str, Any]],
+    content_hash: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Get merged metadata from dedup manifest for a file.
+
+    Args:
+        dedup_manifest: Deduplication manifest.
+        content_hash: Content hash of the file.
+
+    Returns:
+        Merged metadata dict if found, None otherwise.
+    """
+    if dedup_manifest is None or content_hash is None:
+        return None
+
+    # Import here to avoid circular imports
+    from common.dedup.service import get_merged_metadata_for_hash
+
+    return get_merged_metadata_for_hash(dedup_manifest, content_hash)
+
+
+def _get_datetime_tags_with_merged(
+    original_tags: List[Tuple[str, str]],
+    merged_meta: Optional[Dict[str, Any]],
+) -> List[Tuple[str, str]]:
+    """Get datetime tags, using merged timestamp if earlier.
+
+    The merged timestamp represents the earliest occurrence of this image
+    across all sources (primary attribution). If the merged timestamp is
+    earlier than the processor's timestamp, use the merged one.
+
+    Args:
+        original_tags: Original datetime tags from the request.
+        merged_meta: Merged metadata from dedup manifest.
+
+    Returns:
+        Datetime tags to write, potentially using merged timestamp.
+    """
+    if not merged_meta:
+        return original_tags
+
+    merged_ts_str = merged_meta.get("timestamp")
+    if not merged_ts_str:
+        return original_tags
+
+    # Parse merged timestamp (ISO format)
+    try:
+        merged_ts = datetime.fromisoformat(merged_ts_str.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return original_tags
+
+    # Format merged timestamp for EXIF (YYYY:MM:DD HH:MM:SS)
+    merged_exif_value = merged_ts.strftime("%Y:%m:%d %H:%M:%S")
+
+    # If original tags exist, compare timestamps and use earliest
+    if original_tags:
+        # Parse the first original tag value to compare
+        try:
+            original_value = original_tags[0][1]
+            # Handle various formats
+            if ":" in original_value and len(original_value) >= 19:
+                # EXIF format: YYYY:MM:DD HH:MM:SS
+                original_ts = datetime.strptime(
+                    original_value[:19], "%Y:%m:%d %H:%M:%S"
+                )
+                if merged_ts.replace(tzinfo=None) < original_ts:
+                    # Merged is earlier - use it for all tags
+                    return [
+                        (tag_name, merged_exif_value) for tag_name, _ in original_tags
+                    ]
+        except (ValueError, IndexError):
+            pass
+        return original_tags
+
+    # No original tags - provide merged timestamp with standard EXIF tags
+    return [
+        ("DateTimeOriginal", merged_exif_value),
+        ("CreateDate", merged_exif_value),
+        ("ModifyDate", merged_exif_value),
+    ]
+
+
+def _get_gps_with_merged(
+    original_gps: Optional[GPSData],
+    merged_meta: Optional[Dict[str, Any]],
+) -> Optional[GPSData]:
+    """Get GPS data, using merged GPS if original is missing.
+
+    If the current file doesn't have GPS coordinates but another source
+    in the duplicate group does, use the merged GPS data.
+
+    Args:
+        original_gps: Original GPS data from the request.
+        merged_meta: Merged metadata from dedup manifest.
+
+    Returns:
+        GPS data to write (original if present, merged as fallback).
+    """
+    # If original has GPS, use it
+    if original_gps is not None:
+        return original_gps
+
+    # Check for merged GPS
+    if merged_meta is None:
+        return None
+
+    merged_gps = merged_meta.get("gps")
+    if not merged_gps:
+        return None
+
+    lat = merged_gps.get("latitude")
+    lon = merged_gps.get("longitude")
+
+    if lat is None or lon is None:
+        return None
+
+    # Return merged GPS as GPSData
+    return GPSData(latitude=lat, longitude=lon, altitude=None)
 
 
 def _get_description_for_file(
@@ -246,7 +442,6 @@ def _get_description_for_file(
 
 
 def batch_validate_exif(file_paths: Sequence[Optional[str]]) -> Set[str]:
-    """Return set of file paths with corrupted EXIF that need rebuilding."""
     from common.utils import EXIF_BEARING_EXTENSIONS
 
     # Filter out None values
