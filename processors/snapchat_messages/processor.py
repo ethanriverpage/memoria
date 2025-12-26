@@ -724,17 +724,11 @@ def _process_snapchat_working_directory(
 
     # Configuration
     metadata_file = working_dir / "metadata.json"
-    media_dir = working_dir / "media"
     overlays_dir = working_dir / "overlays"
 
     # Check for metadata file (should exist after preprocessing or if already preprocessed)
     if not metadata_file.exists():
         logger.error(f"Metadata file not found: {metadata_file}")
-        return
-
-    # Check for media directory
-    if not media_dir.exists():
-        logger.error(f"Media directory not found: {media_dir}")
         return
 
     # Load metadata
@@ -751,13 +745,43 @@ def _process_snapchat_working_directory(
     logger.info(f"Found {len(media_index)} messages with media IDs")
     logger.info(f"Found {len(filename_index)} orphaned media entries by filename")
 
-    # Scan media directory
-    logger.info(f"Scanning media directory: {media_dir}")
-    media_files = []
-    for ext in ALL_MEDIA_EXTENSIONS:
-        media_files.extend(media_dir.glob(f"*{ext}"))
+    # Check if this is new format (source_path in messages) or legacy format
+    # Sample a message to check
+    sample_message = None
+    for conv_data in metadata.get("conversations", {}).values():
+        for msg in conv_data.get("messages", []):
+            if msg.get("media_file"):
+                sample_message = msg
+                break
+        if sample_message:
+            break
+    use_legacy_format = sample_message is None or "source_path" not in sample_message
 
-    logger.info(f"Found {len(media_files)} media files")
+    if use_legacy_format:
+        media_dir = working_dir / "media"
+        if not media_dir.exists():
+            logger.error(f"Media directory not found: {media_dir}")
+            return
+        logger.info("Using legacy format (media/ directory)")
+
+        # Scan media directory
+        logger.info(f"Scanning media directory: {media_dir}")
+        media_files = []
+        for ext in ALL_MEDIA_EXTENSIONS:
+            media_files.extend(media_dir.glob(f"*{ext}"))
+        logger.info(f"Found {len(media_files)} media files")
+    else:
+        media_dir = None
+        logger.info("Using new format (source_path in metadata)")
+        # Build list of source files from metadata
+        media_files = []
+        for msg in filename_index.values():
+            source_path_str = msg.get("source_path")
+            if source_path_str:
+                source_path = Path(source_path_str)
+                if source_path.exists():
+                    media_files.append(source_path)
+        logger.info(f"Found {len(media_files)} media files from metadata")
 
     # Filter out secondary files based on dedup manifest (using hash-based lookup)
     # Use cached file_hashes from preprocessing when available to avoid re-hashing
@@ -767,10 +791,12 @@ def _process_snapchat_working_directory(
         filtered_files = []
         for f in media_files:
             content_hash = file_hashes.get(f.name)
+            # Get source_path for within-processor dedup (new format has full path in f)
+            source_path_str = str(f) if not use_legacy_format else None
             if content_hash:
                 # Use cached hash from preprocessing (avoids re-hashing)
                 if is_file_primary_by_hash(
-                    dedup_manifest, content_hash, "Snapchat Messages"
+                    dedup_manifest, content_hash, "Snapchat Messages", source_path_str
                 ):
                     filtered_files.append(f)
             else:

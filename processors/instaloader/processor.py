@@ -127,6 +127,20 @@ class InstaloaderProcessor(ProcessorBase):
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
 
+        # Build caption lookup from metadata.json if preprocessed
+        caption_lookup: Dict[str, str] = {}
+        metadata_file = input_path / "metadata.json"
+        if metadata_file.exists():
+            metadata = InstaloaderProcessor.load_metadata(metadata_file)
+            for post in metadata.get("media", []):
+                caption = post.get("caption", "")
+                for filename in post.get("media_files", []):
+                    caption_lookup[filename] = caption
+
+        def extract_instaloader_metadata(file_path: Path) -> Dict[str, Any]:
+            """Extract caption metadata for dedup manifest."""
+            return {"caption": caption_lookup.get(file_path.name, "")}
+
         # Instaloader format has files in root with timestamp pattern
         instaloader_pattern = re.compile(
             r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_UTC\.(jpg|jpeg|mp4)$"
@@ -142,6 +156,7 @@ class InstaloaderProcessor(ProcessorBase):
             input_path=input_path,
             media_files=media_files,
             workers=workers,
+            metadata_extractor=extract_instaloader_metadata,
         )
 
     @staticmethod
@@ -236,6 +251,7 @@ def _build_metadata_requests(
             processor=PLATFORM_INSTAGRAM,
             username=export_username,
             service=service,
+            content=post_data.get("caption", ""),
         )
         default_description = build_description(entry)
 
@@ -366,16 +382,10 @@ def process_logic(
     def _process_working_directory(working_dir: str) -> None:
         # Configuration
         metadata_file = os.path.join(working_dir, "metadata.json")
-        media_dir = os.path.join(working_dir, "media")
 
         # Check for metadata file (should exist after preprocessing or if already preprocessed)
         if not os.path.exists(metadata_file):
             logger.error(f"Metadata file not found: {metadata_file}")
-            return
-
-        # Check for media directory
-        if not os.path.exists(media_dir):
-            logger.error(f"Media directory not found: {media_dir}")
             return
 
         # Load metadata
@@ -387,6 +397,20 @@ def process_logic(
         file_hashes = metadata_json.get("file_hashes", {})
 
         logger.info(f"Found {len(media_posts)} posts to process")
+
+        # Check if this is new format (source_paths in posts) or legacy format
+        sample_post = next((p for p in media_posts if p.get("media_files")), None)
+        use_legacy_format = sample_post is None or "source_paths" not in sample_post
+
+        if use_legacy_format:
+            media_dir = os.path.join(working_dir, "media")
+            if not os.path.exists(media_dir):
+                logger.error(f"Media directory not found: {media_dir}")
+                return
+            logger.info("Using legacy format (media/ directory)")
+        else:
+            media_dir = None
+            logger.info("Using new format (source_path in metadata)")
 
         # Extract export username from export_info
         export_name = export_info.get("export_name", "")
@@ -422,17 +446,29 @@ def process_logic(
                 # Skip secondary files based on dedup manifest (using hash-based lookup)
                 # Use cached file_hashes from preprocessing when available
                 content_hash = file_hashes.get(media_file)
+
+                # Determine source path based on format
+                if use_legacy_format:
+                    source_file_path = media_dir
+                    source_file_name = media_file
+                else:
+                    source_paths = post.get("source_paths", {})
+                    source_file_path = os.path.dirname(source_paths.get(media_file, ""))
+                    source_file_name = os.path.basename(source_paths.get(media_file, media_file))
+
                 if dedup_manifest:
+                    # Get full source path for within-processor dedup
+                    full_source_path = source_paths.get(media_file) if not use_legacy_format else None
                     if content_hash:
                         # Use cached hash from preprocessing (avoids re-hashing)
                         if not is_file_primary_by_hash(
-                            dedup_manifest, content_hash, "Instaloader"
+                            dedup_manifest, content_hash, "Instaloader", full_source_path
                         ):
                             skipped_dedup += 1
                             continue
                     else:
                         # Fallback for files without cached hash
-                        full_path = os.path.join(media_dir, media_file)
+                        full_path = os.path.join(source_file_path, source_file_name) if source_file_path else source_file_name
                         if InstaloaderProcessor.should_skip_for_dedup(
                             full_path, dedup_manifest, "Instaloader"
                         ):
@@ -453,10 +489,10 @@ def process_logic(
                 # Create task tuple for worker
                 processing_tasks.append(
                     (
-                        media_file,
+                        source_file_name,
                         post,
                         output_filename,
-                        media_dir,
+                        source_file_path,
                         output_dir,
                         export_username,
                         media_type,

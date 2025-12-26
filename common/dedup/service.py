@@ -138,8 +138,27 @@ class DeduplicationService:
         # Group remaining by perceptual hash (if enabled)
         perceptual_groups = {}
         if self.config.use_perceptual:
+            # Get ungrouped files PLUS one representative from each exact group
+            # This allows perceptual matching between ungrouped files and exact groups
             ungrouped = self._get_ungrouped_files(all_files, exact_groups)
-            perceptual_groups = self._group_by_perceptual_hash(ungrouped)
+            representatives = self._get_exact_group_representatives(exact_groups)
+            # Filter to only files with perceptual hashes
+            representatives = [r for r in representatives if r.get("perceptual_hash")]
+            perceptual_candidates = ungrouped + representatives
+            logger.info(
+                f"Perceptual candidates: {len(ungrouped)} ungrouped + "
+                f"{len(representatives)} exact group reps"
+            )
+            if not perceptual_candidates:
+                logger.info("No files with perceptual hashes to compare")
+            else:
+                perceptual_groups = self._group_by_perceptual_hash(
+                    perceptual_candidates
+                )
+            # Expand perceptual groups to include full exact groups
+            perceptual_groups = self._expand_perceptual_groups(
+                perceptual_groups, exact_groups
+            )
             logger.info(
                 f"Perceptual hash groups with duplicates: {len(perceptual_groups)}"
             )
@@ -218,8 +237,23 @@ class DeduplicationService:
                     unit="file",
                 )
             )
-            if ungrouped:
-                perceptual_groups = self._group_by_perceptual_hash(ungrouped)
+            # Add representatives from exact groups for cross-group perceptual matching
+            representatives = self._get_exact_group_representatives(exact_groups)
+            # Filter representatives to only those with perceptual hashes
+            representatives = [r for r in representatives if r.get("perceptual_hash")]
+            perceptual_candidates = ungrouped + representatives
+            logger.info(
+                f"Perceptual candidates: {len(ungrouped)} ungrouped + "
+                f"{len(representatives)} exact group reps"
+            )
+            if perceptual_candidates:
+                perceptual_groups = self._group_by_perceptual_hash(
+                    perceptual_candidates
+                )
+                # Expand perceptual groups to include full exact groups
+                perceptual_groups = self._expand_perceptual_groups(
+                    perceptual_groups, exact_groups
+                )
                 logger.info(
                     f"Perceptual hash groups with duplicates: {len(perceptual_groups)}"
                 )
@@ -745,6 +779,83 @@ class DeduplicationService:
         """
         grouped_hashes = set(exact_groups.keys())
         return [f for f in all_files if f.get("content_hash") not in grouped_hashes]
+
+    def _get_exact_group_representatives(
+        self,
+        exact_groups: Dict[str, List[Dict[str, Any]]],
+    ) -> List[Dict[str, Any]]:
+        """Get one representative file from each exact hash group.
+
+        These representatives are included in perceptual matching so that
+        ungrouped files can be matched against files that are in exact groups.
+
+        Args:
+            exact_groups: Exact hash groups keyed by content hash.
+
+        Returns:
+            List of representative files (first file from each group).
+        """
+        representatives = []
+        for files in exact_groups.values():
+            if files:
+                # Use first file as representative, mark it as a representative
+                rep = dict(files[0])
+                rep["_exact_group_representative"] = True
+                representatives.append(rep)
+        return representatives
+
+    def _expand_perceptual_groups(
+        self,
+        perceptual_groups: Dict[str, List[Dict[str, Any]]],
+        exact_groups: Dict[str, List[Dict[str, Any]]],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Expand perceptual groups to include full exact groups.
+
+        When a perceptual group contains a representative from an exact group,
+        replace that representative with all files from the exact group.
+        Also removes absorbed exact groups from exact_groups to avoid
+        double-counting in the manifest.
+
+        Args:
+            perceptual_groups: Groups from perceptual hash matching.
+            exact_groups: Original exact hash groups (modified in-place to remove
+                absorbed groups).
+
+        Returns:
+            Expanded perceptual groups with full exact group contents.
+        """
+        expanded = {}
+        absorbed_exact_hashes = set()
+
+        for group_id, files in perceptual_groups.items():
+            expanded_files = []
+            for f in files:
+                if f.get("_exact_group_representative"):
+                    # Replace representative with full exact group
+                    content_hash = f.get("content_hash")
+                    if content_hash in exact_groups:
+                        expanded_files.extend(exact_groups[content_hash])
+                        absorbed_exact_hashes.add(content_hash)
+                    else:
+                        expanded_files.append(f)
+                else:
+                    expanded_files.append(f)
+            expanded[group_id] = expanded_files
+
+        # Remove absorbed exact groups to avoid double-counting in manifest
+        for content_hash in absorbed_exact_hashes:
+            if content_hash in exact_groups:
+                del exact_groups[content_hash]
+                logger.debug(
+                    f"Absorbed exact group {content_hash} into perceptual group"
+                )
+
+        if absorbed_exact_hashes:
+            logger.info(
+                f"Absorbed {len(absorbed_exact_hashes)} exact groups into perceptual groups"
+            )
+
+        return expanded
 
     def _validate_duplicate_pair(
         self,
@@ -1280,6 +1391,7 @@ def is_file_primary_by_hash(
     manifest: Dict[str, Any],
     content_hash: str,
     processor_name: str,
+    source_path: Optional[str] = None,
 ) -> bool:
     """Check if a file with given hash should be copied by this processor.
 
@@ -1287,14 +1399,21 @@ def is_file_primary_by_hash(
     even when files are preprocessed to temporary directories (where path-based
     matching would fail due to path mismatch between catalog and process phases).
 
+    When source_path is provided, this function also handles within-processor
+    deduplication (e.g., same file in multiple iMessage exports). Without
+    source_path, only cross-processor deduplication is checked.
+
     Args:
         manifest: Deduplication manifest from analyze().
         content_hash: xxHash64 content hash of the file to check.
         processor_name: Name of the processor checking the file.
+        source_path: Optional path to the source file. When provided, enables
+            within-processor deduplication by checking if this specific file
+            is the primary copy.
 
     Returns:
         True if this processor should copy the file (primary or not in manifest).
-        False if another processor is the primary for this file.
+        False if another processor/file is the primary for this file.
     """
     duplicates = manifest.get("duplicates", {})
 
@@ -1302,8 +1421,20 @@ def is_file_primary_by_hash(
     if content_hash in duplicates:
         group = duplicates[content_hash]
         primary = group.get("primary", {})
-        # Check if this processor owns the primary
-        return primary.get("processor") == processor_name
+        primary_processor = primary.get("processor")
+
+        # Cross-processor check: different processor owns the primary
+        if primary_processor != processor_name:
+            return False
+
+        # Same processor - check source_path for within-processor dedup
+        if source_path is not None:
+            primary_source = primary.get("source_path")
+            if primary_source and primary_source != source_path:
+                # Same processor but different source file - this is secondary
+                return False
+
+        return True
 
     # For perceptual hash groups, we need to search by content_hash in entries
     for key, group in duplicates.items():
@@ -1313,7 +1444,19 @@ def is_file_primary_by_hash(
         # Check if primary has this content_hash
         primary = group.get("primary", {})
         if primary.get("content_hash") == content_hash:
-            return primary.get("processor") == processor_name
+            primary_processor = primary.get("processor")
+
+            # Cross-processor check
+            if primary_processor != processor_name:
+                return False
+
+            # Within-processor check
+            if source_path is not None:
+                primary_source = primary.get("source_path")
+                if primary_source and primary_source != source_path:
+                    return False
+
+            return True
 
         # Check if any secondary has this content_hash
         for secondary in group.get("secondary", []):
@@ -1396,7 +1539,10 @@ def filter_primary_files(
 
         # Standard dedup check for non-Live Photo files
         content_hash = compute_content_hash(f)
-        if is_file_primary_by_hash(dedup_manifest, content_hash, processor_name):
+        # Pass source_path for within-processor dedup
+        if is_file_primary_by_hash(
+            dedup_manifest, content_hash, processor_name, str(f)
+        ):
             filtered.append(f)
 
     skipped = len(files) - len(filtered)
@@ -1475,11 +1621,27 @@ def get_merged_description_for_file(
             albums=primary_albums,
         )
 
-        # Build secondary source entries
+        # Build secondary source entries, deduplicated by (processor, username)
+        # This avoids showing multiple identical lines for the same source
+        # (e.g., 4 Google Photos copies from different albums)
         secondary_entries = []
+        seen_sources: set = set()
+        seen_sources.add((primary_processor, ""))  # Exclude primary processor
+
         for sec in group.get("secondary", []):
             sec_processor = sec.get("processor", "Unknown")
             sec_context = sec.get("context", {})
+            sec_username = sec_context.get("username", "")
+
+            # Deduplicate by (processor, username)
+            dedup_key = (sec_processor, sec_username)
+            if dedup_key in seen_sources:
+                continue
+            seen_sources.add(dedup_key)
+
+            # Skip same processor as primary
+            if sec_processor == primary_processor:
+                continue
 
             # Create source entry from context
             entry = create_source_entry(
@@ -1545,7 +1707,10 @@ def get_secondary_sources_for_hash(
 
     # Get primary info for deduplication
     primary = group.get("primary", {})
-    primary_key = (primary.get("processor", ""), "")  # Primary has no username in manifest
+    primary_key = (
+        primary.get("processor", ""),
+        "",
+    )  # Primary has no username in manifest
 
     # Deduplicate secondary sources by (processor, username)
     # Only include sources from different processors than the primary

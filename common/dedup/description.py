@@ -241,8 +241,8 @@ def build_description(entry: SourceEntry, max_content: int = 100) -> str:
     """
     lines = [build_source_line(entry)]
 
-    # Add message context if we have conversation/sender info
-    if entry.conversation or entry.sender:
+    # Add message context if we have conversation/sender/content info
+    if entry.conversation or entry.sender or entry.content:
         context_line = build_message_context(entry, max_content)
         if context_line:
             lines.append(context_line)

@@ -254,10 +254,17 @@ def batch_validate_exif(file_paths: Sequence[Optional[str]]) -> Set[str]:
     if not valid_paths:
         return set()
 
+    # Skip HEIC files entirely - the EXIF rebuild process corrupts their complex
+    # multi-image container structure (depth maps, auxiliary images, etc.)
+    skip_extensions = {".heic"}
+
     # Filter to only EXIF-bearing formats (PNG/video/GIF don't have EXIF structure)
+    # Also exclude formats where rebuild causes corruption
     exif_paths = [
-        p for p in valid_paths
+        p
+        for p in valid_paths
         if Path(p).suffix.lower() in EXIF_BEARING_EXTENSIONS
+        and Path(p).suffix.lower() not in skip_extensions
     ]
     if not exif_paths:
         return set()
@@ -284,23 +291,35 @@ def batch_validate_exif(file_paths: Sequence[Optional[str]]) -> Set[str]:
             )
 
             # Parse output to identify corrupted files
-            # Format: "Warning: [minor] ... - {filename}"
+            # Format: "======== {filename}" followed by "Warning: ..."
             current_file = None
+            has_warning = False
+
             for line in result.stdout.strip().split("\n"):
                 if not line:
                     continue
 
                 # Check if line contains a filename (lines with "========")
                 if "========" in line:
+                    # Before moving to next file, check if current file had warnings
+                    if current_file and has_warning:
+                        corrupted_files.add(current_file)
                     # Extract filename from header line
-                    # Format: "======== {filename}"
                     current_file = line.replace("=", "").strip()
+                    has_warning = False
                     continue
 
-                # Check for warnings indicating corruption
-                if current_file and ("Warning" in line or "minor" in line.lower()):
-                    if current_file not in corrupted_files:
-                        corrupted_files.add(current_file)
+                # Skip the summary line "Validate: N Warning(s)" - not an actual warning
+                if line.strip().startswith("Validate"):
+                    continue
+
+                # Check for actual warning lines (start with "Warning")
+                if current_file and line.strip().startswith("Warning"):
+                    has_warning = True
+
+            # Don't forget the last file
+            if current_file and has_warning:
+                corrupted_files.add(current_file)
 
         except Exception as e:
             logger.warning(f"Failed to batch validate EXIF for chunk: {e}")
@@ -381,7 +400,9 @@ def batch_rebuild_exif(file_paths: List[str]) -> None:
 # =============================================================================
 
 
-def batch_read_existing_metadata(file_paths: Sequence[Optional[str]]) -> Dict[str, Dict[str, bool]]:
+def batch_read_existing_metadata(
+    file_paths: Sequence[Optional[str]],
+) -> Dict[str, Dict[str, bool]]:
     """Read existing metadata fields from files, returning presence map."""
     # Filter out None values first
     valid_paths = [p for p in file_paths if p is not None]

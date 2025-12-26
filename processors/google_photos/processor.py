@@ -443,16 +443,10 @@ def _process_working_directory(
     """Process a working directory (preprocessed export)."""
     # Configuration
     metadata_file = os.path.join(working_dir, "metadata.json")
-    media_dir = os.path.join(working_dir, "media")
 
     # Check for metadata file (should exist after preprocessing or if already preprocessed)
     if not os.path.exists(metadata_file):
         log.file_not_found(metadata_file, "Metadata file")
-        return
-
-    # Check for media directory
-    if not os.path.exists(media_dir):
-        log.file_not_found(media_dir, "Media directory")
         return
 
     # Load metadata
@@ -467,6 +461,20 @@ def _process_working_directory(
 
     log.found_files(total_media_files, "media")
 
+    # Check if this is new format (source_path in metadata) or legacy format (media/ directory)
+    sample_media = media_files[0] if media_files else None
+    use_legacy_format = sample_media is None or "source_path" not in sample_media
+
+    if use_legacy_format:
+        media_dir = os.path.join(working_dir, "media")
+        if not os.path.exists(media_dir):
+            log.file_not_found(media_dir, "Media directory")
+            return
+        log.logger.info("Using legacy format (media/ directory)")
+    else:
+        media_dir = None  # Will read from source_path
+        log.logger.info("Using new format (source_path in metadata)")
+
     # Filter out secondary files based on dedup manifest (using hash-based lookup)
     skipped_secondary_files = []
     if dedup_manifest:
@@ -475,12 +483,18 @@ def _process_working_directory(
         for media_data in media_files:
             media_file = media_data.get("filename")
             if media_file:
-                full_path = os.path.join(media_dir, media_file)
+                if use_legacy_format:
+                    full_path = os.path.join(media_dir, media_file)
+                    source_path_for_dedup = None
+                else:
+                    full_path = media_data.get("source_path", "")
+                    source_path_for_dedup = full_path
                 content_hash = media_data.get("content_hash")
                 if content_hash:
                     # Use cached hash from preprocessing (avoids re-hashing)
+                    # Pass source_path for within-processor dedup
                     if is_file_primary_by_hash(
-                        dedup_manifest, content_hash, "Google Photos"
+                        dedup_manifest, content_hash, "Google Photos", source_path_for_dedup
                     ):
                         filtered_media_files.append(media_data)
                     else:
@@ -570,14 +584,22 @@ def _process_working_directory(
         albums_list = media_data.get("albums", [])
         album_name = albums_list[0] if albums_list else "unknown"
 
+        # Determine source path based on format
+        if use_legacy_format:
+            source_path = media_dir
+            source_file = media_file
+        else:
+            source_path = os.path.dirname(media_data.get("source_path", ""))
+            source_file = os.path.basename(media_data.get("source_path", media_file))
+
         # Create task tuple for worker
         processing_tasks.append(
             (
-                media_file,
+                source_file,
                 media_data,
                 album_name,
                 output_filename,
-                media_dir,
+                source_path,
                 output_dir,
                 export_username,
             )

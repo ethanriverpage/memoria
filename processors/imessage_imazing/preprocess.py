@@ -176,7 +176,6 @@ class ImazingPreprocessor(PreprocessorBase):
             "media_files_found": 0,
             "unique_files": 0,
             "duplicate_files": 0,
-            "files_copied": 0,
             "csv_messages_loaded": 0,
             "conversations": 0,
         }
@@ -391,7 +390,7 @@ class ImazingPreprocessor(PreprocessorBase):
     def _build_conversations(
         self, media_files: List[Path]
     ) -> Tuple[Dict[str, Dict], List[Dict]]:
-        """Build conversations structure and copy files using copy_with_dedup.
+        """Build conversations structure using hash_with_dedup (no file copying).
 
         Args:
             media_files: List of media file paths to process
@@ -461,9 +460,9 @@ class ImazingPreprocessor(PreprocessorBase):
                 )
             )
 
-        # Use copy_with_dedup for parallel hashing, deduplication, and copying
-        self.media_dir.mkdir(parents=True, exist_ok=True)
-        results = self.copy_with_dedup(copy_tasks)
+        # Use hash_with_dedup for parallel hashing and deduplication (no file copying)
+        # Files will be copied directly from source to final output during processing
+        results = self.hash_with_dedup(copy_tasks)
 
         # Build conversations from results
         conversations: Dict[str, Dict] = {}
@@ -476,7 +475,6 @@ class ImazingPreprocessor(PreprocessorBase):
                 continue
 
             unique_files_copied += 1
-            self.stats["files_copied"] += 1
 
             # Get merged context (includes all duplicate message contexts)
             merged_contexts = self.get_contexts_list_for_file(result.dest_filename)
@@ -507,6 +505,7 @@ class ImazingPreprocessor(PreprocessorBase):
                 # Create merged message with messages array
                 merged_message = {
                     "media_file": result.dest_filename,
+                    "source_path": str(result.source_path),
                     "primary_created": primary_context.get("created"),
                     "is_duplicate": True,
                     "messages": [],
@@ -543,6 +542,7 @@ class ImazingPreprocessor(PreprocessorBase):
                     "content": primary_context.get("content"),
                     "is_sender": primary_context.get("is_sender"),
                     "media_file": result.dest_filename,
+                    "source_path": str(result.source_path),
                     "media_type": media_type,
                 }
 
@@ -615,9 +615,8 @@ class ImazingPreprocessor(PreprocessorBase):
 
         if not media_files:
             log.logger.warning("No media files found to process")
-            # Still create output structure
+            # Still create output structure (no media directory needed - files read from source)
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            self.media_dir.mkdir(parents=True, exist_ok=True)
             metadata = self._generate_metadata({}, [])
             with open(self.metadata_file, "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
@@ -654,6 +653,5 @@ class ImazingPreprocessor(PreprocessorBase):
             "Conversations": self.stats["conversations"],
             "Unique files": self.stats["unique_files"],
             "Duplicates removed": self.stats["duplicate_files"],
-            "Files copied": self.stats["files_copied"],
         }
         print_preprocessing_stats("iMazing Preprocessing", stats)

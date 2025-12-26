@@ -548,12 +548,10 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
     def copy_media_files(
         self, conversations: List[Dict], file_catalog: Dict[str, Path]
     ) -> None:
-        """Copy media files referenced in metadata to output directory.
+        """Hash media files and build metadata with source_path.
 
-        Uses batch copy_with_dedup for content-based deduplication.
+        Uses batch hash_with_dedup for content-based deduplication.
         """
-        # Create output media directory
-        self.media_output_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info("Copying media files (with deduplication)...")
 
@@ -620,22 +618,26 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
                             },
                         )
 
-        # Execute batch copy with deduplication
+        # Execute batch hash with deduplication (no file copying)
+        # Files will be copied directly from source to final output during processing
         if copy_tasks:
-            results = self.copy_with_dedup(copy_tasks)
+            results = self.hash_with_dedup(copy_tasks)
 
-            # Update messages with copied filenames
+            # Update messages with filenames and source paths
             for task in copy_tasks:
                 result = results.get(task.source_path)
                 if result:
                     path_key = str(task.source_path)
                     if path_key in path_to_messages:
                         for conv, msg, media_path in path_to_messages[path_key]:
-                            # Replace media_path with dest_filename in message
+                            # Replace media_path with dest_filename and source_path in message
                             if "media_files" not in msg:
                                 msg["media_files"] = []
+                            if "source_paths" not in msg:
+                                msg["source_paths"] = {}
                             if result.dest_filename not in msg["media_files"]:
                                 msg["media_files"].append(result.dest_filename)
+                                msg["source_paths"][result.dest_filename] = str(result.source_path)
 
             # Update stats
             unique_files = sum(1 for r in results.values() if not r.is_duplicate)

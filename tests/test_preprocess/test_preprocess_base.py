@@ -22,6 +22,7 @@ from processors.preprocess_base import (
     PreprocessorBase,
     CopyTask,
     CopyResult,
+    HashResult,
 )
 from common.detection import DetectionResult
 
@@ -296,6 +297,224 @@ class TestCopyWithDedup:
         results = preprocessor.copy_with_dedup([], show_progress=False)
 
         assert results == {}
+
+
+class TestHashWithDedup:
+    """Tests for hash_with_dedup method (hash-only, no file copy)."""
+
+    def test_hashes_unique_files_without_copying(self, tmp_path: Path) -> None:
+        """Should hash unique files without copying to output directory."""
+        export_dir = tmp_path / "export"
+        output_dir = tmp_path / "output"
+        export_dir.mkdir()
+        output_dir.mkdir()
+
+        # Create source files
+        file1 = export_dir / "photo1.jpg"
+        file2 = export_dir / "photo2.jpg"
+        file1.write_bytes(b"content1")
+        file2.write_bytes(b"content2")
+
+        preprocessor = ConcretePreprocessor(
+            export_path=export_dir,
+            output_dir=output_dir,
+            workers=1,
+        )
+
+        tasks = [
+            CopyTask(source_path=file1, dest_filename="photo1.jpg"),
+            CopyTask(source_path=file2, dest_filename="photo2.jpg"),
+        ]
+
+        with patch.dict(os.environ, {"DISABLE_HASH_CACHE": "true"}):
+            results = preprocessor.hash_with_dedup(tasks, show_progress=False)
+
+        # Results should exist for both files
+        assert len(results) == 2
+        assert file1 in results
+        assert file2 in results
+
+        # Files should NOT be copied to output directory
+        assert not (output_dir / "media" / "photo1.jpg").exists()
+        assert not (output_dir / "media" / "photo2.jpg").exists()
+
+        # Results should be HashResult instances
+        assert isinstance(results[file1], HashResult)
+        assert isinstance(results[file2], HashResult)
+
+        # source_path should point to original files
+        assert results[file1].primary_source == file1
+        assert results[file2].primary_source == file2
+
+    def test_deduplicates_identical_files(self, tmp_path: Path) -> None:
+        """Should deduplicate files with same content."""
+        export_dir = tmp_path / "export"
+        output_dir = tmp_path / "output"
+        export_dir.mkdir()
+        output_dir.mkdir()
+
+        # Create duplicate files
+        file1 = export_dir / "photo1.jpg"
+        file2 = export_dir / "photo2.jpg"
+        same_content = b"identical content"
+        file1.write_bytes(same_content)
+        file2.write_bytes(same_content)
+
+        preprocessor = ConcretePreprocessor(
+            export_path=export_dir,
+            output_dir=output_dir,
+            workers=1,
+        )
+
+        tasks = [
+            CopyTask(source_path=file1, dest_filename="photo1.jpg"),
+            CopyTask(source_path=file2, dest_filename="photo2.jpg"),
+        ]
+
+        with patch.dict(os.environ, {"DISABLE_HASH_CACHE": "true"}):
+            results = preprocessor.hash_with_dedup(tasks, show_progress=False)
+
+        # Both should have same hash and point to same primary
+        assert results[file1].content_hash == results[file2].content_hash
+        assert results[file1].is_duplicate is False
+        assert results[file2].is_duplicate is True
+        assert results[file1].dest_filename == results[file2].dest_filename
+        # Both should reference the primary source
+        assert results[file1].primary_source == file1
+        assert results[file2].primary_source == file1
+
+    def test_stores_source_path_in_registry(self, tmp_path: Path) -> None:
+        """Should store source_path in hash registry for later use."""
+        export_dir = tmp_path / "export"
+        output_dir = tmp_path / "output"
+        export_dir.mkdir()
+        output_dir.mkdir()
+
+        file1 = export_dir / "photo1.jpg"
+        file1.write_bytes(b"content1")
+
+        preprocessor = ConcretePreprocessor(
+            export_path=export_dir,
+            output_dir=output_dir,
+            workers=1,
+        )
+
+        tasks = [
+            CopyTask(source_path=file1, dest_filename="photo1.jpg"),
+        ]
+
+        with patch.dict(os.environ, {"DISABLE_HASH_CACHE": "true"}):
+            results = preprocessor.hash_with_dedup(tasks, show_progress=False)
+
+        # Check registry has source_path (stored at top level)
+        content_hash = results[file1].content_hash
+        # Access the internal _hash_registry to verify source_path storage
+        registry_entry = preprocessor._hash_registry.get(content_hash)
+        assert registry_entry is not None
+        assert registry_entry.get("source_path") == str(file1)
+
+    def test_merges_context_for_duplicates(self, tmp_path: Path) -> None:
+        """Should merge context when duplicates found."""
+        export_dir = tmp_path / "export"
+        output_dir = tmp_path / "output"
+        export_dir.mkdir()
+        output_dir.mkdir()
+
+        file1 = export_dir / "photo1.jpg"
+        file2 = export_dir / "photo2.jpg"
+        same_content = b"identical"
+        file1.write_bytes(same_content)
+        file2.write_bytes(same_content)
+
+        preprocessor = ConcretePreprocessor(
+            export_path=export_dir,
+            output_dir=output_dir,
+            workers=1,
+        )
+
+        # Custom merger that accumulates albums
+        def merge_albums(existing: Dict, new: Dict) -> None:
+            if "albums" not in existing:
+                existing["albums"] = []
+            existing["albums"].extend(new.get("albums", []))
+
+        preprocessor.set_context_merger(merge_albums)
+
+        tasks = [
+            CopyTask(
+                source_path=file1,
+                dest_filename="photo1.jpg",
+                context={"albums": ["album1"]},
+            ),
+            CopyTask(
+                source_path=file2,
+                dest_filename="photo2.jpg",
+                context={"albums": ["album2"]},
+            ),
+        ]
+
+        with patch.dict(os.environ, {"DISABLE_HASH_CACHE": "true"}):
+            results = preprocessor.hash_with_dedup(tasks, show_progress=False)
+
+        # Check merged context
+        merged_contexts = preprocessor.get_merged_contexts()
+        assert len(merged_contexts) == 1
+        content_hash = results[file1].content_hash
+        assert "album1" in merged_contexts[content_hash]["albums"]
+        assert "album2" in merged_contexts[content_hash]["albums"]
+
+    def test_handles_empty_task_list(self, tmp_path: Path) -> None:
+        """Should return empty dict for empty task list."""
+        export_dir = tmp_path / "export"
+        output_dir = tmp_path / "output"
+        export_dir.mkdir()
+
+        preprocessor = ConcretePreprocessor(
+            export_path=export_dir,
+            output_dir=output_dir,
+        )
+
+        results = preprocessor.hash_with_dedup([], show_progress=False)
+
+        assert results == {}
+
+    def test_handles_filename_collision(self, tmp_path: Path) -> None:
+        """Should add suffix for filename collisions without copying."""
+        export_dir = tmp_path / "export"
+        output_dir = tmp_path / "output"
+        export_dir.mkdir()
+        output_dir.mkdir()
+
+        # Create files with different content but same name request
+        file1 = export_dir / "a" / "photo.jpg"
+        file2 = export_dir / "b" / "photo.jpg"
+        file1.parent.mkdir()
+        file2.parent.mkdir()
+        file1.write_bytes(b"content1")
+        file2.write_bytes(b"content2")
+
+        preprocessor = ConcretePreprocessor(
+            export_path=export_dir,
+            output_dir=output_dir,
+            workers=1,
+        )
+
+        tasks = [
+            CopyTask(source_path=file1, dest_filename="photo.jpg"),
+            CopyTask(source_path=file2, dest_filename="photo.jpg"),
+        ]
+
+        with patch.dict(os.environ, {"DISABLE_HASH_CACHE": "true"}):
+            results = preprocessor.hash_with_dedup(tasks, show_progress=False)
+
+        # Should have different output filenames
+        filenames = {results[file1].dest_filename, results[file2].dest_filename}
+        assert len(filenames) == 2
+        assert "photo.jpg" in filenames
+        assert "photo_1.jpg" in filenames
+
+        # But no files should actually exist
+        assert not (output_dir / "media").exists()
 
 
 class TestFilenameCollision:

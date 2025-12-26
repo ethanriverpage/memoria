@@ -811,7 +811,7 @@ class SnapchatPreprocessor(PreprocessorBase):
                 logger.error("Failed to copy %s: %s", filename, e)
 
     def build_metadata_from_results(self, chat_history: Dict) -> Dict:
-        """Build metadata from copy_with_dedup results."""
+        """Build metadata from hash_with_dedup results."""
         # Get merged contexts from base class
         merged_contexts = self.get_merged_contexts()
 
@@ -833,6 +833,7 @@ class SnapchatPreprocessor(PreprocessorBase):
         for content_hash, context in merged_contexts.items():
             registry_entry = self._hash_registry.get(content_hash, {})
             filename = registry_entry.get("filename", "")
+            source_path = registry_entry.get("source_path", "")
 
             messages = context.get("messages", [])
             overlay_file = context.get("overlay_file")
@@ -854,6 +855,7 @@ class SnapchatPreprocessor(PreprocessorBase):
                     "is_sender": None,
                     "media_id": messages[0].get("media_id", "") if messages else "",
                     "media_file": filename,
+                    "source_path": source_path,
                 }
                 if overlay_file:
                     entry["overlay_file"] = overlay_file
@@ -865,6 +867,7 @@ class SnapchatPreprocessor(PreprocessorBase):
                     continue
                 entry = {
                     "media_file": filename,
+                    "source_path": source_path,
                     "messages": messages,
                     "primary_created": context.get("primary_created"),
                     "is_duplicate": True,
@@ -892,6 +895,7 @@ class SnapchatPreprocessor(PreprocessorBase):
                     "is_sender": msg.get("is_sender"),
                     "media_id": msg.get("media_id"),
                     "media_file": filename,
+                    "source_path": source_path,
                 }
                 if overlay_file:
                     entry["overlay_file"] = overlay_file
@@ -1060,10 +1064,11 @@ class SnapchatPreprocessor(PreprocessorBase):
             chat_history, file_catalog
         )
 
-        # Copy media files with deduplication
+        # Hash media files with deduplication (no file copying)
+        # Files will be copied directly from source to final output during processing
         if copy_tasks:
-            logger.info(f"Copying {len(copy_tasks)} media files with deduplication...")
-            results = self.copy_with_dedup(copy_tasks)
+            logger.info(f"Hashing {len(copy_tasks)} media files with deduplication...")
+            results = self.hash_with_dedup(copy_tasks)
 
             # Count unique vs duplicates
             unique = sum(1 for r in results.values() if not r.is_duplicate)

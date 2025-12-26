@@ -75,11 +75,10 @@ def detect(input_path: Path) -> bool:
             if (sms_dir / "sms.db").exists() and (sms_dir / "Attachments").is_dir():
                 return True
 
-        # Check for preprocessed iMessage export
+        # Check for preprocessed iMessage export (new format without media/ or legacy with media/)
         metadata_file = input_path / "metadata.json"
-        media_dir = input_path / "media"
 
-        if metadata_file.exists() and media_dir.exists():
+        if metadata_file.exists():
             try:
                 with open(metadata_file, "r", encoding="utf-8") as f:
                     metadata = json.load(f)
@@ -500,14 +499,24 @@ def is_preprocessed(input_path: Path) -> bool:
     metadata_file = input_path / "metadata.json"
     media_dir = input_path / "media"
 
-    if not metadata_file.exists() or not media_dir.exists():
+    if not metadata_file.exists():
         return False
 
     # Verify it's an iMessage preprocessed export
     try:
         with open(metadata_file, "r", encoding="utf-8") as f:
             metadata = json.load(f)
-        return "conversations" in metadata and "export_info" in metadata
+
+        # Basic structure checks
+        if "conversations" not in metadata or "export_info" not in metadata:
+            return False
+
+        # New format: file_hashes present (source_path-based, no media/ dir needed)
+        # Old format: media/ directory must exist
+        has_file_hashes = "file_hashes" in metadata
+        has_media_dir = media_dir.exists()
+
+        return has_file_hashes or has_media_dir
     except (json.JSONDecodeError, KeyError):
         return False
 
@@ -715,7 +724,7 @@ def _process_working_directory(
     """Process a working directory (preprocessed export).
 
     Args:
-        working_dir: Path to preprocessed directory with metadata.json and media/
+        working_dir: Path to preprocessed directory with metadata.json
         output_dir: Output directory for processed files
         workers: Number of parallel workers
         dedup_manifest: Optional deduplication manifest for filtering secondary files
@@ -725,14 +734,9 @@ def _process_working_directory(
     """
     # Load metadata
     metadata_file = working_dir / "metadata.json"
-    media_dir = working_dir / "media"
 
     if not metadata_file.exists():
         logger.error(f"Metadata file not found: {metadata_file}")
-        return False
-
-    if not media_dir.exists():
-        logger.error(f"Media directory not found: {media_dir}")
         return False
 
     logger.info(f"Loading metadata from {metadata_file}...")
@@ -745,33 +749,28 @@ def _process_working_directory(
     filename_index = build_filename_index(metadata)
     logger.info(f"Found {len(filename_index)} media files to process")
 
-    # Scan media directory
-    media_files = list(media_dir.iterdir())
-    media_files = [f for f in media_files if f.is_file()]
-    logger.info(f"Found {len(media_files)} files in media directory")
+    # Check if this is new format (source_path in metadata) or legacy format (media/ directory)
+    # Sample the first message to detect format
+    sample_message = next(iter(filename_index.values()), None) if filename_index else None
+    use_legacy_format = sample_message is None or "source_path" not in sample_message
+
+    if use_legacy_format:
+        # Legacy format: scan media/ directory
+        media_dir = working_dir / "media"
+        if not media_dir.exists():
+            logger.error(f"Media directory not found: {media_dir}")
+            return False
+        logger.info("Using legacy format (media/ directory)")
+        media_files = list(media_dir.iterdir())
+        media_files = [f for f in media_files if f.is_file()]
+        logger.info(f"Found {len(media_files)} files in media directory")
+    else:
+        logger.info("Using new format (source_path in metadata)")
 
     # Filter out secondary files based on dedup manifest (using hash-based lookup)
     # Use cached file_hashes from preprocessing when available to avoid re-hashing
     file_hashes = metadata.get("file_hashes", {})
-    if dedup_manifest:
-        original_count = len(media_files)
-        filtered_files = []
-        for f in media_files:
-            content_hash = file_hashes.get(f.name)
-            if content_hash:
-                # Use cached hash from preprocessing (avoids re-hashing)
-                if is_file_primary_by_hash(dedup_manifest, content_hash, "iMessage"):
-                    filtered_files.append(f)
-            else:
-                # Fallback for files without cached hash
-                if not IMessageProcessor.should_skip_for_dedup(
-                    str(f), dedup_manifest, "iMessage"
-                ):
-                    filtered_files.append(f)
-        media_files = filtered_files
-        skipped_count = original_count - len(media_files)
-        if skipped_count > 0:
-            logger.info(f"Skipped {skipped_count} secondary files (dedup)")
+    skipped_dedup = 0
 
     # Match files to messages and pre-generate filenames
     logger.info("Matching files and generating filenames...")
@@ -780,18 +779,72 @@ def _process_working_directory(
     )
     matched_files = []
 
-    for media_file in media_files:
-        if media_file.name in filename_index:
-            message = filename_index[media_file.name]
-            file_ext = media_file.suffix.lower()
+    if use_legacy_format:
+        # Legacy format: match files from media/ directory to metadata
+        for media_file in media_files:
+            if media_file.name in filename_index:
+                message = filename_index[media_file.name]
 
-            # Build identifier (policy) and delegate to FilenameGenerator (mechanism)
+                # Dedup filtering for legacy format
+                if dedup_manifest:
+                    content_hash = file_hashes.get(media_file.name)
+                    if content_hash:
+                        if not is_file_primary_by_hash(dedup_manifest, content_hash, "iMessage"):
+                            skipped_dedup += 1
+                            continue
+                    else:
+                        if IMessageProcessor.should_skip_for_dedup(
+                            str(media_file), dedup_manifest, "iMessage"
+                        ):
+                            skipped_dedup += 1
+                            continue
+
+                file_ext = media_file.suffix.lower()
+                identifier = _build_imessage_identifier(message)
+                timestamp = _extract_message_timestamp(message)
+                output_filename = filename_gen.generate(timestamp, identifier, file_ext)
+                matched_files.append((media_file, message, output_filename))
+            else:
+                logger.warning(f"No metadata for file: {media_file.name}")
+    else:
+        # New format: read source_path from metadata directly
+        for media_filename, message in filename_index.items():
+            source_path_str = message.get("source_path")
+            if not source_path_str:
+                logger.warning(f"No source_path for file: {media_filename}")
+                continue
+
+            source_path = Path(source_path_str)
+            if not source_path.exists():
+                logger.warning(f"Source file not found: {source_path}")
+                continue
+
+            # Dedup filtering for new format
+            if dedup_manifest:
+                content_hash = file_hashes.get(media_filename)
+                if content_hash:
+                    # Pass source_path for within-processor dedup (e.g., same file
+                    # in multiple iMessage exports from different devices)
+                    if not is_file_primary_by_hash(
+                        dedup_manifest, content_hash, "iMessage", source_path_str
+                    ):
+                        skipped_dedup += 1
+                        continue
+                else:
+                    if IMessageProcessor.should_skip_for_dedup(
+                        str(source_path), dedup_manifest, "iMessage"
+                    ):
+                        skipped_dedup += 1
+                        continue
+
+            file_ext = source_path.suffix.lower()
             identifier = _build_imessage_identifier(message)
             timestamp = _extract_message_timestamp(message)
             output_filename = filename_gen.generate(timestamp, identifier, file_ext)
-            matched_files.append((media_file, message, output_filename))
-        else:
-            logger.warning(f"No metadata for file: {media_file.name}")
+            matched_files.append((source_path, message, output_filename))
+
+    if skipped_dedup > 0:
+        logger.info(f"Skipped {skipped_dedup} secondary files (dedup)")
 
     logger.info(f"Matched {len(matched_files)} files")
 

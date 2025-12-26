@@ -422,16 +422,10 @@ def _process_working_directory(
     """
     # Configuration
     metadata_file = os.path.join(working_dir, "metadata.json")
-    media_dir = os.path.join(working_dir, "media")
 
     # Check for metadata file (should exist after preprocessing or if already preprocessed)
     if not os.path.exists(metadata_file):
         logger.error(f"Metadata file not found: {metadata_file}")
-        return
-
-    # Check for media directory
-    if not os.path.exists(media_dir):
-        logger.error(f"Media directory not found: {media_dir}")
         return
 
     # Load metadata
@@ -450,6 +444,27 @@ def _process_working_directory(
 
     logger.info(f"Found {len(conversations)} conversations")
     logger.info(f"Found {total_media_files} media files to process")
+
+    # Check if this is new format (source_paths in messages) or legacy format (media/ directory)
+    sample_message = None
+    for conv in conversations:
+        for msg in conv.get("messages", []):
+            if msg.get("media_files"):
+                sample_message = msg
+                break
+        if sample_message:
+            break
+    use_legacy_format = sample_message is None or "source_paths" not in sample_message
+
+    if use_legacy_format:
+        media_dir = os.path.join(working_dir, "media")
+        if not os.path.exists(media_dir):
+            logger.error(f"Media directory not found: {media_dir}")
+            return
+        logger.info("Using legacy format (media/ directory)")
+    else:
+        media_dir = None  # Will read from source_paths
+        logger.info("Using new format (source_path in metadata)")
 
     # Extract export username from export_info
     export_username = export_info.get("export_username", "unknown")
@@ -483,17 +498,29 @@ def _process_working_directory(
                 # Skip secondary files based on dedup manifest (using hash-based lookup)
                 # Use cached file_hashes from preprocessing when available
                 content_hash = file_hashes.get(media_file)
+
+                # Determine source path based on format
+                if use_legacy_format:
+                    source_file_path = media_dir
+                    source_file_name = media_file
+                else:
+                    source_paths = message.get("source_paths", {})
+                    source_file_path = os.path.dirname(source_paths.get(media_file, ""))
+                    source_file_name = os.path.basename(source_paths.get(media_file, media_file))
+
                 if dedup_manifest:
+                    # Get full source path for within-processor dedup
+                    full_source_path = source_paths.get(media_file) if not use_legacy_format else None
                     if content_hash:
                         # Use cached hash from preprocessing (avoids re-hashing)
                         if not is_file_primary_by_hash(
-                            dedup_manifest, content_hash, "Google Chat"
+                            dedup_manifest, content_hash, "Google Chat", full_source_path
                         ):
                             skipped_dedup += 1
                             continue
                     else:
                         # Fallback for files without cached hash
-                        full_path = os.path.join(media_dir, media_file)
+                        full_path = os.path.join(source_file_path, source_file_name) if source_file_path else source_file_name
                         if GoogleChatProcessor.should_skip_for_dedup(
                             full_path, dedup_manifest, "Google Chat"
                         ):
@@ -514,11 +541,11 @@ def _process_working_directory(
                 # Create task tuple for worker
                 processing_tasks.append(
                     (
-                        media_file,
+                        source_file_name,
                         message,
                         conversation_name,
                         output_filename,
-                        media_dir,
+                        source_file_path,
                         output_dir,
                         export_username,
                     )

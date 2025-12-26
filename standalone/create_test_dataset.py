@@ -29,6 +29,7 @@ import os
 import random
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -72,6 +73,8 @@ class SampledFiles:
     # Files to write with custom content: (dest_rel_path, content)
     files_to_write: List[Tuple[Path, str]] = field(default_factory=list)
     total_size: int = 0
+    # For iMessage: (source_db, attachment_ids, message_ids, chat_ids)
+    filtered_imessage_db: Optional[Tuple[Path, Set[int], Set[int], Set[int]]] = None
 
 
 def is_media_file(path: Path) -> bool:
@@ -253,6 +256,8 @@ def sample_google_chat(export_path: Path, max_conversations: int = 5) -> Sampled
     """Sample Google Chat: complete conversation folders with messages.json + media.
 
     Structure: google-username/Google Chat/{Groups|Users}/{name}/messages.json + media
+
+    Prioritizes conversations that contain media files to ensure test coverage.
     """
     result = SampledFiles()
     chat_dir = export_path / "Google Chat"
@@ -278,20 +283,54 @@ def sample_google_chat(export_path: Path, max_conversations: int = 5) -> Sampled
                 result.files_to_copy.append(user_info_path)
 
     # Find all conversation folders (those with messages.json)
-    conversations: List[Path] = []
+    # Categorize by whether they have media files
+    convs_with_media: List[Path] = []
+    convs_without_media: List[Path] = []
+
     for subdir in ["Groups", "Users"]:
         sub_path = chat_dir / subdir
         if sub_path.exists():
             for conv_dir in sub_path.iterdir():
                 if conv_dir.is_dir() and (conv_dir / "messages.json").exists():
-                    conversations.append(conv_dir)
+                    # Check if conversation has any media files
+                    has_media = any(
+                        f.is_file() and is_media_file(f)
+                        for f in conv_dir.rglob("*")
+                    )
+                    if has_media:
+                        convs_with_media.append(conv_dir)
+                    else:
+                        convs_without_media.append(conv_dir)
 
-    if not conversations:
+    if not convs_with_media and not convs_without_media:
         return result
 
-    # Sample conversations
-    random.shuffle(conversations)
-    selected_convs = conversations[:max_conversations]
+    # Prioritize conversations WITH media
+    selected_convs: List[Path] = []
+
+    # First, take conversations with media (up to max_conversations - 1)
+    random.shuffle(convs_with_media)
+    selected_convs.extend(convs_with_media[: max_conversations - 1])
+
+    # Add at least one without media for edge case testing (if available)
+    if convs_without_media:
+        random.shuffle(convs_without_media)
+        selected_convs.append(convs_without_media[0])
+
+    # Fill remaining slots with more media conversations
+    if len(selected_convs) < max_conversations:
+        remaining_with_media = [c for c in convs_with_media if c not in selected_convs]
+        selected_convs.extend(remaining_with_media[: max_conversations - len(selected_convs)])
+
+    # If still not enough, add more without media
+    if len(selected_convs) < max_conversations:
+        remaining_without = [c for c in convs_without_media if c not in selected_convs]
+        selected_convs.extend(remaining_without[: max_conversations - len(selected_convs)])
+
+    logger.debug(
+        f"Google Chat: {len(convs_with_media)} convs with media, "
+        f"{len(convs_without_media)} without, selected {len(selected_convs)}"
+    )
 
     # Copy entire conversation folders
     for conv_dir in selected_convs:
@@ -368,10 +407,14 @@ def sample_snapchat_memories(export_path: Path, max_files: int = 20) -> SampledF
 
 
 def sample_snapchat_messages(export_path: Path, max_media: int = 15) -> SampledFiles:
-    """Sample Snapchat Messages: JSON files + sampled chat_media.
+    """Sample Snapchat Messages: filtered JSON + sampled chat_media.
 
     Structure: snapchat-username/messages/{json/,chat_media/,html/}
     Note: chat_media is directly under messages/, not inside json/
+
+    Unlike the old approach of copying full JSON files, we now filter
+    chat_history.json to only include messages that reference the sampled
+    media files. This prevents thousands of orphaned metadata entries.
     """
     result = SampledFiles()
     messages_dir = export_path / "messages"
@@ -386,29 +429,101 @@ def sample_snapchat_messages(export_path: Path, max_media: int = 15) -> SampledF
     # chat_media is directly under messages/, NOT inside json/
     chat_media_dir = messages_dir / "chat_media"
 
-    # Always copy the JSON files (they're not that large)
-    for json_file in ["chat_history.json", "snap_history.json"]:
-        path = json_dir / json_file
-        if path.exists():
-            result.files_to_copy.append(path)
+    # Sample media from chat_media first so we know which messages to keep
+    selected_media_filenames: Set[str] = set()
 
-    # Sample media from chat_media
     if chat_media_dir.exists():
         all_media = [
             f for f in chat_media_dir.iterdir() if f.is_file() and is_media_file(f)
         ]
         random.shuffle(all_media)
-        result.files_to_copy.extend(all_media[:max_media])
+        selected_media = all_media[:max_media]
+        result.files_to_copy.extend(selected_media)
+        selected_media_filenames = {f.name for f in selected_media}
 
-        # Also include some overlays if present
-        overlays = [
-            f
-            for f in chat_media_dir.iterdir()
-            if f.is_file() and "overlay" in f.name.lower()
-        ]
-        result.files_to_copy.extend(overlays[:5])
+        # Also include overlays for selected media (Snapchat overlay naming patterns)
+        for media_file in selected_media:
+            stem = media_file.stem
+            # Check for exact overlay patterns used by Snapchat
+            overlay_patterns = [
+                f"{stem}_overlay.png",
+                f"{stem}-overlay.png",
+                f"{stem.replace('_', '-')}_overlay.png",
+            ]
+            # For media files with UUID pattern like "2023-06-22_media~UUID"
+            # the overlay is typically "2023-06-22_overlay~UUID.png"
+            if "~" in stem:
+                date_part, uuid_part = stem.split("~", 1)
+                if "_media" in date_part:
+                    overlay_stem = date_part.replace("_media", "_overlay")
+                    overlay_patterns.append(f"{overlay_stem}~{uuid_part}.png")
 
-    # Copy HTML files too
+            for pattern in overlay_patterns:
+                overlay_file = chat_media_dir / pattern
+                if overlay_file.exists() and overlay_file not in result.files_to_copy:
+                    result.files_to_copy.append(overlay_file)
+
+    # Load and filter chat_history.json
+    # Media filenames contain the Media ID from JSON, e.g.:
+    # JSON: "Media IDs":"b~EiQSFWJoWXE0UGtjWndZSDlhUEt1VWV1MhoAGgAyAXxIAlAEYAE"
+    # File: 2019-02-12_b~EiQSFWJoWXE0UGtjWndZSDlhUEt1VWV1MhoAGgAyAXxIAlAEYAE.jpg
+    chat_history_path = json_dir / "chat_history.json"
+    if chat_history_path.exists() and selected_media_filenames:
+        try:
+            # Build a set of Media IDs that correspond to our selected files
+            selected_media_ids: Set[str] = set()
+            for filename in selected_media_filenames:
+                # Extract Media ID from filename (after date prefix, before extension)
+                # Format: YYYY-MM-DD_<media_id>.ext or YYYY-MM-DD_media~<uuid>.ext
+                parts = filename.split("_", 1)
+                if len(parts) > 1:
+                    media_id_with_ext = parts[1]
+                    media_id = Path(media_id_with_ext).stem
+                    selected_media_ids.add(media_id)
+
+            with open(chat_history_path, "r", encoding="utf-8") as f:
+                chat_history = json.load(f)
+
+            # Filter to only include messages that reference selected media
+            # chat_history is a dict with conversation names as keys
+            if isinstance(chat_history, dict):
+                filtered_history = {}
+                for conv_id, messages in chat_history.items():
+                    if isinstance(messages, list):
+                        filtered_messages = []
+                        for msg in messages:
+                            # Check if message references any of our selected media
+                            media_ids_str = msg.get("Media IDs", "")
+                            if media_ids_str:
+                                # Check if this media ID is in our selected set
+                                if media_ids_str in selected_media_ids:
+                                    filtered_messages.append(msg)
+                        if filtered_messages:
+                            filtered_history[conv_id] = filtered_messages
+                if filtered_history:
+                    result.files_to_write.append(
+                        (chat_history_path, json.dumps(filtered_history, indent=2, ensure_ascii=False))
+                    )
+                else:
+                    # No matches - copy the JSON anyway for structure detection
+                    result.files_to_copy.append(chat_history_path)
+            else:
+                # Unexpected format, copy as-is
+                result.files_to_copy.append(chat_history_path)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Failed to filter chat_history.json: {e}")
+            # Fall back to copying the full file
+            result.files_to_copy.append(chat_history_path)
+    elif chat_history_path.exists():
+        # No media selected, just copy the JSON for structure
+        result.files_to_copy.append(chat_history_path)
+
+    # Copy snap_history.json as-is (usually smaller and references different media)
+    snap_history_path = json_dir / "snap_history.json"
+    if snap_history_path.exists():
+        result.files_to_copy.append(snap_history_path)
+
+    # Copy HTML files too (for reference, though not used by processor)
     html_dir = messages_dir / "html"
     if html_dir.exists():
         for f in html_dir.iterdir():
@@ -422,12 +537,15 @@ def sample_snapchat_messages(export_path: Path, max_media: int = 15) -> SampledF
 
 
 def sample_instagram_messages(
-    export_path: Path, max_conversations: int = 5
+    export_path: Path, max_conversations: int = 5, max_media_per_conv: int = 10
 ) -> SampledFiles:
     """Sample Instagram Messages: complete conversation folders with HTML + media.
 
     Structure: instagram-username/your_instagram_activity/messages/inbox/{conv}/
                or instagram-username/messages/inbox/{conv}/
+
+    Copies ALL media from selected conversations (not just a subset) to ensure
+    HTML references match copied media files.
     """
     result = SampledFiles()
 
@@ -447,30 +565,37 @@ def sample_instagram_messages(
         return result
 
     # Find conversation folders, categorizing by whether they have media
-    convs_with_media: List[Path] = []
+    # Also track media count for smarter selection
+    convs_with_media: List[Tuple[Path, int]] = []  # (path, media_count)
     convs_without_media: List[Path] = []
 
     for conv_dir in inbox_dir.iterdir():
         if conv_dir.is_dir():
             html_files = list(conv_dir.glob("message_*.html"))
             if html_files:
-                # Check if this conversation has media
-                has_media = False
+                # Count media files in this conversation
+                media_count = 0
                 for media_subdir in ["photos", "videos", "audio"]:
                     media_path = conv_dir / media_subdir
-                    if media_path.exists() and any(media_path.iterdir()):
-                        has_media = True
-                        break
+                    if media_path.exists():
+                        media_count += sum(1 for f in media_path.iterdir() if f.is_file())
 
-                if has_media:
-                    convs_with_media.append(conv_dir)
+                if media_count > 0:
+                    convs_with_media.append((conv_dir, media_count))
                 else:
                     convs_without_media.append(conv_dir)
 
-    # Prioritize conversations WITH media
+    # Prioritize conversations WITH media, preferring those with reasonable amounts
+    # (not too many to avoid bloating the test dataset)
     selected: List[Path] = []
-    random.shuffle(convs_with_media)
-    selected.extend(convs_with_media[: max_conversations - 1])
+
+    # Sort by media count and prefer conversations with 1-20 media files
+    convs_with_media.sort(key=lambda x: (0 if 1 <= x[1] <= 20 else 1, x[1]))
+    random.shuffle(convs_with_media)  # Randomize within similar counts
+
+    # Take conversations with media (up to max_conversations - 1)
+    for conv_dir, _ in convs_with_media[: max_conversations - 1]:
+        selected.append(conv_dir)
 
     # Add at least one without media for edge case testing
     if convs_without_media:
@@ -478,23 +603,33 @@ def sample_instagram_messages(
         selected.append(convs_without_media[0])
 
     # Fill remaining slots with more media convs
-    if len(selected) < max_conversations and len(convs_with_media) > len(selected):
-        remaining = [c for c in convs_with_media if c not in selected]
-        selected.extend(remaining[: max_conversations - len(selected)])
+    if len(selected) < max_conversations:
+        remaining = [(c, n) for c, n in convs_with_media if c not in selected]
+        for conv_dir, _ in remaining[: max_conversations - len(selected)]:
+            selected.append(conv_dir)
 
-    # Copy entire conversation folders (limited media per conversation)
+    logger.debug(
+        f"Instagram Messages: {len(convs_with_media)} convs with media, "
+        f"{len(convs_without_media)} without, selected {len(selected)}"
+    )
+
+    # Copy entire conversation folders - ALL media to ensure HTML references work
     for conv_dir in selected:
         # Always copy HTML files
         for f in conv_dir.glob("message_*.html"):
             result.files_to_copy.append(f)
 
-        # Copy limited media from each subdirectory
+        # Copy ALL media from each subdirectory (limited per conversation to avoid bloat)
+        conv_media_count = 0
         for media_subdir in ["photos", "videos", "audio"]:
             media_path = conv_dir / media_subdir
             if media_path.exists():
                 media_files = [f for f in media_path.iterdir() if f.is_file()]
-                random.shuffle(media_files)
-                result.files_to_copy.extend(media_files[:3])  # Max 3 per type
+                # Limit total media per conversation to avoid very large test datasets
+                remaining_slots = max_media_per_conv - conv_media_count
+                if remaining_slots > 0:
+                    result.files_to_copy.extend(media_files[:remaining_slots])
+                    conv_media_count += min(len(media_files), remaining_slots)
 
     # Copy index files
     messages_root = inbox_dir.parent
@@ -668,7 +803,10 @@ def sample_discord(export_path: Path, max_channels: int = 5) -> SampledFiles:
 
 
 def sample_imessage(export_path: Path, max_attachments: int = 10) -> SampledFiles:
-    """Sample iMessage: database file + sampled attachments.
+    """Sample iMessage: filtered database + sampled attachments.
+
+    Creates a filtered SQLite database containing only the sampled attachments
+    and their related messages/chats/handles to avoid orphaned metadata.
 
     Structure: mac-messages/chat.db + Attachments/
                or iphone-messages/SMS/sms.db + SMS/Attachments/
@@ -678,6 +816,7 @@ def sample_imessage(export_path: Path, max_attachments: int = 10) -> SampledFile
     # Detect Mac vs iPhone format
     chat_db = export_path / "chat.db"
     attachments_dir = export_path / "Attachments"
+    is_iphone = False
 
     if not chat_db.exists():
         # Try iPhone/iMazing format
@@ -685,27 +824,116 @@ def sample_imessage(export_path: Path, max_attachments: int = 10) -> SampledFile
         if sms_dir.exists():
             chat_db = sms_dir / "sms.db"
             attachments_dir = sms_dir / "Attachments"
+            is_iphone = True
 
     if not chat_db.exists():
         return result
 
-    # Always copy the database (required for processing)
-    result.files_to_copy.append(chat_db)
+    try:
+        # Query the database to find attachments with their file paths
+        conn = sqlite3.connect(str(chat_db))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
 
-    # Copy WAL/SHM files if present
-    for suffix in ["-shm", "-wal"]:
-        wal_file = chat_db.parent / f"{chat_db.name}{suffix}"
-        if wal_file.exists():
-            result.files_to_copy.append(wal_file)
+        # Query attachments that exist and are complete (transfer_state = 5)
+        query = """
+        SELECT
+            a.ROWID as attachment_id,
+            a.filename,
+            maj.message_id,
+            cmj.chat_id
+        FROM attachment a
+        JOIN message_attachment_join maj ON a.ROWID = maj.attachment_id
+        JOIN chat_message_join cmj ON maj.message_id = cmj.message_id
+        WHERE a.filename IS NOT NULL
+          AND a.transfer_state = 5
+        """
+        cursor.execute(query)
+        rows = cursor.fetchall()
 
-    # Sample attachments using fast find
-    if attachments_dir.exists():
-        # iMessage attachments are usually in deep paths like AA/BB/guid/file
-        all_attachments = fast_find_media(
-            attachments_dir, max_depth=6, limit=max_attachments * 3
+        # Build list of attachments that actually exist on disk
+        valid_attachments: List[Tuple[int, Path, int, int]] = []
+        for row in rows:
+            filename = row["filename"]
+            if not filename:
+                continue
+
+            # Resolve the path - iMessage stores paths like ~/Library/... or file:///
+            if filename.startswith("~/"):
+                # Mac format: ~/Library/Messages/Attachments/...
+                rel_path = filename.replace("~/Library/Messages/Attachments/", "")
+                file_path = attachments_dir / rel_path
+            elif filename.startswith("file://"):
+                # URL format
+                rel_path = filename.replace("file://", "")
+                if "/Attachments/" in rel_path:
+                    rel_path = rel_path.split("/Attachments/", 1)[1]
+                    file_path = attachments_dir / rel_path
+                else:
+                    continue
+            elif "/Attachments/" in filename:
+                # Full path with Attachments
+                rel_path = filename.split("/Attachments/", 1)[1]
+                file_path = attachments_dir / rel_path
+            else:
+                # Try as relative path
+                file_path = attachments_dir / filename
+
+            if file_path.exists() and file_path.is_file() and is_media_file(file_path):
+                valid_attachments.append(
+                    (row["attachment_id"], file_path, row["message_id"], row["chat_id"])
+                )
+
+        conn.close()
+
+        if not valid_attachments:
+            # Fallback: just copy some files without database filtering
+            result.files_to_copy.append(chat_db)
+            all_attachments = fast_find_media(
+                attachments_dir, max_depth=6, limit=max_attachments * 3
+            )
+            random.shuffle(all_attachments)
+            result.files_to_copy.extend(all_attachments[:max_attachments])
+            result.total_size = sum(
+                f.stat().st_size for f in result.files_to_copy if f.exists()
+            )
+            return result
+
+        # Sample attachments
+        random.shuffle(valid_attachments)
+        selected = valid_attachments[:max_attachments]
+
+        # Add selected attachment files
+        selected_attachment_ids: Set[int] = set()
+        selected_message_ids: Set[int] = set()
+        selected_chat_ids: Set[int] = set()
+
+        for att_id, file_path, msg_id, chat_id in selected:
+            result.files_to_copy.append(file_path)
+            selected_attachment_ids.add(att_id)
+            selected_message_ids.add(msg_id)
+            selected_chat_ids.add(chat_id)
+
+        # Create filtered database content
+        # We'll write this as a tuple: (original_db_path, attachment_ids, message_ids, chat_ids)
+        # The copy logic will create a filtered database
+        result.filtered_imessage_db = (
+            chat_db,
+            selected_attachment_ids,
+            selected_message_ids,
+            selected_chat_ids,
         )
-        random.shuffle(all_attachments)
-        result.files_to_copy.extend(all_attachments[:max_attachments])
+
+    except (sqlite3.Error, OSError) as e:
+        logger.warning(f"Error querying iMessage database {chat_db}: {e}")
+        # Fallback: copy database and sample files
+        result.files_to_copy.append(chat_db)
+        if attachments_dir.exists():
+            all_attachments = fast_find_media(
+                attachments_dir, max_depth=6, limit=max_attachments * 3
+            )
+            random.shuffle(all_attachments)
+            result.files_to_copy.extend(all_attachments[:max_attachments])
 
     # Copy MessagesMetaData if present (iMazing format) - usually small
     metadata_dir = export_path / "MessagesMetaData"
@@ -721,6 +949,204 @@ def sample_imessage(export_path: Path, max_attachments: int = 10) -> SampledFile
         f.stat().st_size for f in result.files_to_copy if f.exists()
     )
     return result
+
+
+def create_filtered_imessage_db(
+    source_db: Path,
+    dest_db: Path,
+    attachment_ids: Set[int],
+    message_ids: Set[int],
+    chat_ids: Set[int],
+) -> bool:
+    """Create a filtered iMessage database with only selected records.
+
+    Args:
+        source_db: Path to original chat.db or sms.db
+        dest_db: Path to write filtered database
+        attachment_ids: Set of attachment ROWIDs to include
+        message_ids: Set of message ROWIDs to include
+        chat_ids: Set of chat ROWIDs to include
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Connect to source
+        src_conn = sqlite3.connect(str(source_db))
+        src_conn.row_factory = sqlite3.Row
+
+        # Create destination database
+        dest_db.parent.mkdir(parents=True, exist_ok=True)
+        if dest_db.exists():
+            dest_db.unlink()
+
+        dest_conn = sqlite3.connect(str(dest_db))
+
+        # Get the schema from source
+        schema_query = """
+        SELECT sql FROM sqlite_master
+        WHERE type IN ('table', 'index') AND sql IS NOT NULL
+        ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END
+        """
+        src_cursor = src_conn.cursor()
+        src_cursor.execute(schema_query)
+        schemas = src_cursor.fetchall()
+
+        # Create tables and indexes in destination
+        dest_cursor = dest_conn.cursor()
+        for row in schemas:
+            try:
+                dest_cursor.execute(row[0])
+            except sqlite3.Error:
+                # Some schemas may fail (triggers, etc.) - that's OK
+                pass
+
+        # Copy filtered data for key tables
+        # 1. attachment table - only selected attachments
+        if attachment_ids:
+            placeholders = ",".join("?" * len(attachment_ids))
+            src_cursor.execute(
+                f"SELECT * FROM attachment WHERE ROWID IN ({placeholders})",
+                list(attachment_ids),
+            )
+            rows = src_cursor.fetchall()
+            if rows:
+                cols = [desc[0] for desc in src_cursor.description]
+                insert_sql = f"INSERT INTO attachment ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"
+                for row in rows:
+                    try:
+                        dest_cursor.execute(insert_sql, list(row))
+                    except sqlite3.Error:
+                        pass
+
+        # 2. message table - only messages with selected attachments
+        if message_ids:
+            placeholders = ",".join("?" * len(message_ids))
+            src_cursor.execute(
+                f"SELECT * FROM message WHERE ROWID IN ({placeholders})",
+                list(message_ids),
+            )
+            rows = src_cursor.fetchall()
+            if rows:
+                cols = [desc[0] for desc in src_cursor.description]
+                insert_sql = f"INSERT INTO message ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"
+                for row in rows:
+                    try:
+                        dest_cursor.execute(insert_sql, list(row))
+                    except sqlite3.Error:
+                        pass
+
+        # 3. chat table - only related chats
+        if chat_ids:
+            placeholders = ",".join("?" * len(chat_ids))
+            src_cursor.execute(
+                f"SELECT * FROM chat WHERE ROWID IN ({placeholders})",
+                list(chat_ids),
+            )
+            rows = src_cursor.fetchall()
+            if rows:
+                cols = [desc[0] for desc in src_cursor.description]
+                insert_sql = f"INSERT INTO chat ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"
+                for row in rows:
+                    try:
+                        dest_cursor.execute(insert_sql, list(row))
+                    except sqlite3.Error:
+                        pass
+
+        # 4. message_attachment_join - only for selected messages/attachments
+        if message_ids and attachment_ids:
+            msg_placeholders = ",".join("?" * len(message_ids))
+            att_placeholders = ",".join("?" * len(attachment_ids))
+            src_cursor.execute(
+                f"""SELECT * FROM message_attachment_join
+                    WHERE message_id IN ({msg_placeholders})
+                    AND attachment_id IN ({att_placeholders})""",
+                list(message_ids) + list(attachment_ids),
+            )
+            rows = src_cursor.fetchall()
+            if rows:
+                cols = [desc[0] for desc in src_cursor.description]
+                insert_sql = f"INSERT INTO message_attachment_join ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"
+                for row in rows:
+                    try:
+                        dest_cursor.execute(insert_sql, list(row))
+                    except sqlite3.Error:
+                        pass
+
+        # 5. chat_message_join - only for selected chats/messages
+        if chat_ids and message_ids:
+            chat_placeholders = ",".join("?" * len(chat_ids))
+            msg_placeholders = ",".join("?" * len(message_ids))
+            src_cursor.execute(
+                f"""SELECT * FROM chat_message_join
+                    WHERE chat_id IN ({chat_placeholders})
+                    AND message_id IN ({msg_placeholders})""",
+                list(chat_ids) + list(message_ids),
+            )
+            rows = src_cursor.fetchall()
+            if rows:
+                cols = [desc[0] for desc in src_cursor.description]
+                insert_sql = f"INSERT INTO chat_message_join ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"
+                for row in rows:
+                    try:
+                        dest_cursor.execute(insert_sql, list(row))
+                    except sqlite3.Error:
+                        pass
+
+        # 6. handle table - get handles from selected messages
+        if message_ids:
+            msg_placeholders = ",".join("?" * len(message_ids))
+            src_cursor.execute(
+                f"""SELECT DISTINCT h.* FROM handle h
+                    JOIN message m ON m.handle_id = h.ROWID
+                    WHERE m.ROWID IN ({msg_placeholders})""",
+                list(message_ids),
+            )
+            rows = src_cursor.fetchall()
+            if rows:
+                cols = [desc[0] for desc in src_cursor.description]
+                insert_sql = f"INSERT INTO handle ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"
+                for row in rows:
+                    try:
+                        dest_cursor.execute(insert_sql, list(row))
+                    except sqlite3.Error:
+                        pass
+
+        # 7. chat_handle_join - for selected chats
+        if chat_ids:
+            chat_placeholders = ",".join("?" * len(chat_ids))
+            src_cursor.execute(
+                f"SELECT * FROM chat_handle_join WHERE chat_id IN ({chat_placeholders})",
+                list(chat_ids),
+            )
+            rows = src_cursor.fetchall()
+            if rows:
+                cols = [desc[0] for desc in src_cursor.description]
+                insert_sql = f"INSERT INTO chat_handle_join ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"
+                for row in rows:
+                    try:
+                        dest_cursor.execute(insert_sql, list(row))
+                    except sqlite3.Error:
+                        pass
+
+        dest_conn.commit()
+        src_conn.close()
+        dest_conn.close()
+
+        logger.debug(
+            f"Created filtered iMessage DB: {len(attachment_ids)} attachments, "
+            f"{len(message_ids)} messages, {len(chat_ids)} chats"
+        )
+        return True
+
+    except (sqlite3.Error, OSError) as e:
+        logger.warning(f"Error creating filtered iMessage database: {e}")
+        # Fallback: just copy the original
+        try:
+            shutil.copy2(source_db, dest_db)
+            return True
+        except (OSError, shutil.Error):
+            return False
 
 
 def sample_instagram_old(export_path: Path, max_files: int = 15) -> SampledFiles:
@@ -882,8 +1308,10 @@ def detect_and_sample_export(export_path: Path) -> Tuple[str, SampledFiles]:
     if re.match(r"discord-.*-\d{8}", name):
         return "Discord", sample_discord(export_path)
 
-    # iMessage exports
-    if re.match(r"(iph.*|mac)-messages-\d{8}", name):
+    # iMessage exports (various naming patterns)
+    # - imessage-iph13p-20220426, imessage-m3_mbp-20251202
+    # - iph13p-messages-20220426, mac-messages-20251202
+    if re.match(r"(imessage-|iph.*-messages-|mac-messages-)\S+-?\d{8}", name):
         return "iMessage", sample_imessage(export_path)
 
     return "Unknown", SampledFiles()
@@ -1009,17 +1437,40 @@ def create_test_dataset(
                     f.write(content)
             written += 1
 
+        # Create filtered iMessage database if applicable
+        if result.sampled.filtered_imessage_db:
+            src_db, att_ids, msg_ids, chat_ids = result.sampled.filtered_imessage_db
+            try:
+                rel_path = src_db.relative_to(source_dir)
+            except ValueError:
+                rel_path = Path(src_db.parent.name) / src_db.name
+            dest_db = output_dir / rel_path
+            if dry_run:
+                logger.debug(
+                    f"  Would create filtered iMessage DB: {rel_path} "
+                    f"({len(att_ids)} attachments)"
+                )
+            else:
+                create_filtered_imessage_db(src_db, dest_db, att_ids, msg_ids, chat_ids)
+            written += 1
+
         # Update stats
         stats["exports_processed"] += 1
         stats["files_copied"] += copied
         stats["files_written"] += written
         stats["total_size_bytes"] += result.sampled.total_size
 
+        # Count media files specifically
+        media_file_count = sum(
+            1 for f in result.sampled.files_to_copy if is_media_file(f)
+        )
+
         proc_name = result.processor_name
         if proc_name not in stats["by_processor"]:
-            stats["by_processor"][proc_name] = {"exports": 0, "files": 0}
+            stats["by_processor"][proc_name] = {"exports": 0, "files": 0, "media_files": 0}
         stats["by_processor"][proc_name]["exports"] += 1
         stats["by_processor"][proc_name]["files"] += len(result.sampled.files_to_copy)
+        stats["by_processor"][proc_name]["media_files"] += media_file_count
 
     # Copy standalone files (like contacts.vcf), excluding archives
     archive_extensions = {".zip", ".rar", ".tar", ".gz", ".7z", ".bz2", ".xz"}
@@ -1141,7 +1592,22 @@ def main():
     print()
     print("By processor:")
     for proc, proc_stats in stats["by_processor"].items():
-        print(f"  {proc}: {proc_stats['exports']} exports, {proc_stats['files']} files")
+        media_count = proc_stats.get("media_files", 0)
+        print(f"  {proc}: {proc_stats['exports']} exports, {proc_stats['files']} files ({media_count} media)")
+
+    # Validate coverage - warn if expected processors are missing or have no media
+    warnings = []
+    for proc, proc_stats in stats["by_processor"].items():
+        media_count = proc_stats.get("media_files", 0)
+        if media_count == 0:
+            warnings.append(f"  WARNING: {proc} has 0 media files - processor may fail or skip")
+
+    if warnings:
+        print()
+        print("WARNINGS:")
+        for w in warnings:
+            print(w)
+
     print("=" * 60)
 
     if args.dry_run:

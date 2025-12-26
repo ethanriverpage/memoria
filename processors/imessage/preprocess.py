@@ -270,7 +270,6 @@ class IMessagePreprocessor(PreprocessorBase):
             "unique_files": 0,
             "duplicate_files": 0,
             "live_photos": 0,
-            "files_copied": 0,
             "contacts_loaded": 0,
             "conversations": 0,
         }
@@ -706,7 +705,7 @@ class IMessagePreprocessor(PreprocessorBase):
         """Deduplicate attachments and organize by conversation.
 
         Groups identical files and organizes into conversations structure
-        matching Snapchat messages format. Uses copy_with_dedup() for parallel
+        matching Snapchat messages format. Uses hash_with_dedup() for parallel
         processing of file hashing and copying operations.
 
         Args:
@@ -749,9 +748,9 @@ class IMessagePreprocessor(PreprocessorBase):
 
         self.stats["total_attachments"] = len(copy_tasks)
 
-        # Use copy_with_dedup for parallel hashing, deduplication, and copying
-        self.media_dir.mkdir(parents=True, exist_ok=True)
-        results = self.copy_with_dedup(copy_tasks)
+        # Use hash_with_dedup for parallel hashing and deduplication (no file copying)
+        # Files will be copied directly from source to final output during processing
+        results = self.hash_with_dedup(copy_tasks)
 
         # Build conversations from results
         conversations: Dict[str, Dict] = {}
@@ -764,7 +763,6 @@ class IMessagePreprocessor(PreprocessorBase):
                 continue
 
             unique_files_copied += 1
-            self.stats["files_copied"] += 1
 
             # Get merged context (includes all duplicate message contexts)
             merged_contexts = self.get_contexts_list_for_file(result.dest_filename)
@@ -808,6 +806,7 @@ class IMessagePreprocessor(PreprocessorBase):
                 # Create merged message with messages array
                 merged_message = {
                     "media_file": result.dest_filename,
+                    "source_path": str(result.source_path),
                     "primary_created": primary_context.get("created"),
                     "is_duplicate": True,
                     "messages": [],
@@ -848,6 +847,7 @@ class IMessagePreprocessor(PreprocessorBase):
                     "content": primary_context.get("content"),
                     "is_sender": primary_context.get("is_sender"),
                     "media_file": result.dest_filename,
+                    "source_path": str(result.source_path),
                     "media_type": media_type,
                 }
 
@@ -1035,9 +1035,8 @@ class IMessagePreprocessor(PreprocessorBase):
 
         if not all_attachments:
             logger.warning("No attachments found to process")
-            # Still create output structure
+            # Still create output structure (no media directory needed - files are read from source)
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            self.media_dir.mkdir(parents=True, exist_ok=True)
             metadata = self._generate_metadata({}, [])
             with open(self.metadata_file, "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
@@ -1075,6 +1074,5 @@ class IMessagePreprocessor(PreprocessorBase):
             "Unique files": self.stats["unique_files"],
             "Duplicates removed": self.stats["duplicate_files"],
             "Live Photo pairs": self.stats["live_photos"],
-            "Files copied": self.stats["files_copied"],
         }
         print_preprocessing_stats("iMessage Preprocessing", stats)

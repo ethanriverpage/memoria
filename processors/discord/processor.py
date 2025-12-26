@@ -509,9 +509,11 @@ def _process_working_directory(
         filtered_files = []
         for f in media_files:
             content_hash = file_hashes.get(f.name)
+            # Pass source_path for within-processor dedup
+            source_path_str = str(f)
             if content_hash:
                 # Use cached hash from preprocessing (avoids re-hashing)
-                if is_file_primary_by_hash(dedup_manifest, content_hash, "Discord"):
+                if is_file_primary_by_hash(dedup_manifest, content_hash, "Discord", source_path_str):
                     filtered_files.append(f)
                 else:
                     skipped_secondary_files.append(str(f))

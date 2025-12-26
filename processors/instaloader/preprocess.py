@@ -494,9 +494,7 @@ class InstaloaderPreprocessor(PreprocessorBase):
         return all_posts
 
     def copy_media_files(self, metadata: List[Dict]) -> None:
-        """Copy media files to output directory using copy_with_dedup."""
-        # Create output media directory
-        self.media_output_dir.mkdir(parents=True, exist_ok=True)
+        """Hash media files and build metadata with source_path using hash_with_dedup."""
 
         logger.info("Collecting media files for copy...")
         logger.debug(
@@ -541,12 +539,13 @@ class InstaloaderPreprocessor(PreprocessorBase):
                     )
                 )
 
-        # Phase 2: Copy files with deduplication
-        logger.info("Copying %d media files with deduplication...", len(copy_tasks))
-        results = self.copy_with_dedup(copy_tasks)
+        # Phase 2: Hash files with deduplication (no file copying)
+        # Files will be copied directly from source to final output during processing
+        logger.info("Hashing %d media files with deduplication...", len(copy_tasks))
+        results = self.hash_with_dedup(copy_tasks)
 
-        # Build a map from source_path to dest_filename for updating posts
-        source_to_dest: Dict[str, str] = {}
+        # Build a map from source_path to (dest_filename, source_path) for updating posts
+        source_to_result: Dict[str, Tuple[str, str]] = {}
 
         for source_path, result in results.items():
             source_path_str = str(source_path)
@@ -556,23 +555,29 @@ class InstaloaderPreprocessor(PreprocessorBase):
             else:
                 self.stats["media_copied"] += 1
 
-            # Map this source path to the resulting destination filename
+            # Map this source path to the resulting (dest_filename, source_path)
             if source_path_str and result.dest_filename:
-                source_to_dest[source_path_str] = result.dest_filename
+                source_to_result[source_path_str] = (result.dest_filename, str(result.source_path))
 
-        # Phase 3: Update posts with resulting filenames (in case of dedup renames)
+        # Phase 3: Update posts with resulting filenames and source paths
         for post_idx, post in enumerate(metadata):
             media_files = post.get("media_files", [])
-            updated_files = []
+            media_entries = []
 
             for filename in media_files:
                 source_path = file_map.get((post_idx, filename))
                 if source_path:
-                    dest_filename = source_to_dest.get(str(source_path))
-                    if dest_filename:
-                        updated_files.append(dest_filename)
+                    result_info = source_to_result.get(str(source_path))
+                    if result_info:
+                        dest_filename, src_path = result_info
+                        media_entries.append({
+                            "filename": dest_filename,
+                            "source_path": src_path,
+                        })
 
-            post["media_files"] = updated_files
+            # Update post with filenames and source paths (new format)
+            post["media_files"] = [e["filename"] for e in media_entries]
+            post["source_paths"] = {e["filename"]: e["source_path"] for e in media_entries}
 
         logger.info(f"   Copied {self.stats['media_copied']} unique files")
         logger.info(f"   Deduplicated {self.stats['duplicate_files']} duplicate files")

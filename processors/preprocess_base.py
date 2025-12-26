@@ -86,6 +86,28 @@ class CopyResult:
     primary_source: Path
 
 
+@dataclass
+class HashResult:
+    """Result of hash_with_dedup() for a single file.
+
+    Used for hash-only preprocessing where files are not copied to a temp
+    directory. The processor reads directly from source_path during processing.
+
+    Attributes:
+        source_path: Original file location (for direct processing).
+        dest_filename: Generated unique filename for output.
+        content_hash: xxHash64 of file content.
+        is_duplicate: True if duplicate (skip processing).
+        primary_source: Source path of the primary file for this hash.
+    """
+
+    source_path: Path
+    dest_filename: str
+    content_hash: str
+    is_duplicate: bool
+    primary_source: Path
+
+
 def _copy_single_file(src_path: Path, dest_path: Path) -> None:
     """Copy a single file with reflink optimization on supported filesystems.
 
@@ -584,6 +606,142 @@ class PreprocessorBase(ABC):
                         is_duplicate=(i > 0),  # First is primary, rest are duplicates
                         primary_source=primaries[content_hash].source_path,
                     )
+
+        return results
+
+    def hash_with_dedup(
+        self,
+        tasks: List[CopyTask],
+        workers: Optional[int] = None,
+        show_progress: bool = True,
+    ) -> Dict[Path, HashResult]:
+        """Parallel batch hashing with deduplication (no file copying).
+
+        Hashes all files in parallel, groups by content hash to find duplicates,
+        and merges context for duplicate groups. Unlike copy_with_dedup(), this
+        method does NOT copy files - it only builds metadata with source paths.
+
+        The processor phase will copy directly from source_path to final output,
+        eliminating the intermediate temp/media/ copy.
+
+        Args:
+            tasks: List of CopyTask objects describing files to process.
+            workers: Number of parallel workers (default: self.workers).
+            show_progress: Whether to show progress bar.
+
+        Returns:
+            Dict mapping source_path to HashResult for all input tasks.
+        """
+        if not tasks:
+            return {}
+
+        if workers is None:
+            workers = self.workers
+
+        # Get database path for hash caching
+        config = get_dedup_config()
+        db_path = config.database_path
+
+        # Check if hash caching is disabled
+        disable_cache = os.environ.get("DISABLE_HASH_CACHE", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if disable_cache:
+            db_path = None
+
+        # Phase 1: Parallel hashing
+        hashed_tasks: List[Tuple[CopyTask, str]] = []
+        cache_entries_to_write: List[Dict[str, Any]] = []
+        cache_hits = 0
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(_hash_single_file, task, db_path): task
+                for task in tasks
+            }
+
+            if show_progress:
+                iterator = futures_progress(
+                    futures, PHASE_PREPROCESS, "Hashing files", unit="file"
+                )
+            else:
+                from concurrent.futures import as_completed
+
+                iterator = as_completed(futures)
+
+            for future in iterator:
+                task, content_hash, cache_hit, cache_entry = future.result()
+                hashed_tasks.append((task, content_hash))
+                if cache_hit:
+                    cache_hits += 1
+                elif cache_entry is not None:
+                    cache_entries_to_write.append(cache_entry)
+
+        # Batch write cache entries after parallel processing
+        if cache_entries_to_write and db_path is not None:
+            from common.dedup.database import HashDatabase
+
+            db = HashDatabase(db_path)
+            chunk_size = 1000
+            for i in range(0, len(cache_entries_to_write), chunk_size):
+                chunk = cache_entries_to_write[i : i + chunk_size]
+                db.cache_hashes_batch(chunk)
+
+        logger.debug(
+            "Hashed %d files (%d cache hits, %d computed)",
+            len(tasks),
+            cache_hits,
+            len(tasks) - cache_hits,
+        )
+
+        # Phase 2: Group by content hash and merge contexts
+        hash_groups: Dict[str, List[CopyTask]] = {}
+        for task, content_hash in hashed_tasks:
+            if content_hash not in hash_groups:
+                hash_groups[content_hash] = []
+            hash_groups[content_hash].append(task)
+
+        # Determine primary for each group and merge contexts
+        primaries: Dict[str, CopyTask] = {}
+        for content_hash, group in hash_groups.items():
+            # First task is primary (first seen wins)
+            primary = group[0]
+            primaries[content_hash] = primary
+
+            # Store in registry with merged context
+            merged_context = dict(primary.context)
+            for duplicate in group[1:]:
+                if self._context_merger is not None:
+                    self._context_merger(merged_context, duplicate.context)
+
+            self._hash_registry[content_hash] = {
+                "filename": primary.dest_filename,
+                "context": merged_context,
+                "source_path": str(primary.source_path),
+            }
+
+        # Phase 3: Build results WITHOUT copying files
+        # Pre-allocate unique filenames (deterministic, single-threaded)
+        results: Dict[Path, HashResult] = {}
+
+        for content_hash, group in hash_groups.items():
+            primary = primaries[content_hash]
+            unique_filename = self._get_unique_filename(primary.dest_filename)
+
+            # Update registry with actual filename used
+            self._hash_registry[content_hash]["filename"] = unique_filename
+
+            # Build results for all tasks in this group
+            for i, task in enumerate(group):
+                results[task.source_path] = HashResult(
+                    source_path=task.source_path,
+                    dest_filename=unique_filename,
+                    content_hash=content_hash,
+                    is_duplicate=(i > 0),  # First is primary, rest are duplicates
+                    primary_source=primary.source_path,
+                )
 
         return results
 

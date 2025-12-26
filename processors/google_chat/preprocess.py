@@ -813,9 +813,7 @@ class GoogleChatPreprocessor(PreprocessorBase):
         return all_conversations
 
     def copy_media_files(self, conversations: List[Dict]) -> None:
-        """Copy media files referenced in metadata to output directory using copy_with_dedup."""
-        # Create output media directory
-        self.media_output_dir.mkdir(parents=True, exist_ok=True)
+        """Hash media files and build metadata with source_path using hash_with_dedup."""
 
         logger.info("Collecting media files for copy...")
 
@@ -893,17 +891,17 @@ class GoogleChatPreprocessor(PreprocessorBase):
                             },
                         )
 
-        # Phase 2: Copy files with deduplication
-        logger.info("Copying %d media files with deduplication...", len(copy_tasks))
-        results = self.copy_with_dedup(copy_tasks)
+        # Phase 2: Hash files with deduplication (no file copying)
+        # Files will be copied directly from source to final output during processing
+        logger.info("Hashing %d media files with deduplication...", len(copy_tasks))
+        results = self.hash_with_dedup(copy_tasks)
 
-        # Build a map from source_path to dest_filename for updating messages
-        source_to_dest: Dict[str, str] = {}
+        # Build a map from source_path to (dest_filename, source_path) for updating messages
+        source_to_result: Dict[str, Tuple[str, str]] = {}
         duplicate_count = 0
 
         for source_path, result in results.items():
             # The result contains the dest_filename and whether it's a duplicate
-            # Map from source_path to dest_filename
             source_path_str = str(source_path)
 
             if result.is_duplicate:
@@ -911,26 +909,31 @@ class GoogleChatPreprocessor(PreprocessorBase):
             else:
                 self.stats["media_copied"] += 1
 
-            # Map this source path to the resulting destination filename
+            # Map this source path to the resulting (dest_filename, source_path)
             if source_path_str and result.dest_filename:
-                source_to_dest[source_path_str] = result.dest_filename
+                source_to_result[source_path_str] = (result.dest_filename, str(result.source_path))
 
-        # Phase 3: Update messages with resulting filenames
+        # Phase 3: Update messages with resulting filenames and source paths
         for conv_idx, conversation in enumerate(conversations):
             for msg_idx, message in enumerate(conversation["messages"]):
                 export_names = message.get("export_names", [])
-                copied_files = []
+                media_entries = []
                 msg_key = (conv_idx, msg_idx)
 
                 for export_name in export_names:
                     source_path = message_file_map.get(msg_key, {}).get(export_name)
                     if source_path:
-                        dest_filename = source_to_dest.get(str(source_path))
-                        if dest_filename:
-                            copied_files.append(dest_filename)
+                        result_info = source_to_result.get(str(source_path))
+                        if result_info:
+                            dest_filename, src_path = result_info
+                            media_entries.append({
+                                "filename": dest_filename,
+                                "source_path": src_path,
+                            })
 
-                # Update message with matched filenames
-                message["media_files"] = copied_files
+                # Update message with matched files (new format with source_path)
+                message["media_files"] = [e["filename"] for e in media_entries]
+                message["source_paths"] = {e["filename"]: e["source_path"] for e in media_entries}
                 # Remove export_names as it's no longer needed
                 if "export_names" in message:
                     del message["export_names"]

@@ -65,11 +65,10 @@ class GooglePhotosPreprocessor(PreprocessorBase):
         self.stats = {
             "total_albums": 0,
             "total_media_files": 0,
-            "media_copied": 0,
+            "unique_files": 0,
             "matched_files": 0,
             "unmatched_files": 0,
             "fuzzy_matches": 0,
-            "duplicate_files": 0,
             "deduplicated_files": 0,
             "skipped_banned": 0,
         }
@@ -1084,9 +1083,6 @@ class GooglePhotosPreprocessor(PreprocessorBase):
         album_list = self.scan_albums()
         logger.info(f"   Found {len(album_list)} albums")
 
-        # Create output media directory
-        self.media_output_dir.mkdir(parents=True, exist_ok=True)
-
         logger.info(
             "Processing albums and media files (using %d workers)...", self.workers
         )
@@ -1144,15 +1140,16 @@ class GooglePhotosPreprocessor(PreprocessorBase):
                     )
                     logger.error(f"Failed to process album {album_name}: {e}")
 
-        # Phase 2: Copy all files with deduplication using base class method
+        # Phase 2: Hash all files with deduplication (no file copying)
+        # Files will be copied directly from source to final output during processing
         if all_copy_tasks:
-            logger.info(f"Copying {len(all_copy_tasks)} files with deduplication...")
-            results = self.copy_with_dedup(all_copy_tasks)
+            logger.info(f"Hashing {len(all_copy_tasks)} files with deduplication...")
+            results = self.hash_with_dedup(all_copy_tasks)
 
             # Update stats
             duplicates = sum(1 for r in results.values() if r.is_duplicate)
             with self.stats_lock:
-                self.stats["media_copied"] = len(all_copy_tasks) - duplicates
+                self.stats["unique_files"] = len(all_copy_tasks) - duplicates
                 self.stats["deduplicated_files"] = duplicates
 
         with self.stats_lock:
@@ -1175,14 +1172,16 @@ class GooglePhotosPreprocessor(PreprocessorBase):
 
             merged_contexts = self.get_merged_contexts()
             for content_hash, context in merged_contexts.items():
-                # Get the stored registry entry for filename
+                # Get the stored registry entry for filename and source_path
                 registry_entry = self._hash_registry.get(content_hash, {})
                 filename = registry_entry.get("filename", "")
+                source_path = registry_entry.get("source_path", "")
 
                 # Build file metadata
                 file_metadata = context.get("metadata", {}).copy()
                 file_metadata["albums"] = sorted(context.get("albums", []))
                 file_metadata["filename"] = filename
+                file_metadata["source_path"] = source_path
                 file_metadata["content_hash"] = content_hash
 
                 media_files.append(file_metadata)
@@ -1205,9 +1204,8 @@ class GooglePhotosPreprocessor(PreprocessorBase):
                     "total_media_files": self.stats["total_media_files"],
                     "matched_files": self.stats["matched_files"],
                     "unmatched_files": self.stats["unmatched_files"],
-                    "media_copied": self.stats["media_copied"],
+                    "unique_files": self.stats["unique_files"],
                     "deduplicated_files": self.stats["deduplicated_files"],
-                    "unique_files": len(media_files),
                 },
                 "media_files": media_files,
             }
@@ -1227,7 +1225,7 @@ class GooglePhotosPreprocessor(PreprocessorBase):
             "Media files found": self.stats["total_media_files"],
             "Files matched": self.stats["matched_files"],
             "Unmatched files": self.stats["unmatched_files"],
-            "Files copied": self.stats["media_copied"],
+            "Unique files": self.stats["unique_files"],
             "Deduplicated": self.stats["deduplicated_files"],
             "Fuzzy matches": self.stats["fuzzy_matches"],
             "Banned skipped": self.stats["skipped_banned"],
