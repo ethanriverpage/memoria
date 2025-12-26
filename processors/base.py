@@ -186,7 +186,10 @@ class ProcessorBase(ABC):
         from common.dedup.service import is_file_primary_by_hash
 
         content_hash = compute_content_hash(file_path)
-        return not is_file_primary_by_hash(dedup_manifest, content_hash, processor_name)
+        # Pass source_path for within-processor dedup
+        return not is_file_primary_by_hash(
+            dedup_manifest, content_hash, processor_name, file_path
+        )
 
     @staticmethod
     def correct_extensions_and_update_info(

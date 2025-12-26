@@ -195,16 +195,49 @@ class DiscordProcessor(ProcessorBase):
             )
             return
 
+        # Load metadata for preprocessed exports
+        metadata_index: Dict[str, dict] = {}
+        metadata_file = working_dir / "metadata.json"
+        if metadata_file.exists():
+            try:
+                metadata = DiscordProcessor.load_metadata(metadata_file)
+                metadata_index = build_filename_index(metadata)
+            except Exception as e:
+                log.logger.warning("Could not load metadata.json: %s", e)
+
         # Collect all media files
         media_files = [
             f for f in media_dir.iterdir() if f.is_file() and get_media_type(f)
         ]
+
+        def extract_metadata(file_path: Path) -> Dict[str, Any]:
+            """Extract Discord metadata for a media file."""
+            info = metadata_index.get(file_path.name, {})
+            result: Dict[str, Any] = {}
+            if info:
+                message = info.get("message", {})
+                # Build conversation name from guild + channel or just channel
+                guild_name = info.get("guild_name")
+                channel_title = info.get("channel_title", "")
+                if guild_name:
+                    result["conversation"] = f"{guild_name} / {channel_title}"
+                elif channel_title:
+                    result["conversation"] = channel_title
+                # Extract sender and other fields
+                if message.get("sender"):
+                    result["sender"] = message["sender"]
+                if message.get("timestamp"):
+                    result["timestamp"] = message["timestamp"]
+                if message.get("content"):
+                    result["content"] = message["content"]
+            return result
 
         yield from catalog_media_files(
             processor_name="Discord",
             input_path=working_dir,
             media_files=media_files,
             workers=workers,
+            metadata_extractor=extract_metadata if metadata_index else None,
         )
 
     @staticmethod

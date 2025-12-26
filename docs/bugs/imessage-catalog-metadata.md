@@ -3,11 +3,21 @@
 **Date**: 2025-12-26  
 **Severity**: Medium  
 **Component**: `processors/imessage/processor.py`  
-**Affects**: Cross-processor deduplication description building
+**Affects**: Cross-processor deduplication description building  
+**Status**: FIXED (2025-12-26)
 
 ## Summary
 
-The iMessage processor's `build_catalog()` method does not populate metadata (sender, conversation, timestamp) for catalog entries. This causes cross-processor deduplicated files with iMessage as the primary source to have incomplete descriptions missing iMessage-specific context.
+The iMessage processor's `build_catalog()` method did not populate metadata (sender, conversation, timestamp) for catalog entries. This caused cross-processor deduplicated files with iMessage as the primary source to have incomplete descriptions missing iMessage-specific context.
+
+## Resolution
+
+The iMessage processor now includes a proper `extract_metadata()` function in `build_catalog()` (lines 195-216) that populates:
+
+- `sender`: Message sender
+- `conversation`: Conversation title
+- `timestamp`: Message timestamp
+- `content`: Message text
 
 ## Current Behavior
 
@@ -61,88 +71,36 @@ The `catalog_media_files()` function supports an optional `metadata_extractor` p
 - `processors/imessage/processor.py` - `build_catalog()` method
 - `common/dedup/catalog.py` - `catalog_media_files()` (provides the interface)
 
-## Proposed Fix
+## Implemented Fix
 
-Update `build_catalog()` to:
+The fix was implemented in `processors/imessage/processor.py` lines 150-216. The `build_catalog()` method now:
 
-1. Load `metadata.json` if the export is preprocessed
-2. Build a filename index mapping media files to message metadata
-3. Pass a `metadata_extractor` callback that looks up sender/conversation for each file
+1. Loads `metadata.json` if the export is preprocessed
+2. Builds a filename index mapping media files to message metadata
+3. Passes a `metadata_extractor` callback that populates sender, conversation, timestamp, and content
 
 ```python
-@staticmethod
-def build_catalog(input_dir: str, **kwargs):
-    input_path = Path(input_dir)
-    workers = kwargs.get("workers", 4)
-
-    # Load metadata for preprocessed exports
-    metadata_index = {}
-    metadata_file = input_path / "metadata.json"
-    if metadata_file.exists():
-        try:
-            metadata = IMessageProcessor.load_metadata(metadata_file)
-            metadata_index = build_filename_index(metadata)
-        except Exception as e:
-            logger.warning(f"Could not load metadata.json: {e}")
-
-    # Find attachments directory
-    attachments_dir = None
-    if (input_path / "Attachments").is_dir():
-        attachments_dir = input_path / "Attachments"
-    elif (input_path / "SMS" / "Attachments").is_dir():
-        attachments_dir = input_path / "SMS" / "Attachments"
-    elif (input_path / "media").is_dir():
-        attachments_dir = input_path / "media"
-
-    if not attachments_dir or not attachments_dir.exists():
-        logger.warning(f"Attachments directory not found in: {input_path}")
-        return
-
-    media_files = []
-    for file_path in attachments_dir.rglob("*"):
-        if file_path.is_file() and file_path.suffix.lower() in ALL_MEDIA_EXTENSIONS:
-            media_files.append(file_path)
-
-    def extract_metadata(file_path: Path) -> Dict[str, Any]:
-        """Extract iMessage metadata for a media file."""
-        relative_name = file_path.name
-        message = metadata_index.get(relative_name, {})
-        
-        metadata = {}
-        if message:
-            # Extract sender
-            sender = message.get("sender")
-            if sender:
-                metadata["sender"] = sender
-            
-            # Extract conversation
-            conversation = message.get("conversation")
-            if conversation:
-                metadata["conversation"] = conversation
-            
-            # Extract timestamp
-            created = message.get("created")
-            if created:
-                metadata["timestamp"] = created
-        
-        return metadata
-
-    yield from catalog_media_files(
-        processor_name="iMessage",
-        input_path=input_path,
-        media_files=media_files,
-        workers=workers,
-        metadata_extractor=extract_metadata if metadata_index else None,
-    )
+def extract_metadata(file_path: Path) -> Dict[str, Any]:
+    """Extract iMessage metadata for a media file."""
+    message = metadata_index.get(file_path.name, {})
+    result: Dict[str, Any] = {}
+    if message:
+        if message.get("sender"):
+            result["sender"] = message["sender"]
+        if message.get("conversation_title"):
+            result["conversation"] = message["conversation_title"]
+        if message.get("created"):
+            result["timestamp"] = message["created"]
+        if message.get("content"):
+            result["content"] = message["content"]
+    return result
 ```
 
-## Considerations
+## Remaining Considerations
 
 1. **Preprocessed vs raw exports**: The metadata.json only exists for preprocessed exports. Raw iMessage exports (direct from backup) would still have empty metadata unless we also query the chat.db during cataloging.
 
-2. **Performance**: Loading metadata.json adds minimal overhead since it's already done during processing.
-
-3. **Backward compatibility**: The fix is additive - exports without metadata.json will continue to work as before.
+2. **Related Bug**: Bug #46 (content_hash not in MetadataWriteRequest) still prevents merged descriptions from being written. This fix populates the catalog metadata, but the merged descriptions won't appear until #46 is fixed.
 
 ## Related
 

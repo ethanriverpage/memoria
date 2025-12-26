@@ -212,11 +212,35 @@ class SnapchatMessagesProcessor(ProcessorBase):
             logger.warning(f"No media files found in: {input_path}")
             return
 
+        # Load metadata for preprocessed exports
+        metadata_index: Dict[str, dict] = {}
+        metadata_file = catalog_input_path / "metadata.json"
+        if metadata_file.exists():
+            try:
+                metadata = SnapchatMessagesProcessor.load_metadata(metadata_file)
+                metadata_index = build_filename_index(metadata)
+            except Exception as e:
+                logger.warning(f"Could not load metadata.json: {e}")
+
+        def extract_metadata(file_path: Path) -> Dict[str, Any]:
+            """Extract Snapchat Messages metadata for a media file."""
+            message = metadata_index.get(file_path.name, {})
+            result: Dict[str, Any] = {}
+            if message:
+                if message.get("sender"):
+                    result["sender"] = message["sender"]
+                if message.get("conversation_title"):
+                    result["conversation"] = message["conversation_title"]
+                if message.get("created"):
+                    result["timestamp"] = message["created"]
+            return result
+
         yield from catalog_media_files(
             processor_name="Snapchat Messages",
             input_path=catalog_input_path,
             media_files=media_files,
             workers=workers,
+            metadata_extractor=extract_metadata if metadata_index else None,
         )
 
     @staticmethod

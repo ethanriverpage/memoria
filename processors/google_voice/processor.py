@@ -139,6 +139,16 @@ class GoogleVoiceProcessor(ProcessorBase):
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
 
+        # Load metadata for preprocessed exports
+        metadata_index: Dict[str, dict] = {}
+        metadata_file = input_path / "metadata.json"
+        if metadata_file.exists():
+            try:
+                metadata = GoogleVoiceProcessor.load_metadata(metadata_file)
+                metadata_index = build_filename_index(metadata)
+            except Exception as e:
+                logger.warning(f"Could not load metadata.json: {e}")
+
         # Find media in Google Voice structure
         voice_dir = input_path / "Voice" / "Calls"
         if not voice_dir.exists():
@@ -149,11 +159,26 @@ class GoogleVoiceProcessor(ProcessorBase):
             if file_path.is_file() and file_path.suffix.lower() in ALL_MEDIA_EXTENSIONS:
                 media_files.append(file_path)
 
+        def extract_metadata(file_path: Path) -> Dict[str, Any]:
+            """Extract Google Voice metadata for a media file."""
+            info = metadata_index.get(file_path.name, {})
+            result: Dict[str, Any] = {}
+            if info:
+                message = info.get("message", {})
+                if info.get("conversation_name"):
+                    result["conversation"] = info["conversation_name"]
+                if message.get("sender"):
+                    result["sender"] = message["sender"]
+                if message.get("timestamp"):
+                    result["timestamp"] = message["timestamp"]
+            return result
+
         yield from catalog_media_files(
             processor_name="Google Voice",
             input_path=input_path,
             media_files=media_files,
             workers=workers,
+            metadata_extractor=extract_metadata if metadata_index else None,
         )
 
     @staticmethod
@@ -261,6 +286,31 @@ def _build_metadata_requests(
         )
 
     return requests
+
+
+def build_filename_index(metadata: dict) -> Dict[str, dict]:
+    """Build index mapping media filename to message metadata.
+
+    Args:
+        metadata: Parsed metadata.json content with conversations list.
+
+    Returns:
+        Dict mapping media_file -> {message, conversation_name}
+    """
+    filename_index: Dict[str, dict] = {}
+    conversations = metadata.get("conversations", [])
+
+    for conversation in conversations:
+        conversation_name = conversation.get("conversation_name", "unknown")
+        for message in conversation.get("messages", []):
+            media_files = message.get("media_files", [])
+            for media_file in media_files:
+                filename_index[media_file] = {
+                    "message": message,
+                    "conversation_name": conversation_name,
+                }
+
+    return filename_index
 
 
 def process_media_batch(batch_args):

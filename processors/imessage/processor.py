@@ -163,6 +163,16 @@ class IMessageProcessor(ProcessorBase):
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
 
+        # Load metadata for preprocessed exports
+        metadata_index: Dict[str, Any] = {}
+        metadata_file = input_path / "metadata.json"
+        if metadata_file.exists():
+            try:
+                metadata = IMessageProcessor.load_metadata(metadata_file)
+                metadata_index = build_filename_index(metadata)
+            except Exception as e:
+                logger.warning(f"Could not load metadata.json: {e}")
+
         # Find attachments directory (Mac or iPhone format)
         attachments_dir = None
         if (input_path / "Attachments").is_dir():
@@ -182,11 +192,27 @@ class IMessageProcessor(ProcessorBase):
             if file_path.is_file() and file_path.suffix.lower() in ALL_MEDIA_EXTENSIONS:
                 media_files.append(file_path)
 
+        def extract_metadata(file_path: Path) -> Dict[str, Any]:
+            """Extract iMessage metadata for a media file."""
+            message = metadata_index.get(file_path.name, {})
+            result: Dict[str, Any] = {}
+            if message:
+                if message.get("sender"):
+                    result["sender"] = message["sender"]
+                if message.get("conversation_title"):
+                    result["conversation"] = message["conversation_title"]
+                if message.get("created"):
+                    result["timestamp"] = message["created"]
+                if message.get("content"):
+                    result["content"] = message["content"]
+            return result
+
         yield from catalog_media_files(
             processor_name="iMessage",
             input_path=input_path,
             media_files=media_files,
             workers=workers,
+            metadata_extractor=extract_metadata if metadata_index else None,
         )
 
     @staticmethod
@@ -789,7 +815,9 @@ def _process_working_directory(
                 if dedup_manifest:
                     content_hash = file_hashes.get(media_file.name)
                     if content_hash:
-                        if not is_file_primary_by_hash(dedup_manifest, content_hash, "iMessage"):
+                        if not is_file_primary_by_hash(
+                            dedup_manifest, content_hash, "iMessage", str(media_file)
+                        ):
                             skipped_dedup += 1
                             continue
                     else:

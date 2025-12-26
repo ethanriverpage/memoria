@@ -192,24 +192,49 @@ class SnapchatMemoriesProcessor(ProcessorBase):
 
         # Find media directory (may be in memories/ subdirectory)
         media_dir = input_path / "media"
+        catalog_input_path = input_path
         if not media_dir.exists():
             memories_subdir = input_path / "memories"
             if memories_subdir.exists():
                 media_dir = memories_subdir / "media"
+                catalog_input_path = memories_subdir
 
         if not media_dir or not media_dir.exists():
             logger.warning(f"No media directory found in: {input_path}")
             return
 
+        # Load metadata for preprocessed exports
+        metadata_index: Dict[str, Dict[str, Any]] = {}
+        metadata_file = catalog_input_path / "metadata.json"
+        if metadata_file.exists():
+            try:
+                memories = SnapchatMemoriesProcessor.load_memories_metadata(
+                    metadata_file
+                )
+                metadata_index = build_filename_index(memories)
+            except Exception as e:
+                logger.warning(f"Could not load metadata.json: {e}")
+
         media_files = [
             f for f in media_dir.iterdir() if f.is_file() and get_media_type(f)
         ]
+
+        def extract_metadata(file_path: Path) -> Dict[str, Any]:
+            """Extract Snapchat Memories metadata for a media file."""
+            memory = metadata_index.get(file_path.name, {})
+            result: Dict[str, Any] = {}
+            if memory:
+                # Snapchat Memories has timestamp but no sender/conversation
+                if memory.get("date"):
+                    result["timestamp"] = memory["date"]
+            return result
 
         yield from catalog_media_files(
             processor_name="Snapchat Memories",
             input_path=input_path,
             media_files=media_files,
             workers=workers,
+            metadata_extractor=extract_metadata if metadata_index else None,
         )
 
     @staticmethod
@@ -359,6 +384,23 @@ def _build_metadata_requests(
         )
 
     return requests
+
+
+def build_filename_index(memories: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Build index mapping media filename to memory metadata.
+
+    Args:
+        memories: List of memory objects from metadata.json.
+
+    Returns:
+        Dict mapping media_filename -> memory data
+    """
+    filename_index: Dict[str, Dict[str, Any]] = {}
+    for memory in memories:
+        media_filename = memory.get("media_filename")
+        if media_filename:
+            filename_index[media_filename] = memory
+    return filename_index
 
 
 def _update_memory_timestamps(file_path, memory_data):

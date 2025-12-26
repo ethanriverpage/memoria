@@ -616,7 +616,10 @@ def process_logic(
                         content_hash = file_hashes.get(media_file.name)
                         if content_hash:
                             if not is_file_primary_by_hash(
-                                dedup_manifest, content_hash, "iMessage iMazing"
+                                dedup_manifest,
+                                content_hash,
+                                "iMessage iMazing",
+                                str(media_file),
                             ):
                                 skipped_secondary_files.append(str(media_file))
                                 skipped_dedup += 1

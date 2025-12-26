@@ -3,7 +3,13 @@
 **Date:** 2025-12-22  
 **Severity:** Medium  
 **Component:** `processors/base.py`, `common/media/exiftool.py`  
-**Status:** Fixed (2025-12-22)
+**Status:** Partially Fixed (2025-12-22)
+
+> **Update 2025-12-26:** This bug was partially fixed by passing `dedup_manifest` to
+> `batch_write_metadata_requests()`. However, a critical follow-up bug (#46) was discovered:
+> processors do not populate `content_hash` in `MetadataWriteRequest`, causing
+> `_get_description_for_file()` to always return the default description.
+> See: `docs/bugs/content-hash-not-in-metadata-request.md`
 
 ## Summary
 
@@ -17,6 +23,9 @@ The deduplication system correctly identifies cross-processor duplicates (e.g., 
 **Severity:** Low  
 **Component:** `processors/instagram_messages/preprocess.py`, `processors/instagram_messages/processor.py`  
 **Status:** Open
+
+> **Note:** This bug has been split into a separate file.
+> See: `docs/bugs/instagram-messages-missing-content.md`
 
 ## Summary
 
