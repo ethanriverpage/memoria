@@ -8,7 +8,6 @@ shared across all preprocessor implementations.
 
 import logging
 import os
-import threading
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
@@ -19,6 +18,7 @@ from threading import Lock
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 from common.dedup.config import get_dedup_config
+from common.dedup.database import get_thread_db
 from common.dedup.hashing import compute_content_hash
 from common.detection import DetectionResult
 from common.failure_tracker import FailureTracker
@@ -28,30 +28,6 @@ from common.output.progress import PHASE_PREPROCESS, futures_progress
 from common.utils import default_worker_count
 
 logger = logging.getLogger(__name__)
-
-# Thread-local storage for database connections (one per thread for reads)
-_thread_local = threading.local()
-
-
-def _get_thread_db(db_path: Optional[Path]):
-    """Get or create a thread-local database connection for cache reads.
-
-    Args:
-        db_path: Path to the SQLite database file.
-
-    Returns:
-        HashDatabase instance for this thread, or None if db_path is None.
-    """
-    if db_path is None:
-        return None
-
-    if not hasattr(_thread_local, "db") or _thread_local.db_path != str(db_path):
-        from common.dedup.database import HashDatabase
-
-        _thread_local.db = HashDatabase(db_path)
-        _thread_local.db_path = str(db_path)
-
-    return _thread_local.db
 
 
 @dataclass
@@ -143,7 +119,7 @@ def _hash_single_file(
     cache_entry_to_write = None
 
     # Try cache lookup if database path provided
-    db = _get_thread_db(db_path)
+    db = get_thread_db(db_path)
     if db is not None:
         cached = db.get_cached_hashes(str(file_path), file_size, mtime)
         if cached is not None:

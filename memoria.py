@@ -49,6 +49,10 @@ from common.dedup.config import is_dedup_enabled, get_dedup_config  # noqa: E402
 from common.dedup.service import DeduplicationService, save_manifest  # noqa: E402
 from common.dedup.database import HashDatabase  # noqa: E402
 from common.output.console import console, section_header, phase_header  # noqa: E402
+from common.processing import (  # noqa: E402
+    get_preprocessing_cache_path,
+    is_preprocessing_cache_valid,
+)
 
 
 def upload_worker_thread(
@@ -189,6 +193,7 @@ def _build_catalog_worker(
     log_file: Optional[str] = None,
     db_path: Optional[str] = None,
     run_id: Optional[str] = None,
+    preprocessed_dirs_json: Optional[str] = None,
 ) -> tuple[str, int]:
     """Build catalogs for a single export directory (multiprocessing worker).
 
@@ -206,10 +211,14 @@ def _build_catalog_worker(
         log_file: Optional path to log file for verbose output.
         db_path: Optional path to SQLite database for streaming writes.
         run_id: Optional unique identifier for this processing run.
+        preprocessed_dirs_json: Optional JSON string mapping
+            "export_dir|processor_name" -> "working_dir" for preprocessed exports.
 
     Returns:
         Tuple of (export_dir_name, file_count).
     """
+    import json as json_module
+
     from processors.registry import ProcessorRegistry
     from common.output.logging import init_worker_logging
 
@@ -223,6 +232,11 @@ def _build_catalog_worker(
     )
 
     export_dir = Path(export_dir_str)
+
+    # Parse preprocessed directories mapping
+    preprocessed_dirs: dict[str, str] = {}
+    if preprocessed_dirs_json:
+        preprocessed_dirs = json_module.loads(preprocessed_dirs_json)
 
     # Create and populate registry in this worker process
     # Use quiet=True to suppress "Loaded X processors" messages from workers
@@ -246,11 +260,15 @@ def _build_catalog_worker(
         try:
             processor_name = processor.get_name()
 
+            # Use preprocessed directory if available
+            key = f"{export_dir_str}|{processor_name}"
+            catalog_dir = preprocessed_dirs.get(key, export_dir_str)
+
             if db and run_id:
                 # Streaming mode: iterate generator and write entries to database
                 # This never accumulates all entries in memory
                 batch = []
-                for entry in processor.build_catalog(str(export_dir), workers=workers):
+                for entry in processor.build_catalog(catalog_dir, workers=workers):
                     # Ensure _processor is set
                     if "_processor" not in entry:
                         entry["_processor"] = processor_name
@@ -267,7 +285,7 @@ def _build_catalog_worker(
                     db.write_catalog_entries_batch(run_id, export_dir.name, batch)
             else:
                 # Legacy mode: just count files from generator
-                for _ in processor.build_catalog(str(export_dir), workers=workers):
+                for _ in processor.build_catalog(catalog_dir, workers=workers):
                     file_count += 1
 
         except Exception as e:
@@ -319,6 +337,7 @@ def run_phased_dedup_processing(
 ) -> tuple[int, int, list, list]:
     """Run phased processing with cross-processor deduplication.
 
+    Phase 0: PREPROCESS - Preprocess raw exports to create metadata.json
     Phase 1: CATALOG - Build catalogs from all processors (streaming to DB)
     Phase 2: DEDUP ANALYSIS - Analyze for duplicates (from DB)
     Phase 3: PROCESS - Process with dedup manifest
@@ -355,12 +374,84 @@ def run_phased_dedup_processing(
     # Initialize database
     db = HashDatabase(config.database_path)
 
+    # Phase 0: Preprocess raw exports
+    # This ensures metadata.json exists for all processors before cataloging
+    phase_header("PHASE 0: PREPROCESS")
+
+    # Map of (export_dir, processor_name) -> working_dir for preprocessed exports
+    preprocessed_dirs: dict[tuple[Path, str], Path] = {}
+    preprocess_count = 0
+
+    for export_dir in dirs_to_process:
+        # Detect matching processors that support dedup
+        matching_processors = registry.detect_all(export_dir)
+        dedup_processors = [p for p in matching_processors if p.supports_dedup()]
+
+        for processor in dedup_processors:
+            processor_name = processor.get_name()
+            try:
+                if processor.needs_preprocessing(str(export_dir)):
+                    cache_path = get_preprocessing_cache_path(
+                        export_dir, processor_name
+                    )
+
+                    if is_preprocessing_cache_valid(cache_path):
+                        logger.debug(
+                            "Using cached preprocessing: %s (%s)",
+                            export_dir.name,
+                            processor_name,
+                        )
+                        preprocessed_dirs[(export_dir, processor_name)] = cache_path
+                    else:
+                        logger.info(
+                            "Preprocessing: %s (%s)", export_dir.name, processor_name
+                        )
+                        cache_path.mkdir(parents=True, exist_ok=True)
+
+                        working_dir = processor.preprocess(
+                            str(export_dir),
+                            str(cache_path),
+                            workers=args.workers,
+                        )
+                        if working_dir:
+                            preprocessed_dirs[
+                                (export_dir, processor_name)
+                            ] = Path(working_dir)
+                            preprocess_count += 1
+                        else:
+                            logger.warning(
+                                "Preprocessing failed: %s (%s)",
+                                export_dir.name,
+                                processor_name,
+                            )
+            except Exception as e:
+                logger.error(
+                    "Preprocessing error for %s (%s): %s",
+                    export_dir.name,
+                    processor_name,
+                    e,
+                )
+
+    if preprocess_count > 0:
+        logger.info("Preprocessed %d exports", preprocess_count)
+    else:
+        logger.info("No preprocessing required (all exports already preprocessed)")
+
     # Phase 1: Build catalogs (streaming to database)
     phase_header("PHASE 1: CATALOG")
 
     catalog_results = []  # List of (export_name, file_count, status) for summary table
     total_files = 0
     use_parallel_catalog = os.environ.get("PARALLEL_CATALOG", "true").lower() == "true"
+
+    # Convert preprocessed_dirs to JSON-serializable format for workers
+    # Key format: "export_dir|processor_name" -> "working_dir"
+    import json as json_module
+
+    preprocessed_dirs_serializable = {
+        f"{str(k[0])}|{k[1]}": str(v) for k, v in preprocessed_dirs.items()
+    }
+    preprocessed_dirs_json = json_module.dumps(preprocessed_dirs_serializable)
 
     if use_parallel_catalog and len(dirs_to_process) > 1:
         # Parallel catalog building across exports with streaming to DB
@@ -387,6 +478,7 @@ def run_phased_dedup_processing(
                     str(log_file) if log_file else None,
                     str(config.database_path),  # Pass DB path for streaming
                     run_id,  # Pass run_id for streaming
+                    preprocessed_dirs_json,  # Pass preprocessed dirs for catalog
                 ): export_dir
                 for export_dir in dirs_to_process
             }
@@ -433,11 +525,16 @@ def run_phased_dedup_processing(
                 logger.debug("  Building catalog: %s", processor.get_name())
                 processor_name = processor.get_name()
                 try:
+                    # Use preprocessed directory if available
+                    catalog_dir = preprocessed_dirs.get(
+                        (export_dir, processor_name), export_dir
+                    )
+
                     # Stream entries directly from generator to database
                     batch = []
                     processor_file_count = 0
                     for entry in processor.build_catalog(
-                        str(export_dir),
+                        str(catalog_dir),
                         workers=args.workers,
                     ):
                         if "_processor" not in entry:

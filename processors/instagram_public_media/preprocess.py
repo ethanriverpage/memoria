@@ -20,11 +20,14 @@ from common.detection import resolve_username, detect_from_dirname, DetectionRes
 from common.preprocess.context_mergers import merge_first_occurrence
 from common.processing import print_preprocessing_stats
 from common.output.progress import PHASE_PREPROCESS, futures_progress
+from common.output.logging import get_processor_logger
 from common.utils import normalize_text
 from processors.preprocess_base import CopyTask, PreprocessorBase
 
-# Set up logging
+# Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
+# Standardized processor logger for consistent output
+log = get_processor_logger(__name__)
 
 
 class InstagramPreprocessor(PreprocessorBase):

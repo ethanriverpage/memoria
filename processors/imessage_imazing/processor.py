@@ -19,9 +19,8 @@ from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
 from common.dependency_checker import check_exiftool, print_exiftool_error
 from common.files.utils import copy_file
 from common.dedup.hashing import (
-    is_live_photo_pair,
-    LIVE_PHOTO_IMAGE_EXTENSIONS,
-    LIVE_PHOTO_VIDEO_EXTENSIONS,
+    find_live_photo_video,
+    find_live_photo_videos_in_files,
 )
 from common.media.exiftool import (
     DEFAULT_PREAMBLE,
@@ -141,13 +140,50 @@ class ImazingProcessor(ProcessorBase):
         return True
 
     @staticmethod
+    def needs_preprocessing(input_dir: str) -> bool:
+        """Check if iMazing export needs preprocessing."""
+        input_path = Path(input_dir)
+
+        # Check if already preprocessed (has metadata.json)
+        metadata_file = input_path / "metadata.json"
+        if metadata_file.exists():
+            return False
+
+        # Check for raw export structure (Device-Info.txt)
+        device_info = input_path / "Device-Info.txt"
+        if device_info.exists():
+            return True
+
+        return False
+
+    @staticmethod
+    def preprocess(input_dir: str, cache_dir: str, **kwargs) -> Optional[str]:
+        """Run preprocessing on raw iMazing export."""
+        input_path = Path(input_dir)
+        cache_path = Path(cache_dir)
+        workers = kwargs.get("workers")
+
+        log.logger.info("Preprocessing iMazing export to: %s", cache_path)
+
+        cache_path.mkdir(parents=True, exist_ok=True)
+
+        preprocessor = ImazingPreprocessor(
+            export_path=input_path,
+            output_dir=cache_path,
+            workers=workers,
+        )
+
+        if preprocessor.run():
+            return str(cache_path)
+        return None
+
+    @staticmethod
     def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata."""
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
 
         all_files = []
-        live_photo_videos = set()
 
         # Collect from root directory
         for file_path in input_path.iterdir():
@@ -165,16 +201,7 @@ class ImazingProcessor(ProcessorBase):
                     all_files.append(file_path)
 
         # Identify Live Photo pairs
-        for file_path in all_files:
-            suffix = file_path.suffix.lower()
-            if suffix in LIVE_PHOTO_IMAGE_EXTENSIONS:
-                for video_ext in LIVE_PHOTO_VIDEO_EXTENSIONS:
-                    video_path = file_path.with_suffix(video_ext)
-                    if video_path.exists() and is_live_photo_pair(
-                        file_path, video_path
-                    ):
-                        live_photo_videos.add(video_path)
-                        break
+        live_photo_videos = find_live_photo_videos_in_files(all_files)
 
         # Filter out Live Photo videos
         media_files = [f for f in all_files if f not in live_photo_videos]
@@ -188,15 +215,9 @@ class ImazingProcessor(ProcessorBase):
         def extract_live_photo_metadata(file_path: Path) -> Dict[str, Any]:
             """Extract Live Photo metadata for a file."""
             metadata = {}
-            suffix = file_path.suffix.lower()
-            if suffix in LIVE_PHOTO_IMAGE_EXTENSIONS:
-                for video_ext in LIVE_PHOTO_VIDEO_EXTENSIONS:
-                    video_path = file_path.with_suffix(video_ext)
-                    if video_path.exists() and is_live_photo_pair(
-                        file_path, video_path
-                    ):
-                        metadata["live_photo_video"] = str(video_path)
-                        break
+            video_path = find_live_photo_video(file_path)
+            if video_path:
+                metadata["live_photo_video"] = str(video_path)
             return metadata
 
         yield from catalog_media_files(
@@ -218,8 +239,6 @@ class ImazingProcessor(ProcessorBase):
         return process_logic(
             input_dir=input_dir,
             output_dir=output_dir,
-            temp_dir=kwargs.get("temp_dir", "../pre"),
-            verbose=kwargs.get("verbose", False),
             workers=kwargs.get("workers"),
             dedup_manifest=dedup_manifest,
         )
@@ -381,12 +400,19 @@ def _build_description(message: dict, export_username: str) -> str:
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[Optional[str], dict, str]],
+    file_info: List[Tuple[Optional[str], dict, str, Optional[str]]],
 ) -> List[MetadataWriteRequest]:
-    """Build MetadataWriteRequest objects for iMessage files."""
+    """Build MetadataWriteRequest objects for iMessage files.
+
+    Args:
+        file_info: List of (file_path, message, export_username, content_hash) tuples
+
+    Returns:
+        List of MetadataWriteRequest objects
+    """
     requests: List[MetadataWriteRequest] = []
 
-    for file_path, message, export_username in file_info:
+    for file_path, message, export_username, content_hash in file_info:
         if file_path is None:
             continue
         is_merged = "messages" in message and isinstance(message["messages"], list)
@@ -417,6 +443,7 @@ def _build_metadata_requests(
                     default_description=default_description,
                 ),
                 processor_name="imessage_imazing",
+                content_hash=content_hash,
             )
         )
 
@@ -507,8 +534,15 @@ def _extract_message_timestamp(message: dict) -> str | None:
 
 
 def _process_file_worker(args_tuple):
-    """Worker function for processing files (copy and rename)."""
-    media_path, message, export_username, output_dir, output_filename = args_tuple
+    """Worker function for processing files (copy and rename).
+
+    Args:
+        args_tuple: Tuple of (media_path, message, export_username, output_dir, output_filename, content_hash)
+
+    Returns:
+        Tuple of (success, output_path, message, export_username, content_hash)
+    """
+    media_path, message, export_username, output_dir, output_filename, content_hash = args_tuple
 
     try:
         output_path = output_dir / output_filename
@@ -520,22 +554,24 @@ def _process_file_worker(args_tuple):
         timestamp_str = _extract_message_timestamp(message)
         update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
 
-        return (True, str(output_path), message, export_username)
+        return (True, str(output_path), message, export_username, content_hash)
 
     except Exception as e:
         log.processing_error(media_path.name, e)
-        return (False, None, message, export_username)
+        return (False, None, message, export_username, content_hash)
 
 
 def process_logic(
     input_dir: str,
     output_dir: Optional[str] = None,
-    temp_dir: str = "../pre",
-    verbose: bool = False,  # noqa: ARG001
     workers: Optional[int] = None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Core processing logic for iMazing iMessage exports."""
+    """Core processing logic for iMazing iMessage exports.
+
+    Expects input_dir to be preprocessed (via memoria.py preprocessing phase
+    or by calling ImazingProcessor.preprocess() directly).
+    """
     # Check for required tools
     if not check_exiftool():
         print_exiftool_error()
@@ -636,7 +672,9 @@ def process_logic(
                     identifier = _build_imessage_identifier(message)
                     timestamp = _extract_message_timestamp(message)
                     output_filename = filename_gen.generate(timestamp, identifier, file_ext)
-                    matched_files.append((media_file, message, output_filename))
+                    # Get content_hash for EXIF metadata
+                    content_hash = file_hashes.get(media_file.name)
+                    matched_files.append((media_file, message, output_filename, content_hash))
                 else:
                     log.no_metadata_for_file(media_file.name)
         else:
@@ -675,7 +713,9 @@ def process_logic(
                 identifier = _build_imessage_identifier(message)
                 timestamp = _extract_message_timestamp(message)
                 output_filename = filename_gen.generate(timestamp, identifier, file_ext)
-                matched_files.append((source_path, message, output_filename))
+                # Get content_hash for EXIF metadata
+                content_hash = file_hashes.get(media_filename)
+                matched_files.append((source_path, message, output_filename, content_hash))
 
         if skipped_dedup > 0:
             log.skipped_secondary(skipped_dedup)
@@ -688,10 +728,10 @@ def process_logic(
         num_workers = workers if workers is not None else default_worker_count()
         log.using_workers(num_workers)
 
-        # Prepare arguments
+        # Prepare arguments (include content_hash for EXIF)
         process_args = [
-            (media_file, message, export_username, messages_output_dir, output_filename)
-            for media_file, message, output_filename in matched_files
+            (media_file, message, export_username, messages_output_dir, output_filename, content_hash)
+            for media_file, message, output_filename, content_hash in matched_files
         ]
 
         # Phase 1: Copy and rename files
@@ -716,11 +756,11 @@ def process_logic(
         file_paths = []
         file_info = []
 
-        for success, output_path, message, exp_username in results:
+        for success, output_path, message, exp_username, content_hash in results:
             if success and output_path:
                 success_count += 1
                 file_paths.append(output_path)
-                file_info.append((output_path, message, exp_username))
+                file_info.append((output_path, message, exp_username, content_hash))
             else:
                 failed_count += 1
 
@@ -760,29 +800,17 @@ def process_logic(
 
         return True
 
-    # Check if input is already preprocessed
-    if is_preprocessed(input_path):
-        log.using_preprocessed(str(input_path))
-        return _process_working_dir(input_path)
-
-    # Need to run preprocessing into a managed temp directory, then process within it.
-    log.running_preprocessing()
-    with ImazingPreprocessor.temp_output_dir(temp_dir, "imazing") as temp_dir_path:
-        log.preprocessing_to(str(temp_dir_path))
-
-        preprocessor = ImazingPreprocessor(
-            export_path=input_path,
-            output_dir=temp_dir_path,
-            workers=workers,
-            final_output_dir=messages_output_dir,
+    # Require preprocessed input
+    if not is_preprocessed(input_path):
+        log.logger.error(
+            "Input directory is not preprocessed: %s. "
+            "Call preprocess() first or run via memoria.py.",
+            input_path,
         )
+        return False
 
-        if not preprocessor.run():
-            log.logger.error("Preprocessing failed")
-            return False
-
-        log.preprocessing_done(str(temp_dir_path))
-        return _process_working_dir(temp_dir_path)
+    log.using_preprocessed(str(input_path))
+    return _process_working_dir(input_path)
 
 
 def get_processor():

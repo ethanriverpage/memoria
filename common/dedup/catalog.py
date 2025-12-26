@@ -3,12 +3,12 @@
 
 import logging
 import os
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from common.dedup.config import get_dedup_config
+from common.dedup.database import get_thread_db
 from common.dedup.hashing import (
     compute_content_hash,
     compute_perceptual_hash_with_dims,
@@ -27,30 +27,6 @@ CATALOG_WORKERS_ENV = "CATALOG_WORKERS"
 # Environment variable to disable hash caching (for debugging or fresh runs)
 # Example: DISABLE_HASH_CACHE=1
 DISABLE_HASH_CACHE_ENV = "DISABLE_HASH_CACHE"
-
-# Thread-local storage for database connections (one per thread for reads)
-_thread_local = threading.local()
-
-
-def _get_thread_db(db_path: Optional[Path]):
-    """Get or create a thread-local database connection for cache reads.
-
-    Args:
-        db_path: Path to the SQLite database file.
-
-    Returns:
-        HashDatabase instance for this thread, or None if db_path is None.
-    """
-    if db_path is None:
-        return None
-
-    if not hasattr(_thread_local, "db") or _thread_local.db_path != str(db_path):
-        from common.dedup.database import HashDatabase
-
-        _thread_local.db = HashDatabase(db_path)
-        _thread_local.db_path = str(db_path)
-
-    return _thread_local.db
 
 
 def _process_single_file(
@@ -94,7 +70,7 @@ def _process_single_file(
         cache_entry_to_write = None
 
         # Try cache lookup if database path provided (reads are thread-safe)
-        db = _get_thread_db(db_path)
+        db = get_thread_db(db_path)
         if db is not None:
             cached = db.get_cached_hashes(str(file_path), file_size, mtime)
             if cached is not None:

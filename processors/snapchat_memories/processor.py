@@ -49,11 +49,14 @@ from common.utils import (
     get_media_type,
     update_file_timestamps,
 )
+from common.output.logging import get_processor_logger
 from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
 
-# Set up logging
+# Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
+# Standardized processor logger for consistent output
+log = get_processor_logger(__name__)
 
 
 # ============================================================================
@@ -134,7 +137,7 @@ def detect(input_path: Path) -> bool:
         return False
 
     except Exception as e:
-        logger.debug(f"Detection failed for Snapchat Memories: {e}")
+        log.detection_failed("Snapchat Memories", e)
         return False
 
 
@@ -168,6 +171,22 @@ class SnapchatMemoriesProcessor(ProcessorBase):
     def supports_dedup() -> bool:
         """Return True - Snapchat Memories supports cross-processor deduplication."""
         return True
+
+    @staticmethod
+    def needs_preprocessing(input_dir: str) -> bool:
+        """Snapchat Memories exports come pre-organized with media/ and metadata.json.
+
+        The Snapchat export format already provides the required structure,
+        so preprocessing is not needed. The processor works directly on the
+        export data.
+        """
+        return False
+
+    @staticmethod
+    def preprocess(input_dir: str, cache_dir: str, **kwargs) -> Optional[str]:
+        """Snapchat Memories does not require preprocessing."""
+        # This should never be called since needs_preprocessing returns False
+        return None
 
     @staticmethod
     def load_memories_metadata(metadata_path: Path) -> List[Dict[str, Any]]:
@@ -322,21 +341,21 @@ class SnapchatMemoriesProcessor(ProcessorBase):
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[Optional[str], dict, str]],
+    file_info: List[Tuple[Optional[str], dict, str, Optional[str]]],
 ) -> List[MetadataWriteRequest]:
     """Build MetadataWriteRequest objects for Snapchat Memories files.
 
     Filters out MKV files as they already have metadata embedded during overlay creation.
 
     Args:
-        file_info: List of (file_path, memory_data, export_username) tuples
+        file_info: List of (file_path, memory_data, export_username, content_hash) tuples
 
     Returns:
         List of MetadataWriteRequest objects
     """
     requests: List[MetadataWriteRequest] = []
 
-    for file_path, memory_data, export_username in file_info:
+    for file_path, memory_data, export_username, content_hash in file_info:
         if file_path is None:
             continue
         # Skip MKV files (they already have metadata from overlay creation)
@@ -380,6 +399,7 @@ def _build_metadata_requests(
                     default_description=default_description,
                 ),
                 processor_name="snapchat_memories",
+                content_hash=content_hash,
             )
         )
 
@@ -428,13 +448,15 @@ def create_memory_file(args_tuple):
     """Create output file with overlay if needed (Phase 1 worker function)
 
     Args:
-        args_tuple: Tuple containing (memory, output_filename, raw_dir, output_dir, export_username)
+        args_tuple: Tuple containing (memory, output_filename, raw_dir, output_dir, export_username, content_hash)
 
     Returns:
         Tuple of (success: bool, output_path: str or None, is_mkv: bool, memory: dict,
-                  export_username: str, failure_reason: str or None)
+                  export_username: str, content_hash: str or None, failure_reason: str or None)
     """
-    memory, output_filename, raw_dir, output_dir, export_username = args_tuple
+    memory, output_filename, raw_dir, output_dir, export_username, content_hash = (
+        args_tuple
+    )
 
     media_filename = memory["media_filename"]
     overlay_filename = memory.get("overlay_filename")
@@ -448,7 +470,7 @@ def create_memory_file(args_tuple):
 
     if not os.path.exists(media_path):
         logger.warning(f"Media file not found: {media_path}")
-        return (False, None, False, memory, export_username, media_path)
+        return (False, None, False, memory, export_username, content_hash, media_path)
 
     # Determine if this is a video or image
     is_video = get_media_type(media_filename) == "video"
@@ -465,7 +487,15 @@ def create_memory_file(args_tuple):
             output_path = os.path.join(output_dir, output_filename)
             copy_file(media_path, output_path)
             _update_memory_timestamps(output_path, memory)
-            return (True, output_path, False, memory, export_username, None)
+            return (
+                True,
+                output_path,
+                False,
+                memory,
+                export_username,
+                content_hash,
+                None,
+            )
 
         if is_video:
             # Video with overlay - create multi-track MKV
@@ -485,14 +515,30 @@ def create_memory_file(args_tuple):
                 # Update filesystem timestamps
                 _update_memory_timestamps(output_path, memory)
                 # MKV files already have metadata embedded, mark as such
-                return (True, output_path, True, memory, export_username, None)
+                return (
+                    True,
+                    output_path,
+                    True,
+                    memory,
+                    export_username,
+                    content_hash,
+                    None,
+                )
             else:
                 # Multi-track creation failed, copy original video with original extension
                 fallback_path = os.path.join(output_dir, output_filename)
                 copy_file(media_path, fallback_path)
                 _update_memory_timestamps(fallback_path, memory)
                 # Fallback file needs batch EXIF processing
-                return (True, fallback_path, False, memory, export_username, None)
+                return (
+                    True,
+                    fallback_path,
+                    False,
+                    memory,
+                    export_username,
+                    content_hash,
+                    None,
+                )
 
         elif is_image:
             # Image with overlay - composite
@@ -505,25 +551,49 @@ def create_memory_file(args_tuple):
             ):
                 _update_memory_timestamps(output_path, memory)
                 # Image needs batch EXIF processing
-                return (True, output_path, False, memory, export_username, None)
+                return (
+                    True,
+                    output_path,
+                    False,
+                    memory,
+                    export_username,
+                    content_hash,
+                    None,
+                )
             else:
                 # Image processing failed, copy original
                 copy_file(media_path, output_path)
                 _update_memory_timestamps(output_path, memory)
-                return (True, output_path, False, memory, export_username, None)
+                return (
+                    True,
+                    output_path,
+                    False,
+                    memory,
+                    export_username,
+                    content_hash,
+                    None,
+                )
         else:
             # Unknown file type with overlay - just copy
             output_path = os.path.join(output_dir, output_filename)
             copy_file(media_path, output_path)
             _update_memory_timestamps(output_path, memory)
-            return (True, output_path, False, memory, export_username, None)
+            return (
+                True,
+                output_path,
+                False,
+                memory,
+                export_username,
+                content_hash,
+                None,
+            )
     else:
         # No overlay - just copy
         output_path = os.path.join(output_dir, output_filename)
         copy_file(media_path, output_path)
         _update_memory_timestamps(output_path, memory)
         # File needs batch EXIF processing
-        return (True, output_path, False, memory, export_username, None)
+        return (True, output_path, False, memory, export_username, content_hash, None)
 
 
 def process_logic(
@@ -637,6 +707,17 @@ def process_logic(
     processing_tasks = []
     skipped_count = 0
 
+    # Build hash lookup from dedup_manifest if available
+    hash_lookup: Dict[str, str] = {}
+    if dedup_manifest:
+        for file_hash, entry in dedup_manifest.get("files", {}).items():
+            for source in entry.get("sources", []):
+                source_path = source.get("path", "")
+                if source_path:
+                    # Store both full path and filename as keys
+                    hash_lookup[source_path] = file_hash
+                    hash_lookup[os.path.basename(source_path)] = file_hash
+
     skipped_dedup = 0
     for memory in memories:
         media_filename = memory["media_filename"]
@@ -660,6 +741,11 @@ def process_logic(
         # Build full path for dedup check
         full_media_path = os.path.join(raw_dir, "media", media_filename)
 
+        # Get content_hash from catalog manifest (computed during catalog phase)
+        content_hash = hash_lookup.get(full_media_path) or hash_lookup.get(
+            media_filename
+        )
+
         # Skip secondary files based on dedup manifest (using hash-based lookup)
         if SnapchatMemoriesProcessor.should_skip_for_dedup(
             full_media_path, dedup_manifest, "Snapchat Memories"
@@ -679,7 +765,14 @@ def process_logic(
 
         # Create task tuple for worker
         processing_tasks.append(
-            (memory, output_filename, raw_dir, output_base_path, export_username)
+            (
+                memory,
+                output_filename,
+                raw_dir,
+                output_base_path,
+                export_username,
+                content_hash,
+            )
         )
 
     if skipped_dedup > 0:
@@ -714,14 +807,22 @@ def process_logic(
     file_paths = []
     file_info = []
 
-    for success, output_path, is_mkv, memory, export_username, failure_info in results:
+    for (
+        success,
+        output_path,
+        is_mkv,
+        memory,
+        export_username,
+        content_hash,
+        failure_info,
+    ) in results:
         if success and output_path:
             success_count += 1
             # Only add non-MKV files to batch processing list
             # (MKV files already have metadata from overlay creation)
             if not is_mkv:
                 file_paths.append(output_path)
-                file_info.append((output_path, memory, export_username))
+                file_info.append((output_path, memory, export_username, content_hash))
         else:
             failed_count += 1
             # Track orphaned metadata (metadata without corresponding media file)

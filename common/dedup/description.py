@@ -16,7 +16,7 @@ Examples:
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
@@ -55,8 +55,6 @@ class SourceEntry:
         username: Username or identifier from the source
         service: Service type (e.g., "photos", "messages", "memories")
         is_primary: Whether this is the primary source
-        albums: List of album names (for photo libraries) - deprecated, use service
-        context_type: Type of context (e.g., "Story", "Post", "Message") - deprecated
         content: Message or caption content
         conversation: Conversation or chat name
         sender: Sender name for messages
@@ -67,8 +65,6 @@ class SourceEntry:
     username: str = ""
     service: str = ""
     is_primary: bool = False
-    albums: List[str] = field(default_factory=list)
-    context_type: str = ""
     content: str = ""
     conversation: str = ""
     sender: str = ""
@@ -642,11 +638,9 @@ def create_source_entry(
 
     # Extract common fields
     entry.username = metadata.get("username", "")
-    entry.albums = metadata.get("albums", [])
     entry.content = metadata.get("content", metadata.get("caption", ""))
     entry.conversation = metadata.get("conversation", metadata.get("chat", ""))
     entry.sender = metadata.get("sender", "")
-    entry.context_type = metadata.get("type", metadata.get("context_type", ""))
 
     # Parse timestamp
     ts = metadata.get("timestamp")

@@ -26,6 +26,10 @@ from common.media.encoder import (
     get_software_encoder_args,
     is_hardware_accelerated,
 )
+from common.media.probe import (
+    VideoMetadata,
+    get_video_metadata,
+)
 
 # Note: overlay module has many exports, import directly when needed
 # from common.media.overlay import embed_overlay, process_video_with_overlay, ...
@@ -48,4 +52,7 @@ __all__ = [
     "get_encoder_name",
     "get_software_encoder_args",
     "is_hardware_accelerated",
+    # Probe
+    "VideoMetadata",
+    "get_video_metadata",
 ]

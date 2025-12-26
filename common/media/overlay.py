@@ -23,12 +23,10 @@ Performance Optimizations:
 - Cached video metadata to avoid redundant probing
 """
 
-import json
 import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 import logging
@@ -49,6 +47,9 @@ from common.media.encoder import (
     is_hardware_acceleration_error,
 )
 
+# Import shared video metadata extraction
+from common.media.probe import VideoMetadata, get_video_metadata
+
 # Import unified description format utilities
 from common.dedup.description import (
     PLATFORM_SNAPCHAT,
@@ -66,142 +67,6 @@ _ENCODER_NAME = get_encoder_name()
 _IS_HARDWARE = is_hardware_accelerated()
 
 logger.debug(f"Video encoder initialized: {_ENCODER_NAME} (hardware: {_IS_HARDWARE})")
-
-
-@dataclass
-class VideoMetadata:
-    """Container for video metadata extracted in a single FFprobe call."""
-
-    width: int
-    height: int
-    rotation: Optional[int]
-    bitrate: Optional[int]
-
-
-def get_video_metadata(video_path: Path) -> Optional[VideoMetadata]:
-    """
-    Get all video metadata in a single FFprobe call.
-
-    Consolidates rotation, dimensions, and bitrate detection into one probe
-    for better performance (avoids 3 separate subprocess calls).
-
-    Args:
-        video_path: Path to the video file
-
-    Returns:
-        VideoMetadata with all extracted info, or None if probing failed
-    """
-    try:
-        # Single ffprobe call to get all metadata as JSON
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height,bit_rate:stream_tags=rotate:stream_side_data",
-            "-show_entries",
-            "format=bit_rate",
-            "-of",
-            "json",
-            str(video_path),
-        ]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-            stdin=subprocess.DEVNULL,
-        )
-
-        if result.returncode != 0:
-            logger.debug(f"[{video_path.name}] FFprobe failed: {result.stderr}")
-            return None
-
-        data = json.loads(result.stdout)
-
-        # Extract stream info
-        streams = data.get("streams", [])
-        if not streams:
-            logger.debug(f"[{video_path.name}] No video streams found")
-            return None
-
-        stream = streams[0]
-        width = stream.get("width")
-        height = stream.get("height")
-
-        if not width or not height:
-            logger.debug(f"[{video_path.name}] Missing dimensions in stream data")
-            return None
-
-        # Extract rotation from tags or side_data
-        rotation = None
-
-        # Check stream tags first
-        tags = stream.get("tags", {})
-        if "rotate" in tags:
-            try:
-                rotation = int(float(tags["rotate"])) % 360
-                if rotation == 0:
-                    rotation = None
-            except (ValueError, TypeError):
-                pass
-
-        # Check side_data_list for displaymatrix rotation
-        if rotation is None:
-            side_data_list = stream.get("side_data_list", [])
-            for side_data in side_data_list:
-                if side_data.get("side_data_type") == "Display Matrix":
-                    try:
-                        rot = side_data.get("rotation")
-                        if rot is not None:
-                            # FFprobe reports negative rotation for displaymatrix
-                            rotation = (-int(float(rot))) % 360
-                            if rotation == 0:
-                                rotation = None
-                    except (ValueError, TypeError):
-                        pass
-
-        # Extract bitrate - try format first, then stream
-        bitrate = None
-        format_info = data.get("format", {})
-
-        if format_info.get("bit_rate"):
-            try:
-                bitrate = int(format_info["bit_rate"])
-            except (ValueError, TypeError):
-                pass
-
-        if bitrate is None and stream.get("bit_rate"):
-            try:
-                bitrate = int(stream["bit_rate"])
-            except (ValueError, TypeError):
-                pass
-
-        logger.debug(
-            f"[{video_path.name}] Metadata: {width}x{height}, "
-            f"rotation={rotation}, bitrate={bitrate}"
-        )
-
-        return VideoMetadata(
-            width=width,
-            height=height,
-            rotation=rotation,
-            bitrate=bitrate,
-        )
-
-    except subprocess.TimeoutExpired:
-        logger.warning(f"Timeout probing video metadata for {video_path.name}")
-        return None
-    except json.JSONDecodeError as e:
-        logger.warning(f"Failed to parse FFprobe JSON for {video_path.name}: {e}")
-        return None
-    except Exception as e:
-        logger.warning(f"Error probing video metadata for {video_path.name}: {e}")
-        return None
 
 
 # Multi-pass video processing helper functions

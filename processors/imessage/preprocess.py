@@ -24,10 +24,14 @@ from common.preprocess.context_mergers import merge_imessage_context
 from common.processing import print_preprocessing_stats
 from common.output.progress import PHASE_PREPROCESS, progress_bar
 from common.utils import get_media_type
+from common.output.logging import get_processor_logger
 from processors.imessage.vcard_parser import VCardParser
 from processors.preprocess_base import CopyTask, PreprocessorBase
 
+# Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
+# Standardized processor logger for consistent output
+log = get_processor_logger(__name__)
 
 
 # Apple Cocoa epoch offset: seconds between Unix epoch (1970) and Apple epoch (2001)

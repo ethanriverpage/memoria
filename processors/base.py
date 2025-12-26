@@ -102,6 +102,45 @@ class ProcessorBase(ABC):
             "but does not implement build_catalog()"
         )
 
+    @staticmethod
+    def needs_preprocessing(input_dir: str) -> bool:
+        """Check if input directory requires preprocessing before cataloging.
+
+        Preprocessing converts raw exports into a standardized format with
+        metadata.json and a media/ directory. This method checks whether the
+        input is already preprocessed or needs preprocessing first.
+
+        Args:
+            input_dir: Path to the input directory to check.
+
+        Returns:
+            True if preprocessing is needed, False if already preprocessed
+            or if this processor doesn't require preprocessing.
+        """
+        return False  # Default: no preprocessing needed
+
+    @staticmethod
+    def preprocess(input_dir: str, cache_dir: str, **kwargs) -> Optional[str]:
+        """Run preprocessing on a raw export directory.
+
+        Converts a raw export into a standardized preprocessed format with
+        metadata.json and a media/ directory. The result is written to the
+        cache directory for reuse in subsequent runs.
+
+        Args:
+            input_dir: Path to the raw export directory.
+            cache_dir: Path to the cache directory for storing preprocessed output.
+            **kwargs: Additional arguments (workers, verbose).
+
+        Returns:
+            Path to the working directory (preprocessed output) on success,
+            or None if preprocessing failed.
+        """
+        raise NotImplementedError(
+            "Processor declares needs_preprocessing=True "
+            "but does not implement preprocess()"
+        )
+
     # =========================================================================
     # Shared Utility Methods
     # =========================================================================

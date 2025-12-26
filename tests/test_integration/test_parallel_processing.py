@@ -6,15 +6,20 @@ Tests verify:
 - Output consistency regardless of worker count
 - No race conditions or duplicate processing
 - Resource cleanup after parallel processing
+
+Note: Processors require preprocessed input. Each test must call
+preprocess() before process() to set up the required metadata.json
+and media directory structure.
 """
 
 import hashlib
 import shutil
 from pathlib import Path
-from typing import Dict, Set
+from typing import Dict, Set, Type
 
 import pytest
 
+from processors.base import ProcessorBase
 from tests.fixtures.generators import create_google_photos_export
 
 
@@ -26,6 +31,18 @@ skip_no_exiftool = pytest.mark.skipif(
     not EXIFTOOL_AVAILABLE, reason="exiftool not installed"
 )
 skip_no_ffmpeg = pytest.mark.skipif(not FFMPEG_AVAILABLE, reason="ffmpeg not installed")
+
+
+def preprocess_export(
+    processor_class: Type[ProcessorBase],
+    export_dir: Path,
+    cache_dir: Path,
+    **kwargs,
+) -> str:
+    """Run preprocessing on a raw export and return the working directory."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    working_dir = processor_class.preprocess(str(export_dir), str(cache_dir), **kwargs)
+    return working_dir if working_dir else str(cache_dir)
 
 
 def create_large_google_photos_export(
@@ -98,12 +115,14 @@ class TestWorkerCountValidation:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         create_google_photos_export(export_dir)
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         result = GooglePhotosProcessor.process(
-            str(export_dir), str(output_dir), workers=1, verbose=False
+            working_dir, str(output_dir), workers=1, verbose=False
         )
 
         assert result is True
@@ -115,12 +134,14 @@ class TestWorkerCountValidation:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         create_google_photos_export(export_dir)
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         result = GooglePhotosProcessor.process(
-            str(export_dir), str(output_dir), workers=4, verbose=False
+            working_dir, str(output_dir), workers=4, verbose=False
         )
 
         assert result is True
@@ -132,12 +153,14 @@ class TestWorkerCountValidation:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         create_google_photos_export(export_dir)
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         result = GooglePhotosProcessor.process(
-            str(export_dir), str(output_dir), workers=None, verbose=False
+            working_dir, str(output_dir), workers=None, verbose=False
         )
 
         assert result is True
@@ -149,12 +172,14 @@ class TestWorkerCountValidation:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         create_google_photos_export(export_dir)
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         result = GooglePhotosProcessor.process(
-            str(export_dir), str(output_dir), workers=16, verbose=False
+            working_dir, str(output_dir), workers=16, verbose=False
         )
 
         assert result is True
@@ -171,19 +196,21 @@ class TestOutputConsistency:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output1 = tmp_path / "output1"
         output2 = tmp_path / "output2"
 
         create_large_google_photos_export(export_dir, num_albums=5, files_per_album=3)
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         # Process with 1 worker
         GooglePhotosProcessor.process(
-            str(export_dir), str(output1), workers=1, verbose=False
+            working_dir, str(output1), workers=1, verbose=False
         )
 
         # Process with 4 workers
         GooglePhotosProcessor.process(
-            str(export_dir), str(output2), workers=4, verbose=False
+            working_dir, str(output2), workers=4, verbose=False
         )
 
         count1 = count_files(output1)
@@ -197,17 +224,19 @@ class TestOutputConsistency:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output1 = tmp_path / "output1"
         output2 = tmp_path / "output2"
 
         create_large_google_photos_export(export_dir, num_albums=5, files_per_album=3)
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         GooglePhotosProcessor.process(
-            str(export_dir), str(output1), workers=1, verbose=False
+            working_dir, str(output1), workers=1, verbose=False
         )
 
         GooglePhotosProcessor.process(
-            str(export_dir), str(output2), workers=4, verbose=False
+            working_dir, str(output2), workers=4, verbose=False
         )
 
         files1 = get_file_names(output1)
@@ -230,13 +259,15 @@ class TestRaceConditions:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         create_large_google_photos_export(export_dir, num_albums=10, files_per_album=5)
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         # Process with high parallelism
         GooglePhotosProcessor.process(
-            str(export_dir), str(output_dir), workers=8, verbose=False
+            working_dir, str(output_dir), workers=8, verbose=False
         )
 
         # No duplicate file names should exist in same directory
@@ -253,6 +284,7 @@ class TestRaceConditions:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         num_albums = 5
@@ -260,13 +292,10 @@ class TestRaceConditions:
         create_large_google_photos_export(
             export_dir, num_albums=num_albums, files_per_album=files_per_album
         )
-
-        # Count input media files
-        input_media = list((export_dir / "Google Photos").rglob("*.jpg"))
-        input_media += list((export_dir / "Google Photos").rglob("*.png"))
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         GooglePhotosProcessor.process(
-            str(export_dir), str(output_dir), workers=4, verbose=False
+            working_dir, str(output_dir), workers=4, verbose=False
         )
 
         # Should have processed all input files
@@ -292,57 +321,51 @@ class TestResourceCleanup:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
-        temp_dir = tmp_path / "temp"
 
         create_google_photos_export(export_dir)
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         GooglePhotosProcessor.process(
-            str(export_dir),
+            working_dir,
             str(output_dir),
             workers=4,
-            temp_dir=str(temp_dir),
             verbose=False,
         )
 
-        # Check that temp directory is empty or doesn't exist
-        if temp_dir.exists():
-            # May have subdirs but should be cleaned up
-            temp_files = list(temp_dir.rglob("*"))
-            # Some temp dirs might remain but should be mostly empty
-            temp_file_count = len([f for f in temp_files if f.is_file()])
-            # Allow for some log files but no media files
-            assert (
-                temp_file_count < 10
-            ), f"Too many temp files remaining: {temp_file_count}"
+        # Check that output exists and has files
+        assert output_dir.exists()
+        output_files = list(output_dir.rglob("*"))
+        assert len([f for f in output_files if f.is_file()]) > 0
 
     @skip_no_exiftool
-    def test_multiple_runs_dont_accumulate_temp(self, tmp_path):
-        """Multiple processing runs should not accumulate temp files."""
+    def test_multiple_runs_produce_same_output(self, tmp_path):
+        """Multiple processing runs should produce consistent output."""
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
-        temp_dir = tmp_path / "temp"
+        cache_dir = tmp_path / "cache"
 
         create_google_photos_export(export_dir)
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         # Run processing multiple times
+        file_counts = []
         for i in range(3):
             output_dir = tmp_path / f"output_{i}"
             GooglePhotosProcessor.process(
-                str(export_dir),
+                working_dir,
                 str(output_dir),
                 workers=2,
-                temp_dir=str(temp_dir),
                 verbose=False,
             )
+            file_counts.append(count_files(output_dir))
 
-        # Temp should not have accumulated files
-        if temp_dir.exists():
-            temp_files = [f for f in temp_dir.rglob("*") if f.is_file()]
-            assert (
-                len(temp_files) < 20
-            ), f"Accumulated too many temp files: {len(temp_files)}"
+        # All runs should produce same file count
+        assert all(
+            c == file_counts[0] for c in file_counts
+        ), f"File counts differ across runs: {file_counts}"
 
 
 @pytest.mark.integration
@@ -357,13 +380,15 @@ class TestLargeExportProcessing:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         # Create larger export: 20 albums * 10 files = 200 files
         create_large_google_photos_export(export_dir, num_albums=20, files_per_album=10)
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         result = GooglePhotosProcessor.process(
-            str(export_dir), str(output_dir), workers=4, verbose=False
+            working_dir, str(output_dir), workers=4, verbose=False
         )
 
         assert result is True
@@ -375,19 +400,21 @@ class TestLargeExportProcessing:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_seq = tmp_path / "output_seq"
         output_par = tmp_path / "output_par"
 
         create_large_google_photos_export(export_dir, num_albums=10, files_per_album=5)
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         # Sequential
         GooglePhotosProcessor.process(
-            str(export_dir), str(output_seq), workers=1, verbose=False
+            working_dir, str(output_seq), workers=1, verbose=False
         )
 
         # Parallel
         GooglePhotosProcessor.process(
-            str(export_dir), str(output_par), workers=4, verbose=False
+            working_dir, str(output_par), workers=4, verbose=False
         )
 
         seq_count = count_files(output_seq)

@@ -216,13 +216,11 @@ class TestCreateSourceEntry:
         """Test basic source entry creation."""
         metadata = {
             "username": "johndoe",
-            "albums": ["Vacation"],
         }
         entry = create_source_entry("Google Photos", metadata)
 
         assert entry.processor == "Google Photos"
         assert entry.username == "johndoe"
-        assert entry.albums == ["Vacation"]
 
     def test_with_timestamp_string(self):
         """Test creation with timestamp string."""

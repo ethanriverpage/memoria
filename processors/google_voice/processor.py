@@ -40,9 +40,12 @@ from common.media.exiftool import (
     MetadataWriteRequest,
     PREAMBLE_WITH_IGNORE_ERRORS,
 )
+from common.output.logging import get_processor_logger
 
-# Set up logging
+# Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
+# Standardized processor logger for consistent output
+log = get_processor_logger(__name__)
 
 
 # ============================================================================
@@ -87,7 +90,7 @@ def detect(input_path: Path) -> bool:
         return False
 
     except Exception as e:
-        logger.debug(f"Detection failed for Google Voice: {e}")
+        log.detection_failed("Google Voice", e)
         return False
 
 
@@ -121,6 +124,42 @@ class GoogleVoiceProcessor(ProcessorBase):
     def supports_dedup() -> bool:
         """Return True - Google Voice supports cross-processor deduplication."""
         return True
+
+    @staticmethod
+    def needs_preprocessing(input_dir: str) -> bool:
+        """Check if Google Voice export needs preprocessing."""
+        # Check if already preprocessed
+        if is_preprocessed_directory(input_dir):
+            return False
+
+        # Check for raw export structure (Voice/Calls/ directory)
+        input_path = Path(input_dir)
+        voice_dir = input_path / "Voice" / "Calls"
+        if voice_dir.exists():
+            return True
+
+        return False
+
+    @staticmethod
+    def preprocess(input_dir: str, cache_dir: str, **kwargs) -> Optional[str]:
+        """Run preprocessing on raw Google Voice export."""
+        input_path = Path(input_dir)
+        cache_path = Path(cache_dir)
+        workers = kwargs.get("workers")
+
+        logger.info("Preprocessing Google Voice export to: %s", cache_path)
+
+        cache_path.mkdir(parents=True, exist_ok=True)
+
+        preprocessor = GoogleVoicePreprocessor(
+            export_path=input_path,
+            output_dir=cache_path,
+            workers=workers,
+        )
+
+        if preprocessor.run():
+            return str(cache_path)
+        return None
 
     @staticmethod
     def build_catalog(input_dir: str, **kwargs):
@@ -215,8 +254,6 @@ class GoogleVoiceProcessor(ProcessorBase):
             process_logic(
                 input_dir=input_dir,
                 output_dir=processor_output,
-                temp_dir=kwargs.get("temp_dir", "../pre"),
-                verbose=kwargs.get("verbose", False),
                 workers=kwargs.get("workers"),
                 dedup_manifest=dedup_manifest,
             )
@@ -233,19 +270,25 @@ class GoogleVoiceProcessor(ProcessorBase):
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[str, dict, str, str]],
+    file_info: List[Tuple[str, dict, str, str, Optional[str]]],
 ) -> List[MetadataWriteRequest]:
     """Build MetadataWriteRequest objects for Google Voice files.
 
     Args:
-        file_info: List of (file_path, message_data, conversation_name, export_username) tuples
+        file_info: List of (file_path, message_data, conversation_name, export_username, content_hash) tuples
 
     Returns:
         List of MetadataWriteRequest objects
     """
     requests: List[MetadataWriteRequest] = []
 
-    for file_path, message_data, conversation_name, export_username in file_info:
+    for (
+        file_path,
+        message_data,
+        conversation_name,
+        export_username,
+        content_hash,
+    ) in file_info:
         # Build datetime tags
         datetime_tags: List[Tuple[str, str]] = []
         timestamp_str = message_data.get("timestamp")
@@ -282,6 +325,7 @@ def _build_metadata_requests(
                     default_description=default_description,
                 ),
                 processor_name="google_voice",
+                content_hash=content_hash,
             )
         )
 
@@ -321,11 +365,11 @@ def process_media_batch(batch_args):
 
     Args:
         batch_args: List of tuples, each containing (media_file, message_data,
-                    conversation_name, output_filename, media_dir, output_dir, export_username)
+                    conversation_name, output_filename, media_dir, output_dir, export_username, content_hash)
 
     Returns:
         List of (success, output_path, file_info_tuple) tuples where file_info_tuple is
-        (output_path, message_data, conversation_name, export_username) or None on failure
+        (output_path, message_data, conversation_name, export_username, content_hash) or None on failure
     """
     results = []
 
@@ -342,6 +386,7 @@ def process_media_batch(batch_args):
             media_dir,
             output_dir,
             export_username,
+            content_hash,
         ) = args_tuple
 
         media_path = os.path.join(media_dir, media_file)
@@ -356,7 +401,13 @@ def process_media_batch(batch_args):
             copy_file(media_path, output_path)
             file_paths.append(output_path)
             file_info.append(
-                (output_path, message_data, conversation_name, export_username)
+                (
+                    output_path,
+                    message_data,
+                    conversation_name,
+                    export_username,
+                    content_hash,
+                )
             )
         except Exception as e:
             logger.error(f"Failed to copy {media_file}: {e}")
@@ -371,17 +422,30 @@ def process_media_batch(batch_args):
         # Update file_paths and file_info with corrected paths
         file_paths = [corrections.get(p, p) for p in file_paths]
         file_info = [
-            (corrections.get(fp, fp), md, cn, eu) for fp, md, cn, eu in file_info
+            (corrections.get(fp, fp), md, cn, eu, ch)
+            for fp, md, cn, eu, ch in file_info
         ]
 
     # Phase 3: Update timestamps and compile results
-    for output_path, message_data, conversation_name, export_username in file_info:
+    for (
+        output_path,
+        message_data,
+        conversation_name,
+        export_username,
+        content_hash,
+    ) in file_info:
         update_file_timestamps(output_path, message_data.get("timestamp"))
         results.append(
             (
                 True,
                 output_path,
-                (output_path, message_data, conversation_name, export_username),
+                (
+                    output_path,
+                    message_data,
+                    conversation_name,
+                    export_username,
+                    content_hash,
+                ),
             )
         )
 
@@ -391,18 +455,17 @@ def process_media_batch(batch_args):
 def process_logic(
     input_dir,
     output_dir="final_googlevoice",
-    temp_dir="../pre",
-    verbose=False,
     workers=None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ):
-    """Core processing logic for Google Voice exports
+    """Core processing logic for Google Voice exports.
+
+    Expects input_dir to be preprocessed (via memoria.py preprocessing phase
+    or by calling GoogleVoiceProcessor.preprocess() directly).
 
     Args:
-        input_dir: Input directory (raw export or preprocessed)
+        input_dir: Input directory (must be preprocessed)
         output_dir: Output directory for processed files
-        temp_dir: Directory for temporary preprocessing files
-        verbose: Enable verbose logging
         workers: Number of parallel workers (None = auto-detect)
         dedup_manifest: Optional deduplication manifest for filtering secondary files
     """
@@ -452,7 +515,9 @@ def process_logic(
                     break
             if sample_message:
                 break
-        use_legacy_format = sample_message is None or "source_paths" not in sample_message
+        use_legacy_format = (
+            sample_message is None or "source_paths" not in sample_message
+        )
 
         if use_legacy_format:
             media_dir = os.path.join(working_dir, "media")
@@ -505,22 +570,37 @@ def process_logic(
                         source_file_name = media_file
                     else:
                         source_paths = message.get("source_paths", {})
-                        source_file_path = os.path.dirname(source_paths.get(media_file, ""))
-                        source_file_name = os.path.basename(source_paths.get(media_file, media_file))
+                        source_file_path = os.path.dirname(
+                            source_paths.get(media_file, "")
+                        )
+                        source_file_name = os.path.basename(
+                            source_paths.get(media_file, media_file)
+                        )
 
                     if dedup_manifest:
                         # Get full source path for within-processor dedup
-                        full_source_path = source_paths.get(media_file) if not use_legacy_format else None
+                        full_source_path = (
+                            source_paths.get(media_file)
+                            if not use_legacy_format
+                            else None
+                        )
                         if content_hash:
                             # Use cached hash from preprocessing (avoids re-hashing)
                             if not is_file_primary_by_hash(
-                                dedup_manifest, content_hash, "Google Voice", full_source_path
+                                dedup_manifest,
+                                content_hash,
+                                "Google Voice",
+                                full_source_path,
                             ):
                                 skipped_dedup += 1
                                 continue
                         else:
                             # Fallback for files without cached hash
-                            full_path = os.path.join(source_file_path, source_file_name) if source_file_path else source_file_name
+                            full_path = (
+                                os.path.join(source_file_path, source_file_name)
+                                if source_file_path
+                                else source_file_name
+                            )
                             if GoogleVoiceProcessor.should_skip_for_dedup(
                                 full_path, dedup_manifest, "Google Voice"
                             ):
@@ -538,7 +618,7 @@ def process_logic(
                         file_ext,
                     )
 
-                    # Create task tuple for worker
+                    # Create task tuple for worker (include content_hash for EXIF)
                     processing_tasks.append(
                         (
                             source_file_name,
@@ -548,6 +628,7 @@ def process_logic(
                             source_file_path,
                             output_dir,
                             export_username,
+                            content_hash,
                         )
                     )
 
@@ -610,33 +691,17 @@ def process_logic(
             extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
         )
 
-    # Determine if input needs preprocessing
-    if is_preprocessed_directory(input_dir):
-        logger.info(f"Input directory is already preprocessed: {input_dir}")
-        _process_working_directory(input_dir)
-        return
-
-    logger.info(f"Input directory is raw export: {input_dir}")
-    logger.info("Running preprocessing...")
-
-    # Run preprocessing into a managed temp directory, then process within it.
-    with GoogleVoicePreprocessor.temp_output_dir(temp_dir, "gvoice") as temp_dir_path:
-        logger.info(f"Preprocessing to: {temp_dir_path}")
-
-        # Run preprocessing with final output directory for failure tracking
-        # output_dir is already the processor-specific path
-        final_output_path = Path(output_dir)
-        preprocessor = GoogleVoicePreprocessor(
-            export_path=Path(input_dir),
-            output_dir=temp_dir_path,
-            workers=workers,
-            final_output_dir=final_output_path,
+    # Require preprocessed input
+    if not is_preprocessed_directory(input_dir):
+        logger.error(
+            "Input directory is not preprocessed: %s. "
+            "Call preprocess() first or run via memoria.py.",
+            input_dir,
         )
-        if not preprocessor.run():
-            return False
+        return False
 
-        logger.info(f"Preprocessing complete. Using: {temp_dir_path}")
-        _process_working_directory(str(temp_dir_path))
+    logger.info(f"Processing preprocessed directory: {input_dir}")
+    _process_working_directory(input_dir)
 
 
 def get_processor():

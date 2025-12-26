@@ -308,40 +308,12 @@ class DeduplicationService:
             total=len(exact_groups),
             unit="group",
         ):
-            best = self._select_best_file(files)
-            primary = self._determine_primary_source(files)
-            merged = self._merge_metadata(files)
-
-            duplicates[content_hash] = {
-                "match_type": "exact",
-                "primary": {
-                    "processor": primary.get("_processor"),
-                    "source_path": primary.get("source_path"),
-                    "content_hash": content_hash,
-                    "file_size": primary.get("file_size"),
-                },
-                "best_quality": {
-                    "processor": best.get("_processor"),
-                    "source_path": best.get("source_path"),
-                    "content_hash": content_hash,
-                    "file_size": best.get("file_size"),
-                },
-                "secondary": [
-                    {
-                        "processor": f.get("_processor"),
-                        "source_path": f.get("source_path"),
-                        "content_hash": f.get("content_hash"),
-                        "context": f.get("metadata", {}),
-                    }
-                    for f in files
-                    if f.get("source_path") != primary.get("source_path")
-                ],
-                "merged_metadata": merged,
-            }
-
-            total_duplicates += len(files) - 1
-            file_size = best.get("file_size", 0)
-            space_saved += file_size * (len(files) - 1)
+            entry, count, saved = self._build_duplicate_entry(
+                files, "exact", content_hash
+            )
+            duplicates[content_hash] = entry
+            total_duplicates += count
+            space_saved += saved
 
         # Process perceptual hash groups
         for group_id, files in progress_bar(
@@ -351,47 +323,13 @@ class DeduplicationService:
             total=len(perceptual_groups),
             unit="group",
         ):
-            best = self._select_best_file(files)
-            primary = self._determine_primary_source(files)
-            merged = self._merge_metadata(files)
-
+            entry, count, saved = self._build_duplicate_entry(files, "perceptual")
             # Use best file's content hash as key
+            best = self._select_best_file(files)
             key = f"perceptual_{best.get('content_hash', group_id)}"
-
-            duplicates[key] = {
-                "match_type": "perceptual",
-                "primary": {
-                    "processor": primary.get("_processor"),
-                    "source_path": primary.get("source_path"),
-                    "content_hash": primary.get("content_hash"),
-                    "file_size": primary.get("file_size"),
-                },
-                "best_quality": {
-                    "processor": best.get("_processor"),
-                    "source_path": best.get("source_path"),
-                    "content_hash": best.get("content_hash"),
-                    "file_size": best.get("file_size"),
-                },
-                "secondary": [
-                    {
-                        "processor": f.get("_processor"),
-                        "source_path": f.get("source_path"),
-                        "content_hash": f.get("content_hash"),
-                        "context": f.get("metadata", {}),
-                    }
-                    for f in files
-                    if f.get("source_path") != primary.get("source_path")
-                ],
-                "merged_metadata": merged,
-            }
-
-            # For perceptual duplicates, sum actual secondary file sizes
-            # (unlike exact duplicates, perceptual matches may have different sizes)
-            secondary_files = [
-                f for f in files if f.get("source_path") != primary.get("source_path")
-            ]
-            total_duplicates += len(secondary_files)
-            space_saved += sum(f.get("file_size", 0) for f in secondary_files)
+            duplicates[key] = entry
+            total_duplicates += count
+            space_saved += saved
 
         # Build statistics
         unique_files = total_files - total_duplicates
@@ -416,6 +354,77 @@ class DeduplicationService:
         )
 
         return manifest
+
+    def _build_duplicate_entry(
+        self,
+        files: List[Dict[str, Any]],
+        match_type: str,
+        content_hash: Optional[str] = None,
+    ) -> Tuple[Dict[str, Any], int, int]:
+        """Build a single duplicate entry with statistics.
+
+        Constructs a duplicate entry dictionary for either exact or perceptual
+        matches, along with the count of duplicates and space saved.
+
+        Args:
+            files: List of file entries in the duplicate group.
+            match_type: Either "exact" or "perceptual".
+            content_hash: For exact matches, the shared content hash.
+                          For perceptual matches, None (uses individual hashes).
+
+        Returns:
+            Tuple of (entry_dict, duplicate_count, space_saved_bytes).
+        """
+        best = self._select_best_file(files)
+        primary = self._determine_primary_source(files)
+        merged = self._merge_metadata(files)
+
+        # For exact matches, use the shared content_hash
+        # For perceptual matches, use individual file hashes
+        primary_hash = content_hash if content_hash else primary.get("content_hash")
+        best_hash = content_hash if content_hash else best.get("content_hash")
+
+        secondary_files = [
+            f for f in files if f.get("source_path") != primary.get("source_path")
+        ]
+
+        entry = {
+            "match_type": match_type,
+            "primary": {
+                "processor": primary.get("_processor"),
+                "source_path": primary.get("source_path"),
+                "content_hash": primary_hash,
+                "file_size": primary.get("file_size"),
+            },
+            "best_quality": {
+                "processor": best.get("_processor"),
+                "source_path": best.get("source_path"),
+                "content_hash": best_hash,
+                "file_size": best.get("file_size"),
+            },
+            "secondary": [
+                {
+                    "processor": f.get("_processor"),
+                    "source_path": f.get("source_path"),
+                    "content_hash": f.get("content_hash"),
+                    "context": f.get("metadata", {}),
+                }
+                for f in secondary_files
+            ],
+            "merged_metadata": merged,
+        }
+
+        duplicate_count = len(secondary_files)
+
+        if match_type == "exact":
+            # For exact duplicates, all files are identical, so use best file size
+            file_size = best.get("file_size", 0)
+            space_saved = file_size * duplicate_count
+        else:
+            # For perceptual duplicates, sum actual secondary file sizes
+            space_saved = sum(f.get("file_size", 0) for f in secondary_files)
+
+        return entry, duplicate_count, space_saved
 
     def _register_files(self, files: List[Dict[str, Any]]) -> None:
         """Register all files in the hash database.
@@ -1061,40 +1070,12 @@ class DeduplicationService:
             total=len(exact_groups),
             unit="group",
         ):
-            best = self._select_best_file(files)
-            primary = self._determine_primary_source(files)
-            merged = self._merge_metadata(files)
-
-            duplicates[content_hash] = {
-                "match_type": "exact",
-                "primary": {
-                    "processor": primary.get("_processor"),
-                    "source_path": primary.get("source_path"),
-                    "content_hash": content_hash,
-                    "file_size": primary.get("file_size"),
-                },
-                "best_quality": {
-                    "processor": best.get("_processor"),
-                    "source_path": best.get("source_path"),
-                    "content_hash": content_hash,
-                    "file_size": best.get("file_size"),
-                },
-                "secondary": [
-                    {
-                        "processor": f.get("_processor"),
-                        "source_path": f.get("source_path"),
-                        "content_hash": f.get("content_hash"),
-                        "context": f.get("metadata", {}),
-                    }
-                    for f in files
-                    if f.get("source_path") != primary.get("source_path")
-                ],
-                "merged_metadata": merged,
-            }
-
-            total_duplicates += len(files) - 1
-            file_size = best.get("file_size", 0)
-            space_saved += file_size * (len(files) - 1)
+            entry, count, saved = self._build_duplicate_entry(
+                files, "exact", content_hash
+            )
+            duplicates[content_hash] = entry
+            total_duplicates += count
+            space_saved += saved
 
         # Process perceptual hash groups
         for group_id, files in progress_bar(
@@ -1104,47 +1085,13 @@ class DeduplicationService:
             total=len(perceptual_groups),
             unit="group",
         ):
-            best = self._select_best_file(files)
-            primary = self._determine_primary_source(files)
-            merged = self._merge_metadata(files)
-
+            entry, count, saved = self._build_duplicate_entry(files, "perceptual")
             # Use best file's content hash as key
+            best = self._select_best_file(files)
             key = f"perceptual_{best.get('content_hash', group_id)}"
-
-            duplicates[key] = {
-                "match_type": "perceptual",
-                "primary": {
-                    "processor": primary.get("_processor"),
-                    "source_path": primary.get("source_path"),
-                    "content_hash": primary.get("content_hash"),
-                    "file_size": primary.get("file_size"),
-                },
-                "best_quality": {
-                    "processor": best.get("_processor"),
-                    "source_path": best.get("source_path"),
-                    "content_hash": best.get("content_hash"),
-                    "file_size": best.get("file_size"),
-                },
-                "secondary": [
-                    {
-                        "processor": f.get("_processor"),
-                        "source_path": f.get("source_path"),
-                        "content_hash": f.get("content_hash"),
-                        "context": f.get("metadata", {}),
-                    }
-                    for f in files
-                    if f.get("source_path") != primary.get("source_path")
-                ],
-                "merged_metadata": merged,
-            }
-
-            # For perceptual duplicates, sum actual secondary file sizes
-            # (unlike exact duplicates, perceptual matches may have different sizes)
-            secondary_files = [
-                f for f in files if f.get("source_path") != primary.get("source_path")
-            ]
-            total_duplicates += len(secondary_files)
-            space_saved += sum(f.get("file_size", 0) for f in secondary_files)
+            duplicates[key] = entry
+            total_duplicates += count
+            space_saved += saved
 
         # Build statistics
         unique_files = len(all_files) - total_duplicates
@@ -1606,19 +1553,11 @@ def get_merged_description_for_file(
             continue
 
         # Build primary source entry
-        merged_metadata = group.get("merged_metadata", {})
         primary_processor = primary.get("processor", "Unknown")
-
-        # Extract albums for primary
-        primary_albums = []
-        for album_info in merged_metadata.get("albums", []):
-            if album_info.get("source") == primary_processor:
-                primary_albums.append(album_info.get("name", ""))
 
         primary_entry = SourceEntry(
             processor=primary_processor,
             is_primary=True,
-            albums=primary_albums,
         )
 
         # Build secondary source entries, deduplicated by (processor, username)
@@ -1704,13 +1643,6 @@ def get_secondary_sources_for_hash(
 
     if group is None:
         return []
-
-    # Get primary info for deduplication
-    primary = group.get("primary", {})
-    primary_key = (
-        primary.get("processor", ""),
-        "",
-    )  # Primary has no username in manifest
 
     # Deduplicate secondary sources by (processor, username)
     # Only include sources from different processors than the primary

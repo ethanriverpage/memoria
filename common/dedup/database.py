@@ -10,11 +10,37 @@ hash matching.
 import json
 import logging
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Thread-local storage for database connections (one per thread for reads)
+_thread_local = threading.local()
+
+
+def get_thread_db(db_path: Optional[Path]) -> Optional["HashDatabase"]:
+    """Get or create a thread-local database connection for cache reads.
+
+    This is useful for parallel processing where each worker thread needs
+    its own database connection for thread-safe reads.
+
+    Args:
+        db_path: Path to the SQLite database file.
+
+    Returns:
+        HashDatabase instance for this thread, or None if db_path is None.
+    """
+    if db_path is None:
+        return None
+
+    if not hasattr(_thread_local, "db") or _thread_local.db_path != str(db_path):
+        _thread_local.db = HashDatabase(db_path)
+        _thread_local.db_path = str(db_path)
+
+    return _thread_local.db
 
 
 class HashDatabase:

@@ -41,12 +41,15 @@ from common.utils import (
     is_preprocessed_directory,
     update_file_timestamps,
 )
+from common.output.logging import get_processor_logger
 from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
 from processors.instagram_public_media.preprocess import InstagramPreprocessor
 
-# Set up logging
+# Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
+# Standardized processor logger for consistent output
+log = get_processor_logger(__name__)
 
 
 # ============================================================================
@@ -109,7 +112,7 @@ def detect(input_path: Path) -> bool:
         return False
 
     except Exception as e:
-        logger.debug(f"Detection failed for Instagram Public Media: {e}")
+        log.detection_failed("Instagram Public Media", e)
         return False
 
 
@@ -145,6 +148,45 @@ class InstagramPublicMediaProcessor(ProcessorBase):
     def supports_dedup() -> bool:
         """Return True - Instagram Public Media supports cross-processor deduplication."""
         return True
+
+    @staticmethod
+    def needs_preprocessing(input_dir: str) -> bool:
+        """Check if Instagram Public Media export needs preprocessing."""
+        # Check if already preprocessed
+        if is_preprocessed_directory(input_dir):
+            return False
+
+        input_path = Path(input_dir)
+        # Check for raw export structure (media/posts or media/stories)
+        media_dir = input_path / "media"
+        if media_dir.exists():
+            posts_dir = media_dir / "posts"
+            stories_dir = media_dir / "stories"
+            if posts_dir.exists() or stories_dir.exists():
+                return True
+
+        return False
+
+    @staticmethod
+    def preprocess(input_dir: str, cache_dir: str, **kwargs) -> Optional[str]:
+        """Run preprocessing on raw Instagram Public Media export."""
+        input_path = Path(input_dir)
+        cache_path = Path(cache_dir)
+        workers = kwargs.get("workers")
+
+        logger.info("Preprocessing Instagram Public Media export to: %s", cache_path)
+
+        cache_path.mkdir(parents=True, exist_ok=True)
+
+        preprocessor = InstagramPreprocessor(
+            export_path=input_path,
+            output_dir=cache_path,
+            workers=workers,
+        )
+
+        if preprocessor.run():
+            return str(cache_path)
+        return None
 
     @staticmethod
     def build_catalog(input_dir: str, **kwargs):
@@ -227,8 +269,6 @@ class InstagramPublicMediaProcessor(ProcessorBase):
             process_logic(
                 input_dir=input_dir,
                 output_dir=processor_output,
-                temp_dir=kwargs.get("temp_dir", "../pre"),
-                verbose=kwargs.get("verbose", False),
                 workers=kwargs.get("workers"),
                 dedup_manifest=dedup_manifest,
             )
@@ -245,19 +285,19 @@ class InstagramPublicMediaProcessor(ProcessorBase):
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[str, dict, str, str]],
+    file_info: List[Tuple[str, dict, str, str, Optional[str]]],
 ) -> List[MetadataWriteRequest]:
     """Build MetadataWriteRequest objects for Instagram Public Media files.
 
     Args:
-        file_info: List of (file_path, post_data, export_username, media_type) tuples
+        file_info: List of (file_path, post_data, export_username, media_type, content_hash) tuples
 
     Returns:
         List of MetadataWriteRequest objects
     """
     requests: List[MetadataWriteRequest] = []
 
-    for file_path, post_data, export_username, media_type in file_info:
+    for file_path, post_data, export_username, media_type, content_hash in file_info:
         # Build datetime tags
         datetime_tags: List[Tuple[str, str]] = []
         timestamp_str = post_data.get("timestamp")
@@ -299,6 +339,7 @@ def _build_metadata_requests(
                     default_description=default_description,
                 ),
                 processor_name="instagram_public",
+                content_hash=content_hash,
             )
         )
 
@@ -313,11 +354,11 @@ def process_media_batch(batch_args):
 
     Args:
         batch_args: List of tuples, each containing (media_file, post_data,
-                    output_filename, media_dir, output_dir, export_username, media_type)
+                    output_filename, media_dir, output_dir, export_username, media_type, content_hash)
 
     Returns:
         List of (success, output_path, file_info_tuple) tuples where file_info_tuple is
-        (output_path, post_data, export_username, media_type) or None on failure
+        (output_path, post_data, export_username, media_type, content_hash) or None on failure
     """
     results = []
 
@@ -334,6 +375,7 @@ def process_media_batch(batch_args):
             output_dir,
             export_username,
             media_type,
+            content_hash,
         ) = args_tuple
 
         media_path = os.path.join(media_dir, media_file)
@@ -348,7 +390,7 @@ def process_media_batch(batch_args):
         try:
             copy_file(media_path, output_path)
             file_paths.append(output_path)
-            file_info.append((output_path, post_data, export_username, media_type))
+            file_info.append((output_path, post_data, export_username, media_type, content_hash))
         except Exception as e:
             logger.error(f"Failed to copy {media_file}: {e}")
             results.append((False, None, None))
@@ -362,14 +404,14 @@ def process_media_batch(batch_args):
         # Update file_paths and file_info with corrected paths
         file_paths = [corrections.get(p, p) for p in file_paths]
         file_info = [
-            (corrections.get(fp, fp), pd, eu, mt) for fp, pd, eu, mt in file_info
+            (corrections.get(fp, fp), pd, eu, mt, ch) for fp, pd, eu, mt, ch in file_info
         ]
 
     # Phase 3: Update timestamps and compile results
-    for output_path, post_data, export_username, media_type in file_info:
+    for output_path, post_data, export_username, media_type, content_hash in file_info:
         update_file_timestamps(output_path, post_data.get("timestamp"))
         results.append(
-            (True, output_path, (output_path, post_data, export_username, media_type))
+            (True, output_path, (output_path, post_data, export_username, media_type, content_hash))
         )
 
     return results
@@ -378,24 +420,20 @@ def process_media_batch(batch_args):
 def process_logic(
     input_dir,
     output_dir="final_media",
-    temp_dir="../pre",
-    verbose=False,
     workers=None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ):
-    """Core processing logic for Instagram Public Media exports
+    """Core processing logic for Instagram Public Media exports.
+
+    Expects input_dir to be preprocessed (via memoria.py preprocessing phase
+    or by calling InstagramPublicProcessor.preprocess() directly).
 
     Args:
-        input_dir: Input directory (raw export or preprocessed)
+        input_dir: Input directory (must be preprocessed)
         output_dir: Output directory for processed files
-        temp_dir: Directory for temporary preprocessing files
-        verbose: Enable verbose logging
         workers: Number of parallel workers (None = auto-detect)
         dedup_manifest: Optional deduplication manifest for filtering secondary files
     """
-    # Logging is configured by the main process
-    # Verbose mode enables detailed logging to file
-
     # Check for exiftool
     if not check_exiftool():
         print_exiftool_error()
@@ -404,36 +442,17 @@ def process_logic(
     logger.info("Instagram Media Processor")
     logger.info("=" * 50)
 
-    # Check if input is already preprocessed
-    if is_preprocessed_directory(input_dir):
-        logger.info(f"Input directory is already preprocessed: {input_dir}")
-        _process_working_directory(input_dir, output_dir, workers, dedup_manifest)
-    else:
-        logger.info(f"Input directory is raw export: {input_dir}")
-        logger.info("Running preprocessing...")
+    # Require preprocessed input
+    if not is_preprocessed_directory(input_dir):
+        logger.error(
+            "Input directory is not preprocessed: %s. "
+            "Call preprocess() first or run via memoria.py.",
+            input_dir,
+        )
+        return False
 
-        # Use context manager for temp directory with automatic cleanup
-        with InstagramPreprocessor.temp_output_dir(temp_dir, "instagram") as temp_dir_path:
-            logger.info(f"Preprocessing to: {temp_dir_path}")
-
-            # Run preprocessing with final output directory for failure tracking
-            final_output_path = Path(output_dir)
-            preprocessor = InstagramPreprocessor(
-                export_path=Path(input_dir),
-                output_dir=temp_dir_path,
-                workers=workers,
-                final_output_dir=final_output_path,
-            )
-            if not preprocessor.run():
-                logger.warning(
-                    "Preprocessing failed - export may not have required structure"
-                )
-                return False
-
-            logger.info(f"Preprocessing complete. Using: {temp_dir_path}")
-            _process_working_directory(
-                str(temp_dir_path), output_dir, workers, dedup_manifest
-            )
+    logger.info(f"Processing preprocessed directory: {input_dir}")
+    _process_working_directory(input_dir, output_dir, workers, dedup_manifest)
 
 
 def _process_working_directory(
@@ -556,7 +575,7 @@ def _process_working_directory(
                 file_ext,
             )
 
-            # Create task tuple for worker
+            # Create task tuple for worker (include content_hash for EXIF)
             processing_tasks.append(
                 (
                     source_file_name,
@@ -566,6 +585,7 @@ def _process_working_directory(
                     output_dir,
                     export_username,
                     media_type,
+                    content_hash,
                 )
             )
 

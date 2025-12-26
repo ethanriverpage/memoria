@@ -138,6 +138,44 @@ class DiscordProcessor(ProcessorBase):
         return True
 
     @staticmethod
+    def needs_preprocessing(input_dir: str) -> bool:
+        """Check if Discord export needs preprocessing."""
+        input_path = Path(input_dir)
+
+        # Check if already preprocessed (has media/ directory)
+        media_dir = input_path / "media"
+        if media_dir.exists():
+            return False
+
+        # Check for raw export structure (Messages/ directory)
+        messages_dir = input_path / "Messages"
+        if messages_dir.exists():
+            return True
+
+        return False
+
+    @staticmethod
+    def preprocess(input_dir: str, cache_dir: str, **kwargs) -> Optional[str]:
+        """Run preprocessing on raw Discord export."""
+        input_path = Path(input_dir)
+        cache_path = Path(cache_dir)
+        workers = kwargs.get("workers")
+
+        log.logger.info("Preprocessing Discord export to: %s", cache_path)
+
+        cache_path.mkdir(parents=True, exist_ok=True)
+
+        preprocessor = DiscordPreprocessor(
+            export_path=input_path,
+            output_dir=cache_path,
+            workers=workers,
+        )
+
+        if preprocessor.run():
+            return str(cache_path)
+        return None
+
+    @staticmethod
     def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata (generator)."""
         input_path = Path(input_dir)
@@ -264,7 +302,6 @@ class DiscordProcessor(ProcessorBase):
             process_logic(
                 input_dir=input_dir,
                 output_dir=processor_output,
-                temp_dir=kwargs.get("temp_dir", "../pre"),
                 verbose=kwargs.get("verbose", False),
                 workers=kwargs.get("workers"),
                 dedup_manifest=dedup_manifest,
@@ -317,12 +354,19 @@ def _build_description(message_info: dict, export_username: str) -> str:
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[Optional[str], dict, str]],
+    file_info: List[Tuple[Optional[str], dict, str, Optional[str]]],
 ) -> List[MetadataWriteRequest]:
-    """Build MetadataWriteRequest objects for Discord files."""
+    """Build MetadataWriteRequest objects for Discord files.
+
+    Args:
+        file_info: List of (file_path, message_info, export_username, content_hash) tuples
+
+    Returns:
+        List of MetadataWriteRequest objects
+    """
     requests: List[MetadataWriteRequest] = []
 
-    for file_path, message_info, export_username in file_info:
+    for file_path, message_info, export_username, content_hash in file_info:
         if file_path is None:
             continue
         message = message_info.get("message", {})
@@ -353,6 +397,7 @@ def _build_metadata_requests(
                     default_description=default_description,
                 ),
                 processor_name="discord",
+                content_hash=content_hash,
             )
         )
 
@@ -410,7 +455,14 @@ def _build_discord_identifier(message_info: dict, export_username: str) -> str:
 
 def _process_file_worker(args_tuple):
     """Worker function for processing individual files."""
-    media_path, message_info, export_username, output_dir, output_filename = args_tuple
+    (
+        media_path,
+        message_info,
+        export_username,
+        output_dir,
+        output_filename,
+        content_hash,
+    ) = args_tuple
 
     try:
         output_path = output_dir / output_filename
@@ -423,22 +475,25 @@ def _process_file_worker(args_tuple):
         if timestamp_str:
             update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
 
-        return (True, str(output_path), message_info, export_username)
+        return (True, str(output_path), message_info, export_username, content_hash)
 
     except Exception as e:
         logger.error(f"Error processing {media_path.name}: {e}")
-        return (False, None, message_info, export_username)
+        return (False, None, message_info, export_username, content_hash)
 
 
 def process_logic(
     input_dir: str,
     output_dir: str = "processed_discord",
-    temp_dir: str = "../pre",
     verbose: bool = False,  # noqa: ARG001
     workers: Optional[int] = None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ):
-    """Core processing logic for Discord exports."""
+    """Core processing logic for Discord exports.
+
+    Expects input_dir to be preprocessed (via memoria.py preprocessing phase
+    or by calling DiscordProcessor.preprocess() directly).
+    """
     # Validate input directory exists
     input_path = Path(input_dir)
     if not input_path.exists():
@@ -452,45 +507,19 @@ def process_logic(
 
     log.processor_start("Discord Processor")
 
-    # Determine if input needs preprocessing
     output_path = Path(output_dir)
 
-    # Check if input is already preprocessed
-    if is_preprocessed_directory(str(input_path)):
-        log.already_preprocessed(str(input_path))
-        _process_working_directory(input_path, output_path, workers, dedup_manifest)
-    else:
-        # Check for preprocessing cache from catalog phase
-        cache_path = get_preprocessing_cache_path(input_path, "Discord")
+    # Require preprocessed input
+    if not is_preprocessed_directory(str(input_path)):
+        log.logger.error(
+            "Input directory is not preprocessed: %s. "
+            "Call preprocess() first or run via memoria.py.",
+            input_path,
+        )
+        return
 
-        if is_preprocessing_cache_valid(cache_path):
-            log.using_cache(str(cache_path))
-            _process_working_directory(cache_path, output_path, workers, dedup_manifest)
-        else:
-            log.raw_export_detected(str(input_path))
-            log.logger.info("Running preprocessing (downloading attachments)...")
-
-            # Use context manager for temp directory with automatic cleanup
-            with DiscordPreprocessor.temp_output_dir(
-                temp_dir, "discord"
-            ) as temp_dir_path:
-                log.preprocessing_to(str(temp_dir_path))
-
-                # Run preprocessing
-                # Note: output_dir already has /messages appended by the caller (process method)
-                preprocessor = DiscordPreprocessor(
-                    export_path=input_path,
-                    output_dir=temp_dir_path,
-                    workers=workers,
-                    final_output_dir=output_path,
-                )
-                if not preprocessor.run():
-                    return
-
-                log.preprocessing_done(str(temp_dir_path))
-                _process_working_directory(
-                    temp_dir_path, output_path, workers, dedup_manifest
-                )
+    log.already_preprocessed(str(input_path))
+    _process_working_directory(input_path, output_path, workers, dedup_manifest)
 
 
 def _process_working_directory(
@@ -546,7 +575,9 @@ def _process_working_directory(
             source_path_str = str(f)
             if content_hash:
                 # Use cached hash from preprocessing (avoids re-hashing)
-                if is_file_primary_by_hash(dedup_manifest, content_hash, "Discord", source_path_str):
+                if is_file_primary_by_hash(
+                    dedup_manifest, content_hash, "Discord", source_path_str
+                ):
                     filtered_files.append(f)
                 else:
                     skipped_secondary_files.append(str(f))
@@ -585,7 +616,11 @@ def _process_working_directory(
             # Remove " UTC" suffix for parsing
             timestamp_clean = timestamp.replace(" UTC", "").strip() if timestamp else ""
             output_filename = filename_gen.generate(timestamp_clean, identifier, ext)
-            matched_files.append((media_file, message_info, output_filename))
+            # Get content_hash from preprocessing
+            content_hash = file_hashes.get(media_file.name)
+            matched_files.append(
+                (media_file, message_info, output_filename, content_hash)
+            )
         else:
             unmatched_files.append(media_file)
 
@@ -601,7 +636,7 @@ def _process_working_directory(
 
     # Prepare arguments for parallel processing
     process_args = []
-    for media_file, message_info, output_filename in matched_files:
+    for media_file, message_info, output_filename, content_hash in matched_files:
         process_args.append(
             (
                 media_file,
@@ -609,6 +644,7 @@ def _process_working_directory(
                 export_username,
                 output_dir,
                 output_filename,
+                content_hash,
             )
         )
 
@@ -636,11 +672,11 @@ def _process_working_directory(
     file_paths = []
     file_info = []
 
-    for success, output_path, message_info, exp_username in results:
+    for success, output_path, message_info, exp_username, content_hash in results:
         if success and output_path:
             success_count += 1
             file_paths.append(output_path)
-            file_info.append((output_path, message_info, exp_username))
+            file_info.append((output_path, message_info, exp_username, content_hash))
         else:
             failed_count += 1
 

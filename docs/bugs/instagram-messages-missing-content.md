@@ -136,6 +136,7 @@ exiftool -ImageDescription /path/to/processed/instagram-messages*.jpg | head -5
 ```
 
 Should show:
+
 ```
 Source: Instagram/username/messages
   - sender in "Conversation": "message text here"
@@ -144,9 +145,7 @@ Source: Instagram/username/messages
 ## Related
 
 - POTENTIAL_REFACTORS.md #45
-- `docs/bugs/dedup-merged-description-not-wired.md` (documents this issue alongside the main merged description bug)
 
 ## Priority
 
 **Low** - Descriptions work correctly, just missing the message content text. Functionality is not broken, just incomplete.
-

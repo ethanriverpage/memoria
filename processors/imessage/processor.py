@@ -38,11 +38,15 @@ from common.utils import (
     sanitize_filename,
     update_file_timestamps,
 )
+from common.output.logging import get_processor_logger
 from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
 from processors.imessage.preprocess import IMessagePreprocessor
 
+# Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
+# Standardized processor logger for consistent output
+log = get_processor_logger(__name__)
 
 
 # ============================================================================
@@ -99,7 +103,7 @@ def detect(input_path: Path) -> bool:
         return False
 
     except Exception as e:
-        logger.debug(f"Detection failed for iMessage: {e}")
+        log.detection_failed("iMessage", e)
         return False
 
 
@@ -145,6 +149,46 @@ class IMessageProcessor(ProcessorBase):
     def supports_dedup() -> bool:
         """Return True - iMessage supports cross-processor deduplication."""
         return True
+
+    @staticmethod
+    def needs_preprocessing(input_dir: str) -> bool:
+        """Check if iMessage export needs preprocessing."""
+        input_path = Path(input_dir)
+
+        # Check if already preprocessed (has metadata.json)
+        metadata_file = input_path / "metadata.json"
+        if metadata_file.exists():
+            return False
+
+        # Check for raw export structure (chat.db or SMS/sms.db)
+        if (input_path / "chat.db").exists():
+            return True
+        sms_dir = input_path / "SMS"
+        if sms_dir.exists() and (sms_dir / "sms.db").exists():
+            return True
+
+        return False
+
+    @staticmethod
+    def preprocess(input_dir: str, cache_dir: str, **kwargs) -> Optional[str]:
+        """Run preprocessing on raw iMessage export."""
+        input_path = Path(input_dir)
+        cache_path = Path(cache_dir)
+        workers = kwargs.get("workers")
+
+        logger.info("Preprocessing iMessage export to: %s", cache_path)
+
+        cache_path.mkdir(parents=True, exist_ok=True)
+
+        preprocessor = IMessagePreprocessor(
+            export_paths=input_path,
+            output_dir=cache_path,
+            workers=workers,
+        )
+
+        if preprocessor.run():
+            return str(cache_path)
+        return None
 
     @staticmethod
     def build_catalog(input_dir: str, **kwargs):
@@ -246,7 +290,6 @@ class IMessageProcessor(ProcessorBase):
         return process_logic(
             input_dirs=input_dirs,
             output_dir=processor_output,
-            temp_dir=kwargs.get("temp_dir", "../pre"),
             verbose=kwargs.get("verbose", False),
             workers=kwargs.get("workers"),
             dedup_manifest=dedup_manifest,
@@ -461,19 +504,19 @@ def _build_description(message: dict, export_username: str) -> str:
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[Optional[str], dict, str]],
+    file_info: List[Tuple[Optional[str], dict, str, Optional[str]]],
 ) -> List[MetadataWriteRequest]:
     """Build MetadataWriteRequest objects for iMessage files.
 
     Args:
-        file_info: List of (file_path, message, export_username) tuples
+        file_info: List of (file_path, message, export_username, content_hash) tuples
 
     Returns:
         List of MetadataWriteRequest objects
     """
     requests: List[MetadataWriteRequest] = []
 
-    for file_path, message, export_username in file_info:
+    for file_path, message, export_username, content_hash in file_info:
         if file_path is None:
             continue
         is_merged = "messages" in message and isinstance(message["messages"], list)
@@ -507,6 +550,7 @@ def _build_metadata_requests(
                     default_description=default_description,
                 ),
                 processor_name="imessage",
+                content_hash=content_hash,
             )
         )
 
@@ -635,12 +679,14 @@ def _process_file_worker(args_tuple):
     """Worker function for processing files (Phase 1: copy and rename).
 
     Args:
-        args_tuple: Tuple of (media_path, message, export_username, output_dir, output_filename)
+        args_tuple: Tuple of (media_path, message, export_username, output_dir, output_filename, content_hash)
 
     Returns:
-        Tuple of (success, output_path, message, export_username)
+        Tuple of (success, output_path, message, export_username, content_hash)
     """
-    media_path, message, export_username, output_dir, output_filename = args_tuple
+    media_path, message, export_username, output_dir, output_filename, content_hash = (
+        args_tuple
+    )
 
     try:
         output_path = output_dir / output_filename
@@ -652,11 +698,11 @@ def _process_file_worker(args_tuple):
         timestamp_str = _extract_message_timestamp(message)
         update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
 
-        return (True, str(output_path), message, export_username)
+        return (True, str(output_path), message, export_username, content_hash)
 
     except Exception as e:
         logger.error(f"Error processing {media_path.name}: {e}")
-        return (False, None, message, export_username)
+        return (False, None, message, export_username, content_hash)
 
 
 # ============================================================================
@@ -667,17 +713,18 @@ def _process_file_worker(args_tuple):
 def process_logic(
     input_dirs: List[str],
     output_dir: Optional[str] = None,
-    temp_dir: str = "../pre",
     verbose: bool = False,  # noqa: ARG001 - Reserved for future detailed logging
     workers: Optional[int] = None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Core processing logic for iMessage exports.
 
+    Expects a single preprocessed input directory (via memoria.py preprocessing
+    phase or by calling IMessageProcessor.preprocess() directly).
+
     Args:
-        input_dirs: List of input directories (raw exports or preprocessed)
+        input_dirs: List containing a single preprocessed input directory
         output_dir: Output directory for processed files (final path, no subdirs created)
-        temp_dir: Directory for temporary preprocessing files
         verbose: Enable verbose logging
         workers: Number of parallel workers
         dedup_manifest: Optional deduplication manifest for filtering secondary files
@@ -692,10 +739,30 @@ def process_logic(
 
     logger.info("iMessage Processor")
     logger.info("=" * 50)
-    logger.info(f"Processing {len(input_dirs)} export(s)")
 
     # Convert to paths
     input_paths = [Path(d) for d in input_dirs]
+
+    # Require single preprocessed input
+    if len(input_paths) != 1:
+        logger.error(
+            "iMessage process_logic requires a single preprocessed input. "
+            "Got %d inputs. Use preprocess() to consolidate multiple exports first.",
+            len(input_paths),
+        )
+        return False
+
+    working_dir = input_paths[0]
+
+    if not is_preprocessed(working_dir):
+        logger.error(
+            "Input directory is not preprocessed: %s. "
+            "Call preprocess() first or run via memoria.py.",
+            working_dir,
+        )
+        return False
+
+    logger.info(f"Processing preprocessed export: {working_dir}")
 
     # Determine output directory (use as-is, subdirectory created by caller)
     if output_dir:
@@ -705,40 +772,9 @@ def process_logic(
 
     messages_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check if all inputs are already preprocessed
-    all_preprocessed = all(is_preprocessed(p) for p in input_paths)
-
-    if all_preprocessed and len(input_paths) == 1:
-        # Single preprocessed export - use directly
-        working_dir = input_paths[0]
-        logger.info(f"Using preprocessed export: {working_dir}")
-        return _process_working_directory(
-            working_dir, messages_output_dir, workers, dedup_manifest
-        )
-    else:
-        # Need to run preprocessing (handles raw exports and consolidation)
-        logger.info("Running preprocessing...")
-
-        # Use context manager for temp directory with automatic cleanup
-        with IMessagePreprocessor.temp_output_dir(temp_dir, "imessage") as temp_dir_path:
-            logger.info(f"Preprocessing to: {temp_dir_path}")
-
-            # Run preprocessor with all exports
-            preprocessor = IMessagePreprocessor(
-                export_paths=input_paths,
-                output_dir=temp_dir_path,
-                workers=workers,
-                final_output_dir=messages_output_dir,
-            )
-
-            if not preprocessor.run():
-                logger.error("Preprocessing failed")
-                return False
-
-            logger.info(f"Preprocessing complete. Using: {temp_dir_path}")
-            return _process_working_directory(
-                temp_dir_path, messages_output_dir, workers, dedup_manifest
-            )
+    return _process_working_directory(
+        working_dir, messages_output_dir, workers, dedup_manifest
+    )
 
 
 def _process_working_directory(
@@ -777,7 +813,9 @@ def _process_working_directory(
 
     # Check if this is new format (source_path in metadata) or legacy format (media/ directory)
     # Sample the first message to detect format
-    sample_message = next(iter(filename_index.values()), None) if filename_index else None
+    sample_message = (
+        next(iter(filename_index.values()), None) if filename_index else None
+    )
     use_legacy_format = sample_message is None or "source_path" not in sample_message
 
     if use_legacy_format:
@@ -831,7 +869,11 @@ def _process_working_directory(
                 identifier = _build_imessage_identifier(message)
                 timestamp = _extract_message_timestamp(message)
                 output_filename = filename_gen.generate(timestamp, identifier, file_ext)
-                matched_files.append((media_file, message, output_filename))
+                # Get content_hash for EXIF metadata
+                content_hash = file_hashes.get(media_file.name)
+                matched_files.append(
+                    (media_file, message, output_filename, content_hash)
+                )
             else:
                 logger.warning(f"No metadata for file: {media_file.name}")
     else:
@@ -869,7 +911,9 @@ def _process_working_directory(
             identifier = _build_imessage_identifier(message)
             timestamp = _extract_message_timestamp(message)
             output_filename = filename_gen.generate(timestamp, identifier, file_ext)
-            matched_files.append((source_path, message, output_filename))
+            # Get content_hash for EXIF metadata
+            content_hash = file_hashes.get(media_filename)
+            matched_files.append((source_path, message, output_filename, content_hash))
 
     if skipped_dedup > 0:
         logger.info(f"Skipped {skipped_dedup} secondary files (dedup)")
@@ -883,10 +927,17 @@ def _process_working_directory(
     num_workers = workers if workers is not None else default_worker_count()
     logger.info(f"Using {num_workers} workers")
 
-    # Prepare arguments
+    # Prepare arguments (include content_hash for EXIF)
     process_args = [
-        (media_file, message, export_username, output_dir, output_filename)
-        for media_file, message, output_filename in matched_files
+        (
+            media_file,
+            message,
+            export_username,
+            output_dir,
+            output_filename,
+            content_hash,
+        )
+        for media_file, message, output_filename, content_hash in matched_files
     ]
 
     # Phase 1: Copy and rename files
@@ -911,11 +962,11 @@ def _process_working_directory(
     file_paths = []
     file_info = []
 
-    for success, output_path, message, exp_username in results:
+    for success, output_path, message, exp_username, content_hash in results:
         if success and output_path:
             success_count += 1
             file_paths.append(output_path)
-            file_info.append((output_path, message, exp_username))
+            file_info.append((output_path, message, exp_username, content_hash))
         else:
             failed_count += 1
 

@@ -106,6 +106,7 @@ def create_imessage_chat_db(db_path: Path) -> Path:
         ROWID INTEGER PRIMARY KEY,
         guid TEXT UNIQUE,
         text TEXT,
+        attributedBody BLOB,
         handle_id INTEGER,
         date INTEGER,
         is_from_me INTEGER DEFAULT 0,
@@ -123,7 +124,8 @@ def create_imessage_chat_db(db_path: Path) -> Path:
         guid TEXT UNIQUE,
         chat_identifier TEXT,
         display_name TEXT,
-        group_id TEXT
+        group_id TEXT,
+        style INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS chat_message_join (
@@ -145,7 +147,9 @@ def create_imessage_chat_db(db_path: Path) -> Path:
         mime_type TEXT,
         transfer_name TEXT,
         created_date INTEGER,
-        total_bytes INTEGER
+        total_bytes INTEGER,
+        is_outgoing INTEGER DEFAULT 0,
+        transfer_state INTEGER DEFAULT 5
     );
 
     CREATE TABLE IF NOT EXISTS message_attachment_join (

@@ -186,7 +186,9 @@ class TestProcessorGetOutputInfo:
         """Instagram Public Media should return correct OutputInfo."""
         info = instagram_public_processor.get_output_info()
         assert info.platform == "Instagram"
-        assert info.service == "posts"
+        # Note: service="public-media" matches the subdirectory created by process()
+        # The actual service subdirs (posts, stories, reels, etc.) are inside public-media
+        assert info.service == "public-media"
         assert info.username_prefix == "instagram"
 
     def test_snapchat_memories_output_info(self, snapchat_memories_processor):

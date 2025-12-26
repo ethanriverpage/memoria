@@ -20,11 +20,14 @@ from common.output.progress import PHASE_PREPROCESS, futures_progress
 from common.preprocess.context_mergers import merge_albums
 from common.processing import print_preprocessing_stats
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
+from common.output.logging import get_processor_logger
 from common.utils import ALL_MEDIA_EXTENSIONS
 from processors.preprocess_base import PreprocessorBase, CopyTask
 
-# Set up logging
+# Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
+# Standardized processor logger for consistent output
+log = get_processor_logger(__name__)
 
 
 class GooglePhotosPreprocessor(PreprocessorBase):

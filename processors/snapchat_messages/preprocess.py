@@ -18,11 +18,14 @@ import re
 from common.detection import DetectionResult
 from common.files.utils import copy_file
 from common.preprocess.context_mergers import merge_snapchat_context
+from common.output.logging import get_processor_logger
 from common.processing import print_preprocessing_stats
 from processors.preprocess_base import PreprocessorBase, CopyTask
 
-# Set up logging
+# Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
+# Standardized processor logger for consistent output
+log = get_processor_logger(__name__)
 
 
 class SnapchatPreprocessor(PreprocessorBase):

@@ -6,16 +6,22 @@ Tests verify that processors handle error conditions gracefully:
 - Missing files (metadata references non-existent files)
 - Corrupted files (invalid headers, truncated files)
 - Disk space errors (simulated via mocking)
+
+Note: Processors require preprocessed input. Tests for process() must call
+preprocess() first to set up the required metadata.json and media structure.
 """
 
 import errno
 import json
 import shutil
 import stat
+from pathlib import Path
+from typing import Type
 from unittest.mock import patch
 
 import pytest
 
+from processors.base import ProcessorBase
 from tests.fixtures.generators import (
     create_google_photos_export,
 )
@@ -32,6 +38,18 @@ skip_no_exiftool = pytest.mark.skipif(
 skip_no_ffmpeg = pytest.mark.skipif(not FFMPEG_AVAILABLE, reason="ffmpeg not installed")
 
 
+def preprocess_export(
+    processor_class: Type[ProcessorBase],
+    export_dir: Path,
+    cache_dir: Path,
+    **kwargs,
+) -> str:
+    """Run preprocessing on a raw export and return the working directory."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    working_dir = processor_class.preprocess(str(export_dir), str(cache_dir), **kwargs)
+    return working_dir if working_dir else str(cache_dir)
+
+
 @pytest.mark.integration
 class TestPermissionErrors:
     """Tests for permission error handling."""
@@ -42,9 +60,11 @@ class TestPermissionErrors:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         create_google_photos_export(export_dir)
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
         output_dir.mkdir()
 
         # Make output directory read-only
@@ -53,7 +73,7 @@ class TestPermissionErrors:
         try:
             # Should fail gracefully without crashing
             result = GooglePhotosProcessor.process(
-                str(export_dir), str(output_dir), verbose=False
+                working_dir, str(output_dir), verbose=False
             )
             # Result should be False due to permission error
             # (or True if processor handles it differently)
@@ -71,24 +91,26 @@ class TestPermissionErrors:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         create_google_photos_export(export_dir)
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
-        # Make all files in export read-only
-        for file_path in export_dir.rglob("*"):
+        # Make all files in working directory read-only
+        for file_path in Path(working_dir).rglob("*"):
             if file_path.is_file():
                 file_path.chmod(stat.S_IRUSR)
 
         try:
             # Should still work (reading is allowed)
             result = GooglePhotosProcessor.process(
-                str(export_dir), str(output_dir), verbose=False
+                working_dir, str(output_dir), verbose=False
             )
             assert isinstance(result, bool)
         finally:
             # Restore permissions for cleanup
-            for file_path in export_dir.rglob("*"):
+            for file_path in Path(working_dir).rglob("*"):
                 if file_path.is_file():
                     file_path.chmod(stat.S_IRWXU)
 
@@ -106,24 +128,27 @@ class TestMissingFiles:
         export_dir = tmp_path / "export"
         output_dir = tmp_path / "output"
 
-        # Create directories
+        # Create preprocessed-format directory structure
         media_dir = export_dir / "media"
         overlays_dir = export_dir / "overlays"
         media_dir.mkdir(parents=True)
         overlays_dir.mkdir(parents=True)
 
-        # Create metadata referencing non-existent file
-        metadata = [
-            {
-                "date": "2021-01-01 12:00:00 UTC",
-                "media_type": "Image",
-                "media_filename": "missing_photo.jpg",  # File doesn't exist
-                "overlay_filename": None,
-            }
-        ]
+        # Create metadata referencing non-existent file (preprocessed format)
+        metadata = {
+            "export_info": {"export_name": "test"},
+            "memories": [
+                {
+                    "date": "2021-01-01 12:00:00 UTC",
+                    "media_type": "Image",
+                    "media_filename": "missing_photo.jpg",  # File doesn't exist
+                    "overlay_filename": None,
+                }
+            ],
+        }
         (export_dir / "metadata.json").write_text(json.dumps(metadata))
 
-        # Should not crash
+        # Should not crash (preprocessed format provided directly)
         try:
             result = SnapchatMemoriesProcessor.process(
                 str(export_dir), str(output_dir), verbose=False
@@ -139,6 +164,7 @@ class TestMissingFiles:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         # Create minimal structure
@@ -153,10 +179,13 @@ class TestMissingFiles:
         (album_dir / "ghost_photo.jpg.json").write_text(json.dumps(metadata))
         # Don't create the actual photo file
 
+        # Preprocess first (may handle missing file gracefully)
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
+
         # Should not crash on missing file
         try:
             result = GooglePhotosProcessor.process(
-                str(export_dir), str(output_dir), verbose=False
+                working_dir, str(output_dir), verbose=False
             )
             assert isinstance(result, bool)
         except Exception:
@@ -174,6 +203,7 @@ class TestCorruptedFiles:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         album_dir = export_dir / "Google Photos" / "Test Album"
@@ -190,10 +220,13 @@ class TestCorruptedFiles:
         }
         (album_dir / "corrupted.jpg.json").write_text(json.dumps(metadata))
 
+        # Preprocess first
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
+
         # Should not crash on corrupted file
         try:
             result = GooglePhotosProcessor.process(
-                str(export_dir), str(output_dir), verbose=False
+                working_dir, str(output_dir), verbose=False
             )
             assert isinstance(result, bool)
         except Exception:
@@ -206,6 +239,7 @@ class TestCorruptedFiles:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         album_dir = export_dir / "Google Photos" / "Videos"
@@ -221,9 +255,12 @@ class TestCorruptedFiles:
         }
         (album_dir / "truncated.mp4.json").write_text(json.dumps(metadata))
 
+        # Preprocess first
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
+
         try:
             result = GooglePhotosProcessor.process(
-                str(export_dir), str(output_dir), verbose=False
+                working_dir, str(output_dir), verbose=False
             )
             assert isinstance(result, bool)
         except Exception:
@@ -235,6 +272,7 @@ class TestCorruptedFiles:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         album_dir = export_dir / "Google Photos" / "Test Album"
@@ -246,9 +284,13 @@ class TestCorruptedFiles:
         # Create malformed JSON
         (album_dir / "photo.jpg.json").write_text("{invalid json content}")
 
+        # Preprocess first (may fail during preprocessing due to JSON error)
         try:
+            working_dir = preprocess_export(
+                GooglePhotosProcessor, export_dir, cache_dir
+            )
             result = GooglePhotosProcessor.process(
-                str(export_dir), str(output_dir), verbose=False
+                working_dir, str(output_dir), verbose=False
             )
             assert isinstance(result, bool)
         except json.JSONDecodeError:
@@ -266,9 +308,11 @@ class TestDiskSpaceErrors:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         create_google_photos_export(export_dir)
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         def raise_enospc(*args, **kwargs):
             raise OSError(errno.ENOSPC, "No space left on device")
@@ -277,7 +321,7 @@ class TestDiskSpaceErrors:
         with patch("shutil.copy2", side_effect=raise_enospc):
             try:
                 result = GooglePhotosProcessor.process(
-                    str(export_dir), str(output_dir), verbose=False
+                    working_dir, str(output_dir), verbose=False
                 )
                 # Should fail gracefully
                 assert result is False or isinstance(result, bool)
@@ -296,15 +340,19 @@ class TestEmptyExports:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         # Create album with no files
         album_dir = export_dir / "Google Photos" / "Empty Album"
         album_dir.mkdir(parents=True)
 
+        # Preprocess first
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
+
         try:
             result = GooglePhotosProcessor.process(
-                str(export_dir), str(output_dir), verbose=False
+                working_dir, str(output_dir), verbose=False
             )
             assert isinstance(result, bool)
         except Exception:
@@ -324,8 +372,10 @@ class TestEmptyExports:
         media_dir.mkdir(parents=True)
         overlays_dir.mkdir(parents=True)
 
-        # Empty metadata array
-        (export_dir / "metadata.json").write_text("[]")
+        # Empty metadata in preprocessed format
+        (export_dir / "metadata.json").write_text(
+            json.dumps({"export_info": {}, "memories": []})
+        )
 
         try:
             result = SnapchatMemoriesProcessor.process(
@@ -346,12 +396,15 @@ class TestConcurrentModification:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         create_google_photos_export(
             export_dir,
             albums={"Test": ["photo1.jpg", "photo2.jpg", "photo3.jpg"]},
         )
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
+        working_path = Path(working_dir)
 
         original_copy2 = shutil.copy2
         call_count = [0]
@@ -360,15 +413,16 @@ class TestConcurrentModification:
             call_count[0] += 1
             if call_count[0] == 2:
                 # Delete a different file to simulate concurrent deletion
-                photo3 = export_dir / "Google Photos" / "Test" / "photo3.jpg"
-                if photo3.exists():
-                    photo3.unlink()
+                for media_file in working_path.rglob("*.jpg"):
+                    if media_file.name == "photo3.jpg" and media_file.exists():
+                        media_file.unlink()
+                        break
             return original_copy2(src, dst, **kwargs)
 
         with patch("shutil.copy2", side_effect=delete_file_on_second_call):
             try:
                 result = GooglePhotosProcessor.process(
-                    str(export_dir), str(output_dir), verbose=False
+                    working_dir, str(output_dir), verbose=False
                 )
                 assert isinstance(result, bool)
             except FileNotFoundError:
@@ -386,6 +440,7 @@ class TestSpecialCharacterPaths:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export"
+        cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
         # Create album with unicode name
@@ -396,9 +451,12 @@ class TestSpecialCharacterPaths:
         metadata = {"title": "photo.jpg", "photoTakenTime": {"timestamp": "1609459200"}}
         (album_dir / "photo.jpg.json").write_text(json.dumps(metadata))
 
+        # Preprocess first
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
+
         try:
             result = GooglePhotosProcessor.process(
-                str(export_dir), str(output_dir), verbose=False
+                working_dir, str(output_dir), verbose=False
             )
             assert isinstance(result, bool)
         except Exception:
@@ -410,6 +468,7 @@ class TestSpecialCharacterPaths:
         from processors.google_photos.processor import GooglePhotosProcessor
 
         export_dir = tmp_path / "export with spaces"
+        cache_dir = tmp_path / "cache with spaces"
         output_dir = tmp_path / "output with spaces"
 
         create_google_photos_export(
@@ -417,9 +476,12 @@ class TestSpecialCharacterPaths:
             albums={"Album With Spaces": ["photo with spaces.jpg"]},
         )
 
+        # Preprocess first
+        working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
+
         try:
             result = GooglePhotosProcessor.process(
-                str(export_dir), str(output_dir), verbose=False
+                working_dir, str(output_dir), verbose=False
             )
             assert isinstance(result, bool)
         except Exception:

@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Iterable, Optional, Set, Tuple, Union
 
 import xxhash
 
@@ -49,6 +49,7 @@ if PERCEPTION_AVAILABLE:
         pass
 
 from common.files.utils import short_path
+from common.media.probe import VideoMetadata, get_video_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -64,22 +65,8 @@ from common.utils import (  # noqa: E402
 )
 
 
-@dataclass
-class VideoInfo:
-    """Container for video stream info extracted in a single FFprobe call.
-
-    Used by _get_video_info() to consolidate has_video_stream and dimensions
-    detection into one subprocess call for better performance.
-
-    Attributes:
-        has_video: True if the file contains a video stream.
-        width: Video width in pixels, or None if no video stream.
-        height: Video height in pixels, or None if no video stream.
-    """
-
-    has_video: bool
-    width: Optional[int] = None
-    height: Optional[int] = None
+# Backwards-compatible alias for internal usage
+VideoInfo = VideoMetadata
 
 
 def is_perceptual_hash_available() -> bool:
@@ -249,8 +236,9 @@ def compute_image_hash_with_dims(
 def _get_video_info(video_path: Path) -> Optional[VideoInfo]:
     """Get video stream presence and dimensions in ONE ffprobe call.
 
-    This consolidates has_video_stream() and get_video_dimensions() into a
-    single subprocess call for better performance.
+    This is a thin wrapper around get_video_metadata() from common.media.probe.
+    Consolidates has_video_stream() and get_video_dimensions() into a single
+    subprocess call for better performance.
 
     Args:
         video_path: Path to the video file.
@@ -258,57 +246,7 @@ def _get_video_info(video_path: Path) -> Optional[VideoInfo]:
     Returns:
         VideoInfo with has_video and dimensions, or None if ffprobe failed.
     """
-    try:
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=codec_type,width,height",
-            "-of",
-            "csv=p=0",
-            str(video_path),
-        ]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            timeout=10,
-        )
-
-        if result.returncode != 0:
-            return VideoInfo(has_video=False)
-
-        output = result.stdout.decode().strip()
-        if not output:
-            return VideoInfo(has_video=False)
-
-        # Output format: "codec_type,width,height" e.g., "video,1920,1080"
-        # Take only the first line (first video stream)
-        first_line = output.split("\n")[0].strip()
-        parts = first_line.split(",")
-
-        # Check if this is a video stream
-        if len(parts) < 1 or "video" not in parts[0].lower():
-            return VideoInfo(has_video=False)
-
-        # Extract dimensions if available
-        width = None
-        height = None
-        if len(parts) >= 3:
-            try:
-                width = int(parts[1])
-                height = int(parts[2])
-            except (ValueError, TypeError):
-                pass
-
-        return VideoInfo(has_video=True, width=width, height=height)
-
-    except Exception as e:
-        logger.debug(f"Video info failed: {short_path(video_path)}: {e}")
-        return None
+    return get_video_metadata(video_path)
 
 
 def _extract_frame_unchecked(
@@ -680,3 +618,46 @@ def find_live_photo_video(
             return video_path
 
     return None
+
+
+def find_live_photo_videos_in_files(files: Iterable[Path]) -> Set[Path]:
+    """Find all Live Photo video files from a collection of files.
+
+    Scans the provided files to identify which videos are paired with images
+    as Live Photo pairs. These video files should typically be excluded from
+    main processing and cataloged together with their image counterparts.
+
+    Args:
+        files: Iterable of file paths to scan for Live Photo pairs.
+
+    Returns:
+        Set of video paths that are part of Live Photo pairs.
+    """
+    # Convert to list for multiple iterations
+    file_list = list(files)
+
+    # Build a set of all file paths for quick lookup
+    file_set = set(file_list)
+
+    live_photo_videos: Set[Path] = set()
+
+    for file_path in file_list:
+        suffix = file_path.suffix.lower()
+        if suffix in LIVE_PHOTO_IMAGE_EXTENSIONS:
+            # Look for matching video
+            for video_ext in LIVE_PHOTO_VIDEO_EXTENSIONS:
+                video_path = file_path.with_suffix(video_ext)
+                if video_path in file_set and is_live_photo_pair(
+                    file_path, video_path
+                ):
+                    live_photo_videos.add(video_path)
+                    break
+                # Also check case variations
+                video_path_upper = file_path.with_suffix(video_ext.upper())
+                if video_path_upper in file_set and is_live_photo_pair(
+                    file_path, video_path_upper
+                ):
+                    live_photo_videos.add(video_path_upper)
+                    break
+
+    return live_photo_videos
