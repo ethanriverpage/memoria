@@ -61,12 +61,14 @@ class TestSnapchatMessagesMatching:
         metadata = {
             "export_info": {"export_username": "testuser"},
             "conversations": {},
-            "orphaned_media": [
+            "unmatched_media": [
                 {
-                    "media_file": "orphaned_photo.jpg",
+                    "media_files": ["orphaned_photo.jpg"],
+                    "source_paths": {"orphaned_photo.jpg": str(media_dir / "orphaned_photo.jpg")},
                     "created": "2021-01-01 12:00:00 UTC",
                 }
             ],
+            "file_hashes": {},
         }
         (temp_export_dir / "metadata.json").write_text(json.dumps(metadata))
 
@@ -99,13 +101,15 @@ class TestSnapchatMessagesOverlays:
                             "created": "2021-01-01 12:00:00 UTC",
                             "sender": "Other User",
                             "media_id": "b~abc123",
-                            "media_file": "2021-01-01_b~abc123.jpg",
+                            "media_files": ["2021-01-01_b~abc123.jpg"],
+                            "source_paths": {"2021-01-01_b~abc123.jpg": str(media_dir / "2021-01-01_b~abc123.jpg")},
                             "overlay_file": "2021-01-01_b~abc123_overlay.png",
                         }
                     ],
                 }
             },
-            "orphaned_media": [],
+            "unmatched_media": [],
+            "file_hashes": {},
         }
         (temp_export_dir / "metadata.json").write_text(json.dumps(metadata))
 
@@ -128,7 +132,8 @@ class TestSnapchatMessagesOverlays:
         metadata = {
             "export_info": {"export_username": "testuser"},
             "conversations": {},
-            "orphaned_media": [],
+            "unmatched_media": [],
+            "file_hashes": {},
         }
         (temp_export_dir / "metadata.json").write_text(json.dumps(metadata))
 
@@ -159,7 +164,8 @@ class TestSnapchatMessagesAmbiguousCases:
         metadata = {
             "export_info": {"export_username": "testuser"},
             "conversations": {},
-            "orphaned_media": [],
+            "unmatched_media": [],
+            "file_hashes": {},
         }
         (temp_export_dir / "metadata.json").write_text(json.dumps(metadata))
 
@@ -274,3 +280,101 @@ class TestSnapchatMessagesConversationTypes:
 
         metadata = json.loads((temp_export_dir / "metadata.json").read_text())
         assert metadata["conversations"]["group_abc"]["type"] == "group"
+
+
+class TestSnapchatMessagesRealisticFixtures:
+    """Processing tests using committed schema-faithful Snapchat Messages fixtures."""
+
+    def test_raw_conversation_id_map_structure(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly parse conversation-ID-keyed chat_history.json."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "snapchat_messages", "raw_conversation_id_map", temp_export_dir
+        )
+
+        chat_history = json.loads(
+            (temp_export_dir / "messages" / "json" / "chat_history.json").read_text()
+        )
+
+        # Verify doc-style structure
+        assert len(chat_history) == 2
+
+        # DM conversation (null Conversation Title)
+        dm_conv = chat_history["conversation_abc123def456"]
+        assert dm_conv[0]["Conversation Title"] is None
+        assert dm_conv[0]["From"] == "friend_username"
+        assert dm_conv[0]["Media Type"] == "MEDIA"
+        assert dm_conv[0]["Created"] == "2024-04-20 01:29:22 UTC"
+
+        # Group conversation (non-null Conversation Title)
+        group_conv = chat_history["conversation_xyz789ghi012"]
+        assert group_conv[0]["Conversation Title"] == "Weekend Trip Planning"
+
+    def test_raw_media_ids_pipe_separated_parsing(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly parse pipe-separated Media IDs."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "snapchat_messages", "raw_media_ids_pipe_separated", temp_export_dir
+        )
+
+        chat_history = json.loads(
+            (temp_export_dir / "messages" / "json" / "chat_history.json").read_text()
+        )
+
+        msg = chat_history["conversation_multi_media"][0]
+        media_ids = msg["Media IDs"].split(" | ")
+
+        assert len(media_ids) == 3
+        assert media_ids[0] == "b~abc123"
+        assert media_ids[1] == "b~def456"
+        assert media_ids[2] == "b~ghi789"
+
+    def test_overlay_ambiguous_mtime_files(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should have multiple videos and overlays with same timestamps."""
+        from tests.fixtures.export_tree import copy_export_fixture
+        import os
+
+        copy_export_fixture(
+            "snapchat_messages", "overlay_ambiguous_mtime", temp_export_dir
+        )
+
+        chat_media = temp_export_dir / "messages" / "chat_media"
+
+        # Get all videos and overlays
+        videos = sorted(chat_media.glob("*_media~*.mp4"))
+        overlays = sorted(chat_media.glob("*_overlay~*.png"))
+
+        assert len(videos) == 2
+        assert len(overlays) == 2
+
+        # Note: mtime ambiguity is set up in the fixture
+        # Tests can verify the scenario exists for needs_matching logic
+
+    def test_snap_history_format(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly parse snap_history.json with simplified schema."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "snapchat_messages", "raw_conversation_id_map", temp_export_dir
+        )
+
+        snap_history = json.loads(
+            (temp_export_dir / "messages" / "json" / "snap_history.json").read_text()
+        )
+
+        # snap_history uses IMAGE/VIDEO instead of MEDIA
+        snap_msg = snap_history["conversation_abc123def456"][0]
+        assert snap_msg["Media Type"] == "IMAGE"
+        # No Media IDs or Content in snap_history
+        assert "Media IDs" not in snap_msg
+        assert "Content" not in snap_msg

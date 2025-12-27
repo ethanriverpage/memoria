@@ -12,6 +12,14 @@ Memoria uses a processor system to support different social media platforms. If 
 
 Processors are automatically discovered from the `processors/` directory. Each processor handles a specific platform or export format.
 
+### How discovery works (important)
+
+`memoria.py` loads processors by scanning `processors/*/` for directories that contain a `processor.py`, importing `processors.<dir>.processor`, and then registering the first public subclass of `ProcessorBase` found in that module.
+
+- **One processor class per `processor.py`**: Keep `processor.py` focused: one concrete `ProcessorBase` subclass that `memoria.py` can find.
+- **Module name matters**: the file must be named `processor.py` for auto-discovery.
+- **Directory name becomes the import path**: e.g. `processors/my_platform/processor.py` is imported as `processors.my_platform.processor`.
+
 ### Requirements
 
 - Python knowledge (implementing abstract classes)
@@ -22,10 +30,11 @@ Processors are automatically discovered from the `processors/` directory. Each p
 ### Basic Steps
 
 1. Create a new directory in `processors/` (e.g., `processors/my_platform/`)
-2. Implement the `ProcessorBase` abstract class from `processors/base.py`
+2. Implement a `ProcessorBase` subclass in `processors/my_platform/processor.py`
 3. Add detection logic to identify your platform's exports
-4. Implement the processing logic to extract metadata and copy files
-5. Test thoroughly with real export data
+4. Implement processing logic to copy media to the final output and embed metadata
+5. If your platform benefits from it, add a `PreprocessorBase` subclass in `processors/my_platform/preprocess.py`
+6. Test thoroughly with real export data
 
 ### What You'll Need to Implement
 
@@ -34,14 +43,32 @@ Every processor must provide:
 - **Detection method**: How to identify if an export is from this platform
 - **Name**: Human-readable platform name
 - **Priority**: Execution order when multiple processors match
-- **Processing logic**: Extract metadata, copy files, embed EXIF data
+- **Output info**: Where this processor lives under `Platform/User[/Service]` output paths
+- **Processing logic**: Copy files to output, embed EXIF metadata, and update filesystem timestamps when appropriate
+
+#### Required processor methods (current contract)
+
+All processors must implement the `ProcessorBase` interface in `processors/base.py`:
+
+- **`detect(input_path: Path) -> bool`**: Fast, specific detection (avoid false positives)
+- **`get_name() -> str`**: Human-friendly name (shown in CLI)
+- **`get_priority() -> int`**: Higher runs first when multiple processors match one export
+- **`get_output_info() -> OutputInfo`**: Defines `platform`, `service`, and `username_prefix` for output routing
+- **`process(input_dir: str, output_dir: Optional[str] = None, dedup_manifest: Optional[dict] = None, **kwargs) -> bool`**
+
+Notes:
+
+- **`output_dir` passed into `process()`**: When `-o/--output` is used, Memoria passes a *Platform/User* directory computed from `get_output_info()` and the *original export directory*. Most processors then write into `Path(output_dir) / get_output_info().service` (when `service` is not `None`).
+- **`dedup_manifest`**: In cross-processor dedup mode, Memoria passes a manifest so processors can skip secondary duplicates.
 
 #### Optional: Cross-Processor Deduplication
 
 To participate in cross-processor deduplication, implement:
 
 - **`supports_dedup()`**: Return `True` to enable deduplication support
-- **`build_catalog()`**: Build file catalog with hashes (without copying files)
+- **`build_catalog()`**: Yield a per-file catalog for the deduplication service
+
+If you implement `supports_dedup() == True`, `ProcessorBase` enforces at import-time that you also implement `build_catalog()`.
 
 See [Deduplication](Deduplication) for details on cross-processor deduplication.
 
@@ -58,13 +85,39 @@ Look at existing processors as references:
 
 Many processors use a two-phase architecture:
 
-1. **Preprocessing**: Downloads/organizes files, extracts metadata, handles internal deduplication
-2. **Processing**: Embeds EXIF metadata, generates final filenames, uploads
+1. **Preprocessing**: Parses the platform export, builds standardized `metadata.json`, and (optionally) hashes/copies media with within-processor deduplication
+2. **Processing**: Copies media into the final output, embeds EXIF metadata, and updates filesystem timestamps
+
+Preprocessing is optional, but strongly recommended when:
+
+- the raw export layout is messy (multiple locations, multiple formats)
+- media needs matching (HTML/JSON sidecars → media files)
+- within-export duplicates are common
+- you want fast cross-processor dedup cataloging from a standardized format
+
+#### Preprocessed directory format (canonical)
+
+Memoria treats a directory as “preprocessed” if it contains `metadata.json` (see `common.utils.is_preprocessed_directory`).
+
+- **Copy-based preprocessing**: writes `metadata.json` and may create `media/` (but processors should prefer `source_path` from metadata)
+- **Hash-only preprocessing (preferred for large exports)**: writes `metadata.json` only; processors later copy directly from `source_path` to final output
+
+The standardized schema is defined in `common/metadata/schema.py` and validated by `common.metadata.schema.validate_metadata()`:
+
+- `export_info`: required metadata about the export (including detected username)
+- `file_hashes`: mapping of output filename → content hash (supports cross-processor dedup)
+- exactly one of: `conversations`, `media`, or `media_files`
+- all media references must include `source_path` (direct file path) so processors and dedup can operate without relying on temp copies
+
+#### Implementing a preprocessor (current template)
 
 For preprocessing, extend the `PreprocessorBase` class from `processors/preprocess_base.py`:
 
 ```python
+from pathlib import Path
+
 from processors.preprocess_base import PreprocessorBase, CopyTask
+from common.detection import DetectionResult, resolve_username, detect_from_dirname
 
 class MyPlatformPreprocessor(PreprocessorBase):
     """Preprocessor for MyPlatform exports."""
@@ -84,14 +137,28 @@ class MyPlatformPreprocessor(PreprocessorBase):
     
     def detect_username(self) -> DetectionResult:
         """Detect the export owner's username."""
-        # Try various detection methods
-        return resolve_username(self.export_path, platform="myplatform")
+        # Try various detection methods (in priority order)
+        return resolve_username(
+            self.export_path,
+            [
+                ("dirname", lambda p: detect_from_dirname(p, "myplatform")),
+                # Add higher-signal detectors first (e.g. profile JSON) when available
+            ],
+        )
     
-    def process(self) -> bool:
-        """Run the preprocessing pipeline."""
+    def get_content_key(self) -> str:
+        """Return the content key for metadata.json."""
+        return "media_files"
+    
+    def process_export(self) -> bool:
+        """Platform-specific preprocessing logic (called by run())."""
         # 1. Parse metadata
-        # 2. Build copy tasks with deduplication
-        # 3. Save metadata.json
+        # 2. Build CopyTask list for media files
+        # 3. Choose ONE:
+        #    - self.hash_with_dedup(tasks)  # preferred: no intermediate copy
+        #    - self.copy_with_dedup(tasks)  # if you truly need media/ created
+        # 4. Build content_data with 'filename' + 'source_path' (+ timestamps, etc.)
+        # 5. self.save_metadata(content_data, extra_export_info={...})
         return True
     
     def print_statistics(self) -> None:
@@ -102,13 +169,30 @@ class MyPlatformPreprocessor(PreprocessorBase):
 
 **Key PreprocessorBase Features:**
 
-- **Built-in deduplication**: Use `copy_with_dedup()` for batch copying with automatic content-based deduplication
+- **Template method pipeline**: Call `preprocessor.run()` (not `process_export()` directly)
+- **Within-processor deduplication**:
+  - `hash_with_dedup()` for hash-only preprocessing (preferred)
+  - `copy_with_dedup()` for copy-based preprocessing (creates `media/`)
 - **Context merging**: Set `set_context_merger()` to merge metadata when duplicates are found
 - **Hash caching**: File hashes are cached in SQLite for faster repeated processing
 - **Thread-safe logging**: Use `log_message()` for thread-safe log entries
-- **Failure tracking**: Built-in `FailureTracker` for tracking processing failures
+- **Failure tracking**: Built-in `FailureTracker` for reporting missing/bad files without crashing
+- **Standardized metadata**: `save_metadata()` builds/validates the schema and writes `metadata.json`
 
 See `processors/discord/preprocess.py` or `processors/instagram_messages/preprocess.py` for complete examples.
+
+#### Wiring preprocessing into your processor
+
+If you want Memoria to run preprocessing automatically, implement these optional hooks on your `ProcessorBase` subclass:
+
+- **`needs_preprocessing(input_dir: str) -> bool`**:
+  - Return `False` when `metadata.json` exists (`is_preprocessed_directory(input_dir)`).
+  - Return `True` when raw export structures are detected.
+- **`preprocess(input_dir: str, cache_dir: str, **kwargs) -> Optional[str]`**:
+  - Create your preprocessor and call `run()`.
+  - Return the working directory path (usually `cache_dir`) on success, `None` on failure.
+
+Look at `processors/google_photos/processor.py` or `processors/instagram_messages/processor.py` for the pattern.
 
 ### Testing Your Processor
 
@@ -192,13 +276,19 @@ def build_catalog(input_dir: str, **kwargs) -> Iterator[Dict[str, Any]]:
         }
 ```
 
+**Recommended pattern:** In `build_catalog()`, first check whether `input_dir` is already preprocessed in the standardized “source_path format”, and if so, yield from `ProcessorBase.catalog_from_preprocessed_if_available(...)`. Otherwise, either:
+
+- yield a catalog directly from the raw export format, or
+- return nothing (but then this processor will not participate fully in cross-processor dedup unless preprocessing is always run first).
+
 ### Processing with Dedup Manifest
 
 Update your `process()` method to accept and use the dedup manifest:
 
 ```python
-@staticmethod
+@classmethod
 def process(
+    cls,
     input_dir: str,
     output_dir: Optional[str] = None,
     dedup_manifest: Optional[Dict[str, Any]] = None,  # New parameter
@@ -209,16 +299,13 @@ def process(
     When dedup_manifest is provided, skip files marked as secondary
     (they will be handled by their primary processor).
     """
-    # Check if file should be skipped using hash-based lookup
-    from common.dedup.service import is_file_primary_by_hash
-    from common.dedup.hashing import compute_content_hash
-    
+    # Recommended: use ProcessorBase.should_skip_for_dedup()
     for file_path in media_files:
-        if dedup_manifest:
-            content_hash = compute_content_hash(file_path)
-            if not is_file_primary_by_hash(dedup_manifest, content_hash, "YourProcessorName"):
-                continue  # Skip secondary files
-        # Process file normally
+        if ProcessorBase.should_skip_for_dedup(
+            str(file_path), dedup_manifest, "YourProcessorName"
+        ):
+            continue
+        # Process file normally...
 ```
 
 ### Helper Functions

@@ -315,36 +315,60 @@ class TestProcessorBuildCatalogStreaming:
 
     @pytest.fixture
     def temp_export_dir(self, tmp_path):
-        """Create a temporary directory simulating a preprocessed export.
+        """Create a temporary preprocessed export directory.
 
         Uses pytest's tmp_path fixture for automatic cleanup.
+        Creates a properly preprocessed directory structure with metadata.json
+        containing conversations with messages (the format GoogleVoiceProcessor
+        expects via catalog_from_preprocessed_if_available with container_key).
         """
-        # Create media directory (standard preprocessed structure)
-        media_dir = tmp_path / "media"
-        media_dir.mkdir()
+        import json
 
-        # Create test media files
-        (media_dir / "photo1.jpg").write_bytes(b"fake jpeg content 1")
-        (media_dir / "photo2.jpg").write_bytes(b"fake jpeg content 2")
-        (media_dir / "video.mp4").write_bytes(b"fake video content")
+        # Create source media files (simulating original export location)
+        source_dir = tmp_path / "source_media"
+        source_dir.mkdir()
+        (source_dir / "image1.jpg").write_bytes(b"fake jpeg content 1")
+        (source_dir / "image2.jpg").write_bytes(b"fake jpeg content 2")
 
-        # Create metadata.json (minimal valid structure)
+        # Create metadata.json with conversations format (Google Voice uses this)
+        # GoogleVoiceProcessor.build_catalog uses container_key="conversations"
+        metadata = {
+            "export_info": {"export_username": "test_user"},
+            "conversations": [
+                {
+                    "conversation_name": "Test Conversation",
+                    "messages": [
+                        {
+                            "media_files": ["image1.jpg"],
+                            "source_paths": {
+                                "image1.jpg": str(source_dir / "image1.jpg"),
+                            },
+                            "source_path": str(source_dir / "image1.jpg"),
+                            "timestamp": "2024-01-01T00:00:00Z",
+                            "sender": "test_sender",
+                        },
+                        {
+                            "media_files": ["image2.jpg"],
+                            "source_paths": {
+                                "image2.jpg": str(source_dir / "image2.jpg"),
+                            },
+                            "source_path": str(source_dir / "image2.jpg"),
+                            "timestamp": "2024-01-02T00:00:00Z",
+                            "sender": "test_sender",
+                        },
+                    ],
+                }
+            ],
+            "file_hashes": {},
+        }
         metadata_file = tmp_path / "metadata.json"
-        metadata_file.write_text(
-            '{"export_info": {"export_username": "test_user"}}'
-        )
+        metadata_file.write_text(json.dumps(metadata))
 
         return tmp_path
 
     def test_build_catalog_returns_generator(self, temp_export_dir):
         """Test that build_catalog returns a generator, not a dict."""
         from processors.google_voice.processor import GoogleVoiceProcessor
-
-        # Create the expected structure for Google Voice
-        # Use .jpg extension since ALL_MEDIA_EXTENSIONS includes images/videos
-        voice_dir = temp_export_dir / "Voice" / "Calls"
-        voice_dir.mkdir(parents=True)
-        (voice_dir / "mms_image.jpg").write_bytes(b"fake image content")
 
         result = GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=2)
 
@@ -356,12 +380,6 @@ class TestProcessorBuildCatalogStreaming:
     def test_build_catalog_yields_entries_lazily(self, temp_export_dir):
         """Test that entries are yielded one at a time (lazy evaluation)."""
         from processors.google_voice.processor import GoogleVoiceProcessor
-
-        # Create test files with image extensions
-        voice_dir = temp_export_dir / "Voice" / "Calls"
-        voice_dir.mkdir(parents=True)
-        (voice_dir / "image1.jpg").write_bytes(b"image content 1")
-        (voice_dir / "image2.jpg").write_bytes(b"image content 2")
 
         generator = GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=1)
 
@@ -384,10 +402,6 @@ class TestProcessorBuildCatalogStreaming:
         """Test that yielded entries have all required fields."""
         from processors.google_voice.processor import GoogleVoiceProcessor
 
-        voice_dir = temp_export_dir / "Voice" / "Calls"
-        voice_dir.mkdir(parents=True)
-        (voice_dir / "mms_image.jpg").write_bytes(b"fake image")
-
         entries = list(
             GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=2)
         )
@@ -404,18 +418,24 @@ class TestProcessorBuildCatalogStreaming:
             "_processor",
         ]
 
-        assert len(entries) == 1
+        assert len(entries) == 2
         for field in required_fields:
             assert field in entries[0], f"Missing required field: {field}"
 
-    def test_build_catalog_empty_export_returns_empty_generator(self, temp_export_dir):
+    def test_build_catalog_empty_export_returns_empty_generator(self, tmp_path):
         """Test that empty exports yield nothing (not an empty dict)."""
+        import json
         from processors.google_voice.processor import GoogleVoiceProcessor
 
-        # Don't create the expected Voice/Calls directory
-        # Processor should detect nothing and return empty generator
+        # Create metadata with no media files
+        metadata = {
+            "export_info": {"export_username": "test_user"},
+            "conversations": [],
+        }
+        metadata_file = tmp_path / "metadata.json"
+        metadata_file.write_text(json.dumps(metadata))
 
-        result = GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=2)
+        result = GoogleVoiceProcessor.build_catalog(str(tmp_path), workers=2)
 
         # Should be a generator
         assert isinstance(result, types.GeneratorType)
@@ -428,10 +448,6 @@ class TestProcessorBuildCatalogStreaming:
         """Test that calling build_catalog again gives a fresh generator."""
         from processors.google_voice.processor import GoogleVoiceProcessor
 
-        voice_dir = temp_export_dir / "Voice" / "Calls"
-        voice_dir.mkdir(parents=True)
-        (voice_dir / "mms_image.jpg").write_bytes(b"image content")
-
         # First iteration
         entries1 = list(
             GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=2)
@@ -442,40 +458,67 @@ class TestProcessorBuildCatalogStreaming:
             GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=2)
         )
 
-        assert len(entries1) == len(entries2) == 1
-        assert entries1[0]["content_hash"] == entries2[0]["content_hash"]
+        assert len(entries1) == len(entries2) == 2
+        # Compare content_hashes as sets since parallel processing order may vary
+        hashes1 = {e["content_hash"] for e in entries1}
+        hashes2 = {e["content_hash"] for e in entries2}
+        assert hashes1 == hashes2
 
     def test_build_catalog_processor_field_set(self, temp_export_dir):
         """Test that _processor field is set correctly by catalog_media_files."""
         from processors.google_voice.processor import GoogleVoiceProcessor
 
-        voice_dir = temp_export_dir / "Voice" / "Calls"
-        voice_dir.mkdir(parents=True)
-        (voice_dir / "mms_image.jpg").write_bytes(b"image")
-
         entries = list(
             GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=2)
         )
 
+        assert len(entries) == 2
         assert entries[0]["_processor"] == "Google Voice"
 
-    def test_streaming_does_not_accumulate_in_memory(self, temp_export_dir):
+    def test_streaming_does_not_accumulate_in_memory(self, tmp_path):
         """Test that streaming truly processes one at a time.
 
         This is a behavioral test that verifies the generator pattern
         is being used correctly - entries are yielded as they're computed,
         not all collected first.
         """
+        import json
         from processors.google_voice.processor import GoogleVoiceProcessor
 
-        voice_dir = temp_export_dir / "Voice" / "Calls"
-        voice_dir.mkdir(parents=True)
-
-        # Create multiple files with image extension
+        # Create source media files
+        source_dir = tmp_path / "source_media"
+        source_dir.mkdir()
         for i in range(5):
-            (voice_dir / f"image{i}.jpg").write_bytes(f"image {i}".encode())
+            (source_dir / f"image{i}.jpg").write_bytes(f"image {i}".encode())
 
-        generator = GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=1)
+        # Create metadata with conversations format (Google Voice format)
+        messages = []
+        for i in range(5):
+            messages.append(
+                {
+                    "media_files": [f"image{i}.jpg"],
+                    "source_paths": {
+                        f"image{i}.jpg": str(source_dir / f"image{i}.jpg"),
+                    },
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "sender": "test_sender",
+                }
+            )
+
+        metadata = {
+            "export_info": {"export_username": "test_user"},
+            "conversations": [
+                {
+                    "conversation_name": "Test Conversation",
+                    "messages": messages,
+                }
+            ],
+            "file_hashes": {},
+        }
+        metadata_file = tmp_path / "metadata.json"
+        metadata_file.write_text(json.dumps(metadata))
+
+        generator = GoogleVoiceProcessor.build_catalog(str(tmp_path), workers=1)
 
         # Consume entries one by one, tracking what we've seen
         seen_paths = []
@@ -496,28 +539,93 @@ class TestMultipleProcessorStreaming:
         """Create a temporary Discord preprocessed export.
 
         Uses pytest's tmp_path fixture for automatic cleanup.
+        Discord uses conversations format with messages containing media_files.
         """
-        # Discord preprocessed structure
-        media_dir = tmp_path / "media"
-        media_dir.mkdir()
-        (media_dir / "attachment1.png").write_bytes(b"discord image 1")
-        (media_dir / "attachment2.jpg").write_bytes(b"discord image 2")
+        import json
 
+        # Create source media files
+        source_dir = tmp_path / "source_media"
+        source_dir.mkdir()
+        (source_dir / "attachment1.png").write_bytes(b"discord image 1")
+        (source_dir / "attachment2.jpg").write_bytes(b"discord image 2")
+
+        # Create metadata.json with conversations format (Discord format)
+        metadata = {
+            "export_info": {"export_username": "discord_user"},
+            "conversations": {
+                "channel1": {
+                    "type": "GUILD_TEXT",
+                    "title": "general",
+                    "guild_name": "Test Server",
+                    "messages": [
+                        {
+                            "id": "msg1",
+                            "media_files": ["attachment1.png"],
+                            "source_paths": {
+                                "attachment1.png": str(
+                                    source_dir / "attachment1.png"
+                                ),
+                            },
+                            "timestamp": "2024-01-01T00:00:00Z",
+                            "sender": "test_user",
+                        },
+                        {
+                            "id": "msg2",
+                            "media_files": ["attachment2.jpg"],
+                            "source_paths": {
+                                "attachment2.jpg": str(
+                                    source_dir / "attachment2.jpg"
+                                ),
+                            },
+                            "timestamp": "2024-01-02T00:00:00Z",
+                            "sender": "test_user",
+                        },
+                    ],
+                }
+            },
+            "file_hashes": {},
+        }
         metadata_file = tmp_path / "metadata.json"
-        metadata_file.write_text('{"export_info": {}}')
+        metadata_file.write_text(json.dumps(metadata))
 
         return tmp_path
 
     @pytest.fixture
     def temp_imessage_export(self, tmp_path):
-        """Create a temporary iMessage export.
+        """Create a temporary preprocessed iMessage export.
 
         Uses pytest's tmp_path fixture for automatic cleanup.
+        iMessage uses conversations format with messages.
         """
-        # iMessage structure
-        attachments_dir = tmp_path / "Attachments"
-        attachments_dir.mkdir()
-        (attachments_dir / "photo.jpg").write_bytes(b"imessage photo")
+        import json
+
+        # Create source media file
+        source_dir = tmp_path / "source_media"
+        source_dir.mkdir()
+        (source_dir / "photo.jpg").write_bytes(b"imessage photo")
+
+        # Create metadata.json with conversations format (iMessage format)
+        metadata = {
+            "export_info": {"export_username": "test_user"},
+            "conversations": {
+                "+14155551234": {
+                    "conversation_title": "Test Chat",
+                    "messages": [
+                        {
+                            "media_files": ["photo.jpg"],
+                            "source_paths": {
+                                "photo.jpg": str(source_dir / "photo.jpg"),
+                            },
+                            "timestamp": "2024-01-01 00:00:00 UTC",
+                            "sender": "test_sender",
+                        },
+                    ],
+                }
+            },
+            "file_hashes": {},
+        }
+        metadata_file = tmp_path / "metadata.json"
+        metadata_file.write_text(json.dumps(metadata))
 
         return tmp_path
 
@@ -733,13 +841,44 @@ class TestStreamingMemoryBehavior:
 
         Uses pytest's tmp_path fixture for automatic cleanup.
         """
-        # Create test structure for a processor
-        media_dir = tmp_path / "media"
-        media_dir.mkdir()
+        import json
+
+        # Create source media files
+        source_dir = tmp_path / "source_media"
+        source_dir.mkdir()
 
         # Create enough files to trigger multiple batch writes (batch size is 100)
+        messages = []
         for i in range(250):
-            (media_dir / f"file_{i:03d}.jpg").write_bytes(f"content {i}".encode())
+            file_path = source_dir / f"file_{i:03d}.jpg"
+            file_path.write_bytes(f"content {i}".encode())
+            messages.append(
+                {
+                    "id": f"msg_{i}",
+                    "media_files": [f"file_{i:03d}.jpg"],
+                    "source_paths": {
+                        f"file_{i:03d}.jpg": str(file_path),
+                    },
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "sender": "test_user",
+                }
+            )
+
+        # Create metadata.json with conversations format (Discord format)
+        metadata = {
+            "export_info": {"export_username": "discord_user"},
+            "conversations": {
+                "channel1": {
+                    "type": "GUILD_TEXT",
+                    "title": "general",
+                    "guild_name": "Test Server",
+                    "messages": messages,
+                }
+            },
+            "file_hashes": {},
+        }
+        metadata_file = tmp_path / "metadata.json"
+        metadata_file.write_text(json.dumps(metadata))
 
         # Mock the database
         mock_db = MagicMock()

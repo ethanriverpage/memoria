@@ -8,7 +8,6 @@ Organizes Instagram export files and creates cleaned metadata:
 - Creates metadata.json with essential information (captions, GPS, timestamps)
 """
 
-import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -76,43 +75,36 @@ class InstagramPreprocessor(PreprocessorBase):
             self.html_dir = new_format_html_dir
             self.is_legacy_format = False
 
-        # Statistics specific to this preprocessor
-        self.stats = {
-            "total_posts": 0,
-            "total_media_files": 0,
-            "media_copied": 0,
-            "duplicate_files": 0,
-            "orphaned_files": 0,
-            "missing_files": 0,
-            "banned_files_skipped": 0,
-            "by_type": {},
-        }
+        # Statistics specific to this preprocessor (preserves shared keys from base)
+        self.stats.update(
+            {
+                "total_posts": 0,
+                "total_media_files": 0,
+                "media_copied": 0,
+                "duplicate_files": 0,
+                "orphaned_files": 0,
+                "missing_files": 0,
+                "banned_files_skipped": 0,
+                "by_type": {},
+            }
+        )
 
         # Set context merger for deduplication (first occurrence wins)
-        self._context_merger = merge_first_occurrence
+        self.set_context_merger(merge_first_occurrence)
 
     def validate_export(self) -> bool:
-        """Validate that export directory has required structure"""
-        if not self.export_path.exists():
-            logger.error("Export path does not exist: %s", self.export_path)
+        """Validate that export directory has required structure."""
+        if not self.require_exists(self.export_path, label="Export path"):
             return False
 
-        if not self.media_source_dir.exists():
-            logger.error("media directory not found: %s", self.media_source_dir)
+        if not self.require_exists(self.media_source_dir, label="Media directory"):
             return False
 
-        if not self.html_dir.exists():
-            new_path = self.export_path / "your_instagram_activity" / "media"
-            legacy_path = self.export_path / "content"
-            logger.error("HTML metadata directory not found.")
-            logger.error("  Checked: %s", new_path)
-            logger.error("  Checked: %s", legacy_path)
+        if not self.require_exists(self.html_dir, label="HTML metadata directory"):
             return False
 
         # Check if at least one HTML file exists
-        html_files = list(self.html_dir.glob("*.html"))
-        if not html_files:
-            logger.error("No HTML files found in %s", self.html_dir)
+        if not self.require_any_files(self.html_dir, "*.html", label="HTML"):
             return False
 
         return True
@@ -531,7 +523,10 @@ class InstagramPreprocessor(PreprocessorBase):
 
             # Map this source path to the resulting (dest_filename, source_path)
             if source_path_str and result.dest_filename:
-                source_to_result[source_path_str] = (result.dest_filename, str(result.source_path))
+                source_to_result[source_path_str] = (
+                    result.dest_filename,
+                    str(result.source_path),
+                )
 
         # Phase 3: Update posts with resulting filenames and source paths
         for post_idx, post in enumerate(metadata):
@@ -544,14 +539,18 @@ class InstagramPreprocessor(PreprocessorBase):
                     result_info = source_to_result.get(str(source_path))
                     if result_info:
                         dest_filename, src_path = result_info
-                        media_entries.append({
-                            "filename": dest_filename,
-                            "source_path": src_path,
-                        })
+                        media_entries.append(
+                            {
+                                "filename": dest_filename,
+                                "source_path": src_path,
+                            }
+                        )
 
             # Update post with filenames and source paths (new format)
             post["media_files"] = [e["filename"] for e in media_entries]
-            post["source_paths"] = {e["filename"]: e["source_path"] for e in media_entries}
+            post["source_paths"] = {
+                e["filename"]: e["source_path"] for e in media_entries
+            }
             # Remove media_paths as it's no longer needed
             if "media_paths" in post:
                 del post["media_paths"]
@@ -660,42 +659,9 @@ class InstagramPreprocessor(PreprocessorBase):
 
         return all_posts
 
-    def save_metadata(self, metadata: List[Dict]) -> None:
-        """Save cleaned metadata to metadata.json"""
-        try:
-            # Detect username from export
-            detection_result = self.detect_username()
-            export_username = detection_result.username or "unknown"
-
-            # Build file_hashes lookup table for cross-processor dedup optimization
-            file_hashes = {}
-            for content_hash, registry_entry in self._hash_registry.items():
-                filename = registry_entry.get("filename", "")
-                if filename:
-                    file_hashes[filename] = content_hash
-
-            # Add export info
-            output = {
-                "export_info": {
-                    "export_path": str(self.export_path),
-                    "export_name": self.export_path.name,
-                    "export_username": export_username,
-                    "username_source": detection_result.source,
-                    "processed_date": datetime.now().isoformat(),
-                    "total_posts": self.stats["total_posts"],
-                    "total_media_files": self.stats["media_copied"],
-                },
-                "media": metadata,
-                "file_hashes": file_hashes,
-            }
-
-            with open(self.metadata_file, "w", encoding="utf-8") as f:
-                json.dump(output, f, indent=2, ensure_ascii=False)
-
-            logger.info("Saved metadata to %s", self.metadata_file)
-        except Exception as e:
-            logger.error(f"Failed to save metadata: {e}")
-            raise RuntimeError(f"Failed to save metadata: {e}")
+    def get_content_key(self) -> str:
+        """Return the content key for Instagram Public Media metadata."""
+        return "media"
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -731,6 +697,12 @@ class InstagramPreprocessor(PreprocessorBase):
         self.copy_media_files(metadata, file_catalog)
 
         # Save metadata
-        self.save_metadata(metadata)
+        self.save_metadata(
+            metadata,
+            extra_export_info={
+                "total_posts": self.stats["total_posts"],
+                "total_media_files": self.stats["media_copied"],
+            },
+        )
 
         return True

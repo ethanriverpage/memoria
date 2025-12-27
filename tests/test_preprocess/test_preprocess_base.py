@@ -60,6 +60,9 @@ class ConcretePreprocessor(PreprocessorBase):
     def print_statistics(self) -> None:
         self.stats_printed = True
 
+    def get_content_key(self) -> str:
+        return "media_files"
+
 
 class TestPreprocessorBaseInit:
     """Tests for PreprocessorBase initialization."""

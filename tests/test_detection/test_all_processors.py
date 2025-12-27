@@ -12,20 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.fixtures.generators import (
-    create_google_photos_export,
-    create_google_chat_export,
-    create_google_voice_export,
-    create_snapchat_memories_export,
-    create_snapchat_messages_export,
-    create_instagram_messages_export,
-    create_instagram_public_export,
-    create_instaloader_export,
-    create_discord_export,
-    create_imessage_mac_export,
-    create_imessage_imazing_export,
-)
 from tests.fixtures.media_samples import write_media_file
+from tests.fixtures.export_tree import copy_export_fixture
 
 
 # Import all processor classes
@@ -92,7 +80,7 @@ class TestGooglePhotosDetection:
 
     def test_detects_valid_export(self, tmp_path: Path) -> None:
         """Should detect valid Google Photos export."""
-        create_google_photos_export(tmp_path)
+        copy_export_fixture("google_photos", "takeout_basic", tmp_path)
         assert detect_google_photos(tmp_path) is True
 
     def test_rejects_empty_directory(self, tmp_path: Path) -> None:
@@ -107,7 +95,7 @@ class TestGooglePhotosDetection:
 
     def test_rejects_other_processor_exports(self, tmp_path: Path) -> None:
         """Should reject exports from other processors."""
-        create_discord_export(tmp_path)
+        copy_export_fixture("discord", "raw_minimal", tmp_path)
         assert detect_google_photos(tmp_path) is False
 
 
@@ -116,7 +104,7 @@ class TestGoogleChatDetection:
 
     def test_detects_valid_export(self, tmp_path: Path) -> None:
         """Should detect valid Google Chat export."""
-        create_google_chat_export(tmp_path)
+        copy_export_fixture("google_chat", "groups_and_users", tmp_path)
         assert detect_google_chat(tmp_path) is True
 
     def test_rejects_empty_directory(self, tmp_path: Path) -> None:
@@ -130,7 +118,7 @@ class TestGoogleChatDetection:
 
     def test_rejects_other_processor_exports(self, tmp_path: Path) -> None:
         """Should reject exports from other processors."""
-        create_google_photos_export(tmp_path)
+        copy_export_fixture("google_photos", "takeout_basic", tmp_path)
         assert detect_google_chat(tmp_path) is False
 
 
@@ -139,7 +127,7 @@ class TestGoogleVoiceDetection:
 
     def test_detects_valid_export(self, tmp_path: Path) -> None:
         """Should detect valid Google Voice export."""
-        create_google_voice_export(tmp_path)
+        copy_export_fixture("google_voice", "takeout_calls_basic", tmp_path)
         assert detect_google_voice(tmp_path) is True
 
     def test_rejects_empty_directory(self, tmp_path: Path) -> None:
@@ -153,7 +141,7 @@ class TestGoogleVoiceDetection:
 
     def test_rejects_other_processor_exports(self, tmp_path: Path) -> None:
         """Should reject exports from other processors."""
-        create_google_photos_export(tmp_path)
+        copy_export_fixture("google_photos", "takeout_basic", tmp_path)
         assert detect_google_voice(tmp_path) is False
 
 
@@ -162,7 +150,7 @@ class TestSnapchatMemoriesDetection:
 
     def test_detects_valid_export(self, tmp_path: Path) -> None:
         """Should detect valid Snapchat Memories export."""
-        create_snapchat_memories_export(tmp_path)
+        copy_export_fixture("snapchat_memories", "memories_basic", tmp_path)
         assert detect_snapchat_memories(tmp_path) is True
 
     def test_rejects_empty_directory(self, tmp_path: Path) -> None:
@@ -178,7 +166,7 @@ class TestSnapchatMemoriesDetection:
 
     def test_rejects_other_processor_exports(self, tmp_path: Path) -> None:
         """Should reject exports from other processors."""
-        create_google_photos_export(tmp_path)
+        copy_export_fixture("google_photos", "takeout_basic", tmp_path)
         assert detect_snapchat_memories(tmp_path) is False
 
 
@@ -187,11 +175,14 @@ class TestSnapchatMessagesDetection:
 
     def test_detects_valid_raw_export(self, tmp_path: Path) -> None:
         """Should detect valid raw Snapchat Messages export."""
-        create_snapchat_messages_export(tmp_path, raw_format=True)
+        copy_export_fixture("snapchat_messages", "raw_conversation_id_map", tmp_path)
         assert detect_snapchat_messages(tmp_path) is True
 
     def test_detects_valid_preprocessed_export(self, tmp_path: Path) -> None:
         """Should detect valid preprocessed Snapchat Messages export."""
+        # Keep generator for preprocessed-format detection (preprocessed is internal, not doc schema)
+        from tests.fixtures.generators import create_snapchat_messages_export
+
         create_snapchat_messages_export(tmp_path, raw_format=False)
         assert detect_snapchat_messages(tmp_path) is True
 
@@ -201,7 +192,7 @@ class TestSnapchatMessagesDetection:
 
     def test_rejects_other_processor_exports(self, tmp_path: Path) -> None:
         """Should reject exports from other processors."""
-        create_google_photos_export(tmp_path)
+        copy_export_fixture("google_photos", "takeout_basic", tmp_path)
         assert detect_snapchat_messages(tmp_path) is False
 
 
@@ -210,12 +201,12 @@ class TestInstagramMessagesDetection:
 
     def test_detects_valid_new_format_export(self, tmp_path: Path) -> None:
         """Should detect valid new format Instagram Messages export."""
-        create_instagram_messages_export(tmp_path, new_format=True)
+        copy_export_fixture("instagram_messages", "current_format_doc_html", tmp_path)
         assert detect_instagram_messages(tmp_path) is True
 
     def test_detects_valid_legacy_format_export(self, tmp_path: Path) -> None:
         """Should detect valid legacy format Instagram Messages export."""
-        create_instagram_messages_export(tmp_path, new_format=False)
+        copy_export_fixture("instagram_messages", "legacy_format_doc_html", tmp_path)
         assert detect_instagram_messages(tmp_path) is True
 
     def test_rejects_empty_directory(self, tmp_path: Path) -> None:
@@ -224,7 +215,7 @@ class TestInstagramMessagesDetection:
 
     def test_rejects_other_processor_exports(self, tmp_path: Path) -> None:
         """Should reject exports from other processors."""
-        create_google_photos_export(tmp_path)
+        copy_export_fixture("google_photos", "takeout_basic", tmp_path)
         assert detect_instagram_messages(tmp_path) is False
 
 
@@ -233,7 +224,7 @@ class TestInstagramPublicDetection:
 
     def test_detects_valid_export(self, tmp_path: Path) -> None:
         """Should detect valid Instagram Public Media export."""
-        create_instagram_public_export(tmp_path)
+        copy_export_fixture("instagram_public", "posts_and_archived_posts", tmp_path)
         assert detect_instagram_public(tmp_path) is True
 
     def test_rejects_empty_directory(self, tmp_path: Path) -> None:
@@ -242,7 +233,7 @@ class TestInstagramPublicDetection:
 
     def test_rejects_other_processor_exports(self, tmp_path: Path) -> None:
         """Should reject exports from other processors."""
-        create_google_photos_export(tmp_path)
+        copy_export_fixture("google_photos", "takeout_basic", tmp_path)
         assert detect_instagram_public(tmp_path) is False
 
 
@@ -251,7 +242,7 @@ class TestInstaloaderDetection:
 
     def test_detects_valid_export(self, tmp_path: Path) -> None:
         """Should detect valid Instaloader scrape data."""
-        create_instaloader_export(tmp_path)
+        copy_export_fixture("instaloader", "basic_with_json_xz", tmp_path)
         assert detect_instaloader(tmp_path) is True
 
     def test_rejects_empty_directory(self, tmp_path: Path) -> None:
@@ -265,7 +256,7 @@ class TestInstaloaderDetection:
 
     def test_rejects_other_processor_exports(self, tmp_path: Path) -> None:
         """Should reject exports from other processors."""
-        create_google_photos_export(tmp_path)
+        copy_export_fixture("google_photos", "takeout_basic", tmp_path)
         assert detect_instaloader(tmp_path) is False
 
 
@@ -274,7 +265,7 @@ class TestDiscordDetection:
 
     def test_detects_valid_export(self, tmp_path: Path) -> None:
         """Should detect valid Discord export."""
-        create_discord_export(tmp_path)
+        copy_export_fixture("discord", "raw_minimal", tmp_path)
         assert detect_discord(tmp_path) is True
 
     def test_rejects_empty_directory(self, tmp_path: Path) -> None:
@@ -288,7 +279,7 @@ class TestDiscordDetection:
 
     def test_rejects_other_processor_exports(self, tmp_path: Path) -> None:
         """Should reject exports from other processors."""
-        create_google_photos_export(tmp_path)
+        copy_export_fixture("google_photos", "takeout_basic", tmp_path)
         assert detect_discord(tmp_path) is False
 
 
@@ -297,7 +288,7 @@ class TestIMessageDetection:
 
     def test_detects_valid_mac_export(self, tmp_path: Path) -> None:
         """Should detect valid iMessage Mac export."""
-        create_imessage_mac_export(tmp_path)
+        copy_export_fixture("imessage", "mac_basic", tmp_path)
         assert detect_imessage(tmp_path) is True
 
     def test_rejects_empty_directory(self, tmp_path: Path) -> None:
@@ -311,7 +302,7 @@ class TestIMessageDetection:
 
     def test_rejects_other_processor_exports(self, tmp_path: Path) -> None:
         """Should reject exports from other processors."""
-        create_google_photos_export(tmp_path)
+        copy_export_fixture("google_photos", "takeout_basic", tmp_path)
         assert detect_imessage(tmp_path) is False
 
 
@@ -320,7 +311,7 @@ class TestIMessageIMazingDetection:
 
     def test_detects_valid_export(self, tmp_path: Path) -> None:
         """Should detect valid iMazing iMessage export."""
-        create_imessage_imazing_export(tmp_path)
+        copy_export_fixture("imessage_imazing", "basic_device_info", tmp_path)
         assert detect_imessage_imazing(tmp_path) is True
 
     def test_rejects_empty_directory(self, tmp_path: Path) -> None:
@@ -334,7 +325,7 @@ class TestIMessageIMazingDetection:
 
     def test_rejects_other_processor_exports(self, tmp_path: Path) -> None:
         """Should reject exports from other processors."""
-        create_google_photos_export(tmp_path)
+        copy_export_fixture("google_photos", "takeout_basic", tmp_path)
         assert detect_imessage_imazing(tmp_path) is False
 
 
@@ -360,17 +351,29 @@ class TestCrossProcessorDetection:
         for name, path in exports.items():
             path.mkdir()
 
-        create_google_photos_export(exports["google_photos"])
-        create_google_chat_export(exports["google_chat"])
-        create_google_voice_export(exports["google_voice"])
-        create_snapchat_memories_export(exports["snapchat_memories"])
-        create_snapchat_messages_export(exports["snapchat_messages"])
-        create_instagram_messages_export(exports["instagram_messages"])
-        create_instagram_public_export(exports["instagram_public"])
-        create_instaloader_export(exports["instaloader"])
-        create_discord_export(exports["discord"])
-        create_imessage_mac_export(exports["imessage"])
-        create_imessage_imazing_export(exports["imessage_imazing"])
+        copy_export_fixture("google_photos", "takeout_basic", exports["google_photos"])
+        copy_export_fixture("google_chat", "groups_and_users", exports["google_chat"])
+        copy_export_fixture("google_voice", "takeout_calls_basic", exports["google_voice"])
+        copy_export_fixture(
+            "snapchat_memories", "memories_basic", exports["snapchat_memories"]
+        )
+        copy_export_fixture(
+            "snapchat_messages", "raw_conversation_id_map", exports["snapchat_messages"]
+        )
+        copy_export_fixture(
+            "instagram_messages", "current_format_doc_html", exports["instagram_messages"]
+        )
+        copy_export_fixture(
+            "instagram_public",
+            "posts_and_archived_posts",
+            exports["instagram_public"],
+        )
+        copy_export_fixture("instaloader", "basic_with_json_xz", exports["instaloader"])
+        copy_export_fixture("discord", "raw_minimal", exports["discord"])
+        copy_export_fixture("imessage", "mac_basic", exports["imessage"])
+        copy_export_fixture(
+            "imessage_imazing", "basic_device_info", exports["imessage_imazing"]
+        )
 
         return exports
 
@@ -446,7 +449,7 @@ class TestDetectionEdgeCases:
     def test_handles_symlinks(self, tmp_path: Path) -> None:
         """Should handle symlinks in export directories."""
         real_dir = tmp_path / "real"
-        create_google_photos_export(real_dir)
+        copy_export_fixture("google_photos", "takeout_basic", real_dir)
 
         symlink_dir = tmp_path / "link"
         try:
@@ -464,6 +467,6 @@ class TestDetectionEdgeCases:
             deep_path = deep_path / f"level{i}"
         deep_path.mkdir(parents=True)
 
-        create_google_photos_export(deep_path)
+        copy_export_fixture("google_photos", "takeout_basic", deep_path)
         assert detect_google_photos(deep_path) is True
 

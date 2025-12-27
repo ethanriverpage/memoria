@@ -41,6 +41,7 @@ htmlcov/
 .tox/
 .ruff_cache/
 .hypothesis/
+AGENTS.md
 
 # Virtual environments
 .venv/

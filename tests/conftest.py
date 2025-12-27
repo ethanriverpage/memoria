@@ -128,162 +128,103 @@ def temp_export_dir(tmp_path) -> Path:
 @pytest.fixture
 def google_photos_export(temp_export_dir) -> Path:
     """Create a minimal Google Photos export."""
-    from tests.fixtures.generators import create_google_photos_export
+    from tests.fixtures.export_tree import copy_export_fixture
 
-    return create_google_photos_export(temp_export_dir)
+    return copy_export_fixture("google_photos", "takeout_basic", temp_export_dir)
 
 
 @pytest.fixture
 def google_chat_export(temp_export_dir) -> Path:
     """Create a minimal Google Chat export."""
-    from tests.fixtures.generators import create_google_chat_export
+    from tests.fixtures.export_tree import copy_export_fixture
 
-    return create_google_chat_export(temp_export_dir)
+    return copy_export_fixture("google_chat", "groups_and_users", temp_export_dir)
 
 
 @pytest.fixture
 def google_voice_export(temp_export_dir) -> Path:
     """Create a minimal Google Voice export."""
-    from tests.fixtures.generators import create_google_voice_export
+    from tests.fixtures.export_tree import copy_export_fixture
 
-    return create_google_voice_export(temp_export_dir)
+    return copy_export_fixture("google_voice", "takeout_calls_basic", temp_export_dir)
 
 
 @pytest.fixture
 def snapchat_memories_export(temp_export_dir) -> Path:
     """Create a minimal Snapchat Memories export."""
-    from tests.fixtures.generators import create_snapchat_memories_export
+    from tests.fixtures.export_tree import copy_export_fixture
 
-    return create_snapchat_memories_export(temp_export_dir)
+    return copy_export_fixture("snapchat_memories", "memories_basic", temp_export_dir)
 
 
 @pytest.fixture
 def snapchat_messages_export(temp_export_dir) -> Path:
     """Create a minimal Snapchat Messages export."""
-    from tests.fixtures.generators import create_snapchat_messages_export
+    from tests.fixtures.export_tree import copy_export_fixture
 
-    return create_snapchat_messages_export(temp_export_dir)
+    return copy_export_fixture(
+        "snapchat_messages", "raw_conversation_id_map", temp_export_dir
+    )
 
 
 @pytest.fixture
 def instagram_messages_export(temp_export_dir) -> Path:
     """Create a minimal Instagram Messages export."""
-    from tests.fixtures.generators import create_instagram_messages_export
+    from tests.fixtures.export_tree import copy_export_fixture
 
-    return create_instagram_messages_export(temp_export_dir)
+    return copy_export_fixture(
+        "instagram_messages", "current_format_doc_html", temp_export_dir
+    )
 
 
 @pytest.fixture
 def instagram_public_export(temp_export_dir) -> Path:
     """Create a minimal Instagram Public Media export."""
-    from tests.fixtures.generators import create_instagram_public_export
+    from tests.fixtures.export_tree import copy_export_fixture
 
-    return create_instagram_public_export(temp_export_dir)
+    return copy_export_fixture(
+        "instagram_public", "posts_and_archived_posts", temp_export_dir
+    )
 
 
 @pytest.fixture
 def instaloader_export(temp_export_dir) -> Path:
     """Create a minimal Instaloader scrape data export."""
-    from tests.fixtures.generators import create_instaloader_export
+    from tests.fixtures.export_tree import copy_export_fixture
 
-    return create_instaloader_export(temp_export_dir)
+    return copy_export_fixture("instaloader", "basic_with_json_xz", temp_export_dir)
 
 
 @pytest.fixture
 def discord_export(temp_export_dir) -> Path:
     """Create a minimal Discord export."""
-    from tests.fixtures.generators import create_discord_export
+    from tests.fixtures.export_tree import copy_export_fixture
 
-    return create_discord_export(temp_export_dir)
+    return copy_export_fixture("discord", "raw_minimal", temp_export_dir)
 
 
 @pytest.fixture
 def imessage_mac_export(temp_export_dir) -> Path:
     """Create a minimal iMessage Mac export."""
-    from tests.fixtures.generators import create_imessage_mac_export
+    from tests.fixtures.export_tree import copy_export_fixture
 
-    return create_imessage_mac_export(temp_export_dir)
+    return copy_export_fixture("imessage", "mac_basic", temp_export_dir)
 
 
 @pytest.fixture
 def imessage_iphone_export(temp_export_dir) -> Path:
     """Create a minimal iMessage iPhone export."""
-    from tests.fixtures.generators import create_imessage_iphone_export
+    from tests.fixtures.export_tree import copy_export_fixture
 
-    return create_imessage_iphone_export(temp_export_dir)
+    return copy_export_fixture("imessage", "iphone_basic", temp_export_dir)
 
 
 @pytest.fixture
 def imessage_imazing_export(temp_export_dir) -> Path:
     """Create a minimal iMessage iMazing export."""
-    from tests.fixtures.generators import create_imessage_imazing_export
+    from tests.fixtures.export_tree import copy_export_fixture
 
-    return create_imessage_imazing_export(temp_export_dir)
-
-
-# ============================================================================
-# Comprehensive export fixtures for integration testing
-# ============================================================================
-
-
-@pytest.fixture
-def comprehensive_google_photos_export(temp_export_dir) -> Path:
-    """Create a comprehensive Google Photos export with multiple albums."""
-    from tests.fixtures.complete_exports import create_comprehensive_google_photos_export
-
-    return create_comprehensive_google_photos_export(temp_export_dir)
-
-
-@pytest.fixture
-def comprehensive_discord_export(temp_export_dir) -> Path:
-    """Create a comprehensive Discord export with multiple channels."""
-    from tests.fixtures.complete_exports import create_comprehensive_discord_export
-
-    return create_comprehensive_discord_export(temp_export_dir)
-
-
-@pytest.fixture
-def comprehensive_snapchat_memories_export(temp_export_dir) -> Path:
-    """Create a comprehensive Snapchat Memories export."""
-    from tests.fixtures.complete_exports import create_comprehensive_snapchat_memories_export
-
-    return create_comprehensive_snapchat_memories_export(temp_export_dir)
-
-
-@pytest.fixture
-def comprehensive_instagram_export(temp_export_dir) -> Path:
-    """Create a comprehensive Instagram Messages export."""
-    from tests.fixtures.complete_exports import create_comprehensive_instagram_export
-
-    return create_comprehensive_instagram_export(temp_export_dir)
-
-
-@pytest.fixture
-def all_processor_exports(tmp_path) -> Dict[str, Path]:
-    """Create exports for all 11 processors.
-
-    Returns:
-        Dict mapping processor name to export path
-    """
-    from tests.fixtures.complete_exports import create_all_processor_exports
-
-    return create_all_processor_exports(tmp_path)
-
-
-@pytest.fixture
-def export_with_edge_cases(tmp_path) -> Path:
-    """Create an export with various edge cases."""
-    from tests.fixtures.complete_exports import create_export_with_edge_cases
-
-    return create_export_with_edge_cases(tmp_path, "google_photos")
-
-
-@pytest.fixture
-def large_export(tmp_path) -> Path:
-    """Create a large export for performance testing."""
-    from tests.fixtures.complete_exports import create_large_export
-
-    return create_large_export(tmp_path, num_files=50)
+    return copy_export_fixture("imessage_imazing", "basic_device_info", temp_export_dir)
 
 
 # ============================================================================

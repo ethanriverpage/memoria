@@ -16,6 +16,7 @@ from common.media.exiftool import (
     DescriptionWriteSpec,
     GPSData,
     MetadataWriteRequest,
+    XMP_PRESERVED_FILENAME_EXTENSIONS,
     batch_write_metadata_requests,
 )
 
@@ -396,6 +397,7 @@ class TestMetadataWriteRequestModel:
         assert request.gps is None
         assert request.description is None
         assert request.processor_name == "unknown"
+        assert request.original_filename is None
 
     def test_gps_data_with_altitude(self) -> None:
         """GPSData should support optional altitude."""
@@ -412,3 +414,178 @@ class TestMetadataWriteRequestModel:
         assert spec.default_description == "Test"
         assert spec.image_tags == ["ImageDescription", "IPTC:Caption-Abstract"]
         assert spec.video_tags == ["Comment", "Description"]
+
+
+class TestOriginalFilename:
+    """Test XMP:PreservedFileName original filename embedding."""
+
+    def test_original_filename_written_for_supported_formats(
+        self, tmp_path: Path
+    ) -> None:
+        """XMP:PreservedFileName should be written for supported formats."""
+        test_file = tmp_path / "test_image.jpg"
+        test_file.touch()
+
+        request = MetadataWriteRequest(
+            file_path=str(test_file),
+            arg_preamble=DEFAULT_PREAMBLE,
+            datetime_tags=[],
+            gps=None,
+            description=None,
+            processor_name="test",
+            original_filename="IMG_1234.jpg",
+        )
+
+        existing_metadata_map = {str(test_file): {}}
+
+        argfile_content = []
+
+        def capture_argfile(*args, **kwargs):
+            argfile_path = args[0][2] if len(args) > 0 and len(args[0]) > 2 else None
+            if argfile_path and Path(argfile_path).exists():
+                argfile_content.append(Path(argfile_path).read_text())
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=capture_argfile
+        ), patch("common.media.exiftool.get_media_type", return_value="image"):
+            batch_write_metadata_requests(
+                [request],
+                existing_metadata_map,
+                dedup_manifest=None,
+            )
+
+        assert len(argfile_content) == 1
+        assert "-XMP:PreservedFileName=IMG_1234.jpg" in argfile_content[0]
+
+    def test_original_filename_skipped_for_unsupported_formats(
+        self, tmp_path: Path
+    ) -> None:
+        """XMP:PreservedFileName should NOT be written for BMP and WebM."""
+        test_file = tmp_path / "test_image.bmp"
+        test_file.touch()
+
+        request = MetadataWriteRequest(
+            file_path=str(test_file),
+            arg_preamble=DEFAULT_PREAMBLE,
+            datetime_tags=[],
+            gps=None,
+            description=None,
+            processor_name="test",
+            original_filename="original.bmp",
+        )
+
+        existing_metadata_map = {str(test_file): {}}
+
+        argfile_content = []
+
+        def capture_argfile(*args, **kwargs):
+            argfile_path = args[0][2] if len(args) > 0 and len(args[0]) > 2 else None
+            if argfile_path and Path(argfile_path).exists():
+                argfile_content.append(Path(argfile_path).read_text())
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=capture_argfile
+        ), patch("common.media.exiftool.get_media_type", return_value="image"):
+            batch_write_metadata_requests(
+                [request],
+                existing_metadata_map,
+                dedup_manifest=None,
+            )
+
+        assert len(argfile_content) == 1
+        assert "-XMP:PreservedFileName" not in argfile_content[0]
+
+    def test_original_filename_not_written_when_none(self, tmp_path: Path) -> None:
+        """XMP:PreservedFileName should not be written when original_filename is None."""
+        test_file = tmp_path / "test_image.jpg"
+        test_file.touch()
+
+        request = MetadataWriteRequest(
+            file_path=str(test_file),
+            arg_preamble=DEFAULT_PREAMBLE,
+            datetime_tags=[],
+            gps=None,
+            description=None,
+            processor_name="test",
+            original_filename=None,  # Explicitly None
+        )
+
+        existing_metadata_map = {str(test_file): {}}
+
+        argfile_content = []
+
+        def capture_argfile(*args, **kwargs):
+            argfile_path = args[0][2] if len(args) > 0 and len(args[0]) > 2 else None
+            if argfile_path and Path(argfile_path).exists():
+                argfile_content.append(Path(argfile_path).read_text())
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=capture_argfile
+        ), patch("common.media.exiftool.get_media_type", return_value="image"):
+            batch_write_metadata_requests(
+                [request],
+                existing_metadata_map,
+                dedup_manifest=None,
+            )
+
+        assert len(argfile_content) == 1
+        assert "-XMP:PreservedFileName" not in argfile_content[0]
+
+    def test_xmp_preserved_filename_extensions_constant(self) -> None:
+        """XMP_PRESERVED_FILENAME_EXTENSIONS should contain expected formats."""
+        # Common image formats that should be supported
+        assert ".jpg" in XMP_PRESERVED_FILENAME_EXTENSIONS
+        assert ".jpeg" in XMP_PRESERVED_FILENAME_EXTENSIONS
+        assert ".png" in XMP_PRESERVED_FILENAME_EXTENSIONS
+        assert ".heic" in XMP_PRESERVED_FILENAME_EXTENSIONS
+        assert ".tiff" in XMP_PRESERVED_FILENAME_EXTENSIONS
+
+        # Video formats that should be supported
+        assert ".mp4" in XMP_PRESERVED_FILENAME_EXTENSIONS
+        assert ".mov" in XMP_PRESERVED_FILENAME_EXTENSIONS
+        assert ".avi" in XMP_PRESERVED_FILENAME_EXTENSIONS
+
+        # Formats that should NOT be supported
+        assert ".bmp" not in XMP_PRESERVED_FILENAME_EXTENSIONS
+        assert ".webm" not in XMP_PRESERVED_FILENAME_EXTENSIONS
+        assert ".mkv" not in XMP_PRESERVED_FILENAME_EXTENSIONS
+
+    def test_original_filename_written_for_mp4_video(self, tmp_path: Path) -> None:
+        """XMP:PreservedFileName should be written for MP4 video files."""
+        test_file = tmp_path / "test_video.mp4"
+        test_file.touch()
+
+        request = MetadataWriteRequest(
+            file_path=str(test_file),
+            arg_preamble=DEFAULT_PREAMBLE,
+            datetime_tags=[],
+            gps=None,
+            description=None,
+            processor_name="test",
+            original_filename="VID_20231215_143000.mp4",
+        )
+
+        existing_metadata_map = {str(test_file): {}}
+
+        argfile_content = []
+
+        def capture_argfile(*args, **kwargs):
+            argfile_path = args[0][2] if len(args) > 0 and len(args[0]) > 2 else None
+            if argfile_path and Path(argfile_path).exists():
+                argfile_content.append(Path(argfile_path).read_text())
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=capture_argfile
+        ), patch("common.media.exiftool.get_media_type", return_value="video"):
+            batch_write_metadata_requests(
+                [request],
+                existing_metadata_map,
+                dedup_manifest=None,
+            )
+
+        assert len(argfile_content) == 1
+        assert "-XMP:PreservedFileName=VID_20231215_143000.mp4" in argfile_content[0]

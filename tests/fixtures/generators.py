@@ -381,7 +381,8 @@ def create_snapchat_messages_export(
                             "created": "2021-01-01 12:00:00 UTC",
                             "sender": "Other User",
                             "media_id": "b~abc123",
-                            "media_file": "2021-01-01_b~abc123.jpg",
+                            "media_files": ["2021-01-01_b~abc123.jpg"],
+                            "source_paths": {"2021-01-01_b~abc123.jpg": str(media_dir / "2021-01-01_b~abc123.jpg")},
                         }
                     ],
                 }
@@ -393,7 +394,8 @@ def create_snapchat_messages_export(
                 "export_date": "2021-01-15",
             },
             "conversations": conversations,
-            "orphaned_media": [],
+            "unmatched_media": [],
+            "file_hashes": {},
         }
 
         (base_path / "metadata.json").write_text(json.dumps(metadata, indent=2))

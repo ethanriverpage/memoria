@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Media file cataloging utilities for cross-processor deduplication."""
 
+import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -18,6 +19,293 @@ from common.output.progress import PHASE_CATALOG, futures_progress
 from common.files.utils import short_path, get_export_name
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_media_entries(metadata: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+    """Extract all media entries from any metadata structure.
+
+    This is a wrapper around ProcessorBase.extract_all_media_entries() to avoid
+    circular imports. The actual implementation is in ProcessorBase.
+
+    Args:
+        metadata: Parsed metadata.json dict
+
+    Yields:
+        Media entry dicts with at minimum: filename, source_path, content_hash
+    """
+    # Import here to avoid circular import
+    from processors.base import ProcessorBase
+
+    yield from ProcessorBase.extract_all_media_entries(metadata)
+
+
+def catalog_from_preprocessed(
+    processor_name: str,
+    input_path: Path,
+    workers: int = 4,
+    metadata_extractor: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+) -> Iterator[Dict[str, Any]]:
+    """Build catalog from preprocessed metadata.json.
+
+    This function reads catalog entries from a preprocessed directory's metadata.json
+    file. Since preprocessing already computes content_hash and stores source_path,
+    this avoids re-hashing files that were already processed.
+
+    For perceptual hashes and dimensions, we check the hash cache database.
+    If not cached, we compute them from the source files.
+
+    Args:
+        processor_name: Name for the catalog (e.g., "Google Photos").
+        input_path: Path to preprocessed directory containing metadata.json.
+        workers: Number of parallel workers for computing missing hashes.
+        metadata_extractor: Optional function to transform metadata from each
+            media_files entry. Signature: (entry: Dict) -> Dict[str, Any].
+            If not provided, uses entry's existing metadata fields.
+
+    Yields:
+        Catalog entry dictionaries with structure matching catalog_media_files().
+    """
+    metadata_file = input_path / "metadata.json"
+    if not metadata_file.exists():
+        logger.warning(f"No metadata.json found in: {input_path}")
+        return
+
+    # Load metadata
+    try:
+        with open(metadata_file, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load metadata.json: {e}")
+        return
+
+    # Extract media entries using unified extraction
+    media_entries = list(_extract_media_entries(metadata))
+    if not media_entries:
+        logger.info(f"No files to catalog: {get_export_name(input_path)}")
+        return
+
+    # Check if this uses source_path format (new) vs media/ directory (legacy)
+    sample = media_entries[0] if media_entries else {}
+    if "source_path" not in sample or not sample.get("source_path"):
+        # Legacy format - caller should use catalog_media_files instead
+        logger.debug(
+            f"Legacy format detected in {input_path}, "
+            "caller should use catalog_media_files"
+        )
+        return
+
+    export_name = get_export_name(input_path)
+    logger.info(f"Cataloging {len(media_entries)} files from metadata: {export_name}")
+
+    config = get_dedup_config()
+    use_perceptual = config.use_perceptual
+    db_path = config.database_path
+
+    # Separate entries that need hash computation from those fully cached
+    entries_needing_hashes: List[Tuple[Dict[str, Any], Path]] = []
+    cache_hits = 0
+
+    for entry in media_entries:
+        source_path_str = entry.get("source_path", "")
+        if not source_path_str:
+            continue
+
+        source_path = Path(source_path_str)
+        if not source_path.exists():
+            logger.debug(f"Source file not found: {source_path}")
+            continue
+
+        content_hash = entry.get("content_hash")
+        if not content_hash:
+            # No content hash in metadata - need to compute
+            entries_needing_hashes.append((entry, source_path))
+            continue
+
+        # Check cache for perceptual hash and dimensions
+        perceptual_hash = None
+        dimensions = None
+
+        if db_path:
+            try:
+                stat = source_path.stat()
+                db = get_thread_db(db_path)
+                if db is not None:
+                    cached = db.get_cached_hashes(
+                        str(source_path), stat.st_size, stat.st_mtime
+                    )
+                    if cached:
+                        perceptual_hash = cached.get("perceptual_hash")
+                        dimensions = cached.get("dimensions")
+            except Exception:
+                pass
+
+        # If we need perceptual hash but don't have it, queue for computation
+        if use_perceptual and perceptual_hash is None:
+            entries_needing_hashes.append((entry, source_path))
+            continue
+
+        # Build catalog entry from metadata
+        cache_hits += 1
+        catalog_entry = _build_catalog_entry_from_metadata(
+            entry=entry,
+            source_path=source_path,
+            input_path=input_path,
+            processor_name=processor_name,
+            content_hash=content_hash,
+            perceptual_hash=perceptual_hash,
+            dimensions=dimensions,
+            metadata_extractor=metadata_extractor,
+        )
+        yield catalog_entry
+
+    # Process entries that need hash computation in parallel
+    if entries_needing_hashes:
+        logger.debug(
+            f"Computing hashes for {len(entries_needing_hashes)} files: {export_name}"
+        )
+        cache_entries_to_write: List[Dict[str, Any]] = []
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(
+                    _compute_missing_hashes,
+                    entry,
+                    source_path,
+                    input_path,
+                    processor_name,
+                    use_perceptual,
+                    db_path,
+                    metadata_extractor,
+                ): (entry, source_path)
+                for entry, source_path in entries_needing_hashes
+            }
+            for future in futures_progress(
+                futures, PHASE_CATALOG, "Computing hashes", unit="file"
+            ):
+                result = future.result()
+                if result:
+                    catalog_entry, cache_entry = result
+                    if cache_entry:
+                        cache_entries_to_write.append(cache_entry)
+                    yield catalog_entry
+
+        # Batch write cache entries
+        if cache_entries_to_write and db_path:
+            from common.dedup.database import HashDatabase
+
+            db = HashDatabase(db_path)
+            written = 0
+            chunk_size = 1000
+            for i in range(0, len(cache_entries_to_write), chunk_size):
+                chunk = cache_entries_to_write[i : i + chunk_size]
+                written += db.cache_hashes_batch(chunk)
+            logger.debug(f"Cached {written} hashes: {export_name}")
+
+    total = cache_hits + len(entries_needing_hashes)
+    cache_pct = (cache_hits / total) * 100 if total > 0 else 0
+    logger.info(
+        f"Cataloged {total}: {export_name} "
+        f"({cache_hits} from metadata, {len(entries_needing_hashes)} computed, "
+        f"{cache_pct:.1f}% hit)"
+    )
+
+
+def _build_catalog_entry_from_metadata(
+    entry: Dict[str, Any],
+    source_path: Path,
+    input_path: Path,
+    processor_name: str,
+    content_hash: str,
+    perceptual_hash: Optional[str],
+    dimensions: Optional[Tuple[int, int]],
+    metadata_extractor: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Build a catalog entry from preprocessed metadata."""
+    # Extract metadata using custom extractor or use entry's metadata fields
+    if metadata_extractor:
+        metadata = metadata_extractor(entry)
+    else:
+        # Default: extract common metadata fields
+        metadata = {}
+        for key in ["albums", "sender", "conversation", "timestamp", "content", "gps"]:
+            if key in entry:
+                metadata[key] = entry[key]
+
+    # Get file size
+    try:
+        file_size = source_path.stat().st_size
+    except Exception:
+        file_size = 0
+
+    return {
+        "source_path": str(source_path),
+        "relative_path": entry.get("filename", source_path.name),
+        "content_hash": content_hash,
+        "perceptual_hash": perceptual_hash,
+        "file_size": file_size,
+        "dimensions": dimensions,
+        "timestamp": entry.get("capture_timestamp") or entry.get("timestamp"),
+        "metadata": metadata,
+        "_processor": processor_name,
+    }
+
+
+def _compute_missing_hashes(
+    entry: Dict[str, Any],
+    source_path: Path,
+    input_path: Path,
+    processor_name: str,
+    use_perceptual: bool,
+    db_path: Optional[Path],
+    metadata_extractor: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+) -> Optional[Tuple[Dict[str, Any], Optional[Dict[str, Any]]]]:
+    """Compute missing hashes for an entry from preprocessed metadata."""
+    try:
+        stat = source_path.stat()
+        file_size = stat.st_size
+        mtime = stat.st_mtime
+
+        # Use content_hash from metadata if available
+        content_hash = entry.get("content_hash")
+        if not content_hash:
+            content_hash = compute_content_hash(source_path)
+
+        # Compute perceptual hash and dimensions
+        perceptual_hash = None
+        dimensions = None
+        if use_perceptual:
+            perceptual_hash, dimensions = compute_perceptual_hash_with_dims(source_path)
+        else:
+            dimensions = get_media_dimensions(source_path)
+
+        # Prepare cache entry
+        cache_entry = None
+        if db_path:
+            cache_entry = {
+                "source_path": str(source_path),
+                "file_size": file_size,
+                "mtime": mtime,
+                "content_hash": content_hash,
+                "perceptual_hash": perceptual_hash,
+                "dimensions": dimensions,
+            }
+
+        catalog_entry = _build_catalog_entry_from_metadata(
+            entry=entry,
+            source_path=source_path,
+            input_path=input_path,
+            processor_name=processor_name,
+            content_hash=content_hash,
+            perceptual_hash=perceptual_hash,
+            dimensions=dimensions,
+            metadata_extractor=metadata_extractor,
+        )
+
+        return catalog_entry, cache_entry
+
+    except Exception as e:
+        logger.warning(f"Failed to compute hashes for {short_path(source_path)}: {e}")
+        return None
 
 # Environment variable to override catalog workers (for memory-constrained systems)
 # Large images (HEIC) can use 36-50MB each during perceptual hashing

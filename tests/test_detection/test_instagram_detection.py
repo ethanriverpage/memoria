@@ -232,3 +232,111 @@ class TestInstagramMultiProcessorDetection:
         assert instaloader_processor.detect(temp_export_dir) is True
         # Public processor should not match Instaloader format (no media/posts structure)
         assert instagram_public_processor.detect(temp_export_dir) is False
+
+
+class TestInstagramMessagesRealisticFixtures:
+    """Tests using committed schema-faithful Instagram Messages fixtures."""
+
+    def test_detect_current_format_fixture(
+        self, instagram_messages_processor, temp_export_dir
+    ):
+        """Should detect current format (2023+) with <h2> sender elements."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "instagram_messages", "current_format_doc_html", temp_export_dir
+        )
+        assert instagram_messages_processor.detect(temp_export_dir) is True
+
+        # Verify structure matches docs
+        inbox_dir = (
+            temp_export_dir
+            / "your_instagram_activity"
+            / "messages"
+            / "inbox"
+        )
+        assert inbox_dir.exists()
+        assert (inbox_dir / "friend_user_123456" / "message_1.html").exists()
+
+    def test_detect_legacy_format_fixture(
+        self, instagram_messages_processor, temp_export_dir
+    ):
+        """Should detect legacy format (pre-2023) with <div> sender elements."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "instagram_messages", "legacy_format_doc_html", temp_export_dir
+        )
+        assert instagram_messages_processor.detect(temp_export_dir) is True
+
+        # Verify structure matches legacy docs
+        inbox_dir = temp_export_dir / "messages" / "inbox"
+        assert inbox_dir.exists()
+        assert (inbox_dir / "old_friend_789012" / "message_1.html").exists()
+
+    def test_detect_missing_media_reference_fixture(
+        self, instagram_messages_processor, temp_export_dir
+    ):
+        """Should detect fixture with expired/missing media references."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "instagram_messages", "missing_media_reference", temp_export_dir
+        )
+        assert instagram_messages_processor.detect(temp_export_dir) is True
+
+        # Verify HTML references media that doesn't exist
+        conv_dir = (
+            temp_export_dir
+            / "your_instagram_activity"
+            / "messages"
+            / "inbox"
+            / "expired_media_user"
+        )
+        html_content = (conv_dir / "message_1.html").read_text()
+        assert "expired_photo.jpg" in html_content
+        # But the file doesn't exist
+        assert not (conv_dir / "photos" / "expired_photo.jpg").exists()
+
+
+class TestInstagramPublicRealisticFixtures:
+    """Tests using committed schema-faithful Instagram Public fixtures."""
+
+    def test_detect_posts_and_archived_posts_fixture(
+        self, instagram_public_processor, temp_export_dir
+    ):
+        """Should detect fixture with both posts and archived_posts."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "instagram_public", "posts_and_archived_posts", temp_export_dir
+        )
+        assert instagram_public_processor.detect(temp_export_dir) is True
+
+        # Verify YYYYMM folder structure
+        media_dir = temp_export_dir / "media"
+        assert (media_dir / "posts" / "202301" / "photo_123.jpg").exists()
+        assert (media_dir / "posts" / "202302" / "video_456.mp4").exists()
+        assert (
+            media_dir / "archived_posts" / "202212" / "archived_photo.jpg"
+        ).exists()
+
+    def test_posts_json_metadata_format(
+        self, instagram_public_processor, temp_export_dir
+    ):
+        """Should have JSON metadata files with documented fields."""
+        from tests.fixtures.export_tree import copy_export_fixture
+        import json
+
+        copy_export_fixture(
+            "instagram_public", "posts_and_archived_posts", temp_export_dir
+        )
+
+        json_path = (
+            temp_export_dir / "media" / "posts" / "202301" / "photo_123.jpg.json"
+        )
+        metadata = json.loads(json_path.read_text())
+
+        assert "caption" in metadata
+        assert "taken_at" in metadata
+        assert "#photography" in metadata["caption"]

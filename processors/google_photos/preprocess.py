@@ -39,7 +39,9 @@ class GooglePhotosPreprocessor(PreprocessorBase):
     FILE_INDEX_PATTERN = re.compile(r"\((\d+)\)(\.[^.]+)$")
     # Pattern to match Google Photos edit suffixes (e.g., -edited, -effects, -collage)
     # These are appended by Google Photos when saving edited versions
-    EDIT_SUFFIX_PATTERN = re.compile(r"-(?:edited|effect[s]?|collage|animation|movie)$", re.IGNORECASE)
+    EDIT_SUFFIX_PATTERN = re.compile(
+        r"-(?:edited|effect[s]?|collage|animation|movie)$", re.IGNORECASE
+    )
     # Used to build fast candidate sets for "long common prefix" matchers without O(n) scans
     _PREFIX_INDEX_LEN_STRONG = 40
     _PREFIX_INDEX_LEN_WEAK = 30
@@ -59,28 +61,43 @@ class GooglePhotosPreprocessor(PreprocessorBase):
             final_output_dir=final_output_dir,
         )
 
-        self.photos_dir = self.export_path / "Google Photos"
+        # Support both raw and Takeout layouts
+        self.photos_dir = self._resolve_google_photos_dir(self.export_path)
 
         # Set up context merger for album accumulation
         self.set_context_merger(merge_albums)
 
-        # Statistics specific to this preprocessor
-        self.stats = {
-            "total_albums": 0,
-            "total_media_files": 0,
-            "unique_files": 0,
-            "matched_files": 0,
-            "unmatched_files": 0,
-            "fuzzy_matches": 0,
-            "deduplicated_files": 0,
-            "skipped_banned": 0,
-        }
+        # Statistics specific to this preprocessor (preserves shared keys from base)
+        self.stats.update(
+            {
+                "total_albums": 0,
+                "total_media_files": 0,
+                "unique_files": 0,
+                "matched_files": 0,
+                "unmatched_files": 0,
+                "fuzzy_matches": 0,
+                "deduplicated_files": 0,
+                "skipped_banned": 0,
+            }
+        )
 
         # Track destination filenames to avoid collisions (used by base class)
         self.destination_files = {}  # maps destination_filename -> source_path
 
         # Storage for parsed metadata keyed by source path
         self._parsed_metadata: Dict[str, Dict] = {}
+
+    @staticmethod
+    def _resolve_google_photos_dir(export_path: Path) -> Path:
+        """Resolve the Google Photos directory for both raw and Takeout exports."""
+        raw = export_path / "Google Photos"
+        if raw.exists() and raw.is_dir():
+            return raw
+        takeout = export_path / "Takeout" / "Google Photos"
+        if takeout.exists() and takeout.is_dir():
+            return takeout
+        # Default (for error messages)
+        return raw
 
     def is_banned(self, path: Path) -> bool:
         """
@@ -95,19 +112,18 @@ class GooglePhotosPreprocessor(PreprocessorBase):
         return self.banned_filter.is_banned(path)
 
     def validate_export(self) -> bool:
-        """Validate that export directory has required structure"""
-        if not self.export_path.exists():
-            logger.error("Export path does not exist: %s", self.export_path)
+        """Validate that export directory has required structure."""
+        if not self.require_exists(self.export_path, label="Export path"):
             return False
 
-        if not self.photos_dir.exists():
-            logger.error("Google Photos directory not found: %s", self.photos_dir)
+        # Re-resolve in case export_path was populated after init (tests/generators)
+        self.photos_dir = self._resolve_google_photos_dir(self.export_path)
+
+        if not self.require_exists(self.photos_dir, label="Google Photos directory"):
             return False
 
         # Check if at least one album folder exists
-        album_folders = [d for d in self.photos_dir.iterdir() if d.is_dir()]
-        if not album_folders:
-            logger.error("No album folders found in %s", self.photos_dir)
+        if not self.require_any_dirs(self.photos_dir, label="album"):
             return False
 
         return True
@@ -748,11 +764,16 @@ class GooglePhotosPreprocessor(PreprocessorBase):
             # Try to extract duplicate index from the remaining stem
             # Pattern: match "name (N)" at end of stem
             import re
-            internal_idx_match = re.search(r"^(.*?)\s*\((\d+)\)$", original_stem_with_idx)
+
+            internal_idx_match = re.search(
+                r"^(.*?)\s*\((\d+)\)$", original_stem_with_idx
+            )
             if internal_idx_match:
                 # Found internal duplicate index: "26 (3)" -> stem_with_idx = "26 (3)"
                 # Look for metadata with the same stem including the index
-                for metadata_name, metadata_path in stem_index.get(original_stem_with_idx, []):
+                for metadata_name, metadata_path in stem_index.get(
+                    original_stem_with_idx, []
+                ):
                     candidates[metadata_name] = metadata_path
 
         # If no candidates from stem index, fall back to prefix-index candidate generation.
@@ -1167,59 +1188,37 @@ class GooglePhotosPreprocessor(PreprocessorBase):
 
         return album_data_list
 
-    def save_metadata(self, albums: List[Dict]) -> None:
-        """Save consolidated metadata to metadata.json (file-centric structure)"""
-        try:
-            # Build file-centric structure from merged contexts
-            media_files = []
+    def get_content_key(self) -> str:
+        """Return the content key for Google Photos metadata."""
+        return "media_files"
 
-            merged_contexts = self.get_merged_contexts()
-            for content_hash, context in merged_contexts.items():
-                # Get the stored registry entry for filename and source_path
-                registry_entry = self._hash_registry.get(content_hash, {})
-                filename = registry_entry.get("filename", "")
-                source_path = registry_entry.get("source_path", "")
+    def _build_media_files_from_contexts(self) -> List[Dict]:
+        """Build file-centric media_files list from merged contexts.
 
-                # Build file metadata
-                file_metadata = context.get("metadata", {}).copy()
-                file_metadata["albums"] = sorted(context.get("albums", []))
-                file_metadata["filename"] = filename
-                file_metadata["source_path"] = source_path
-                file_metadata["content_hash"] = content_hash
+        Returns:
+            List of media file dicts sorted by filename.
+        """
+        media_files = []
 
-                media_files.append(file_metadata)
+        merged_contexts = self.get_merged_contexts()
+        for content_hash, context in merged_contexts.items():
+            # Get the stored registry entry for filename and source_path
+            registry_entry = self._hash_registry.get(content_hash, {})
+            filename = registry_entry.get("filename", "")
+            source_path = registry_entry.get("source_path", "")
 
-            # Sort by filename for consistency
-            media_files.sort(key=lambda x: x.get("filename", ""))
+            # Build file metadata
+            file_metadata = context.get("metadata", {}).copy()
+            file_metadata["albums"] = sorted(context.get("albums", []))
+            file_metadata["filename"] = filename
+            file_metadata["source_path"] = source_path
+            file_metadata["content_hash"] = content_hash
 
-            # Detect username from export
-            detection_result = self.detect_username()
-            export_username = detection_result.username or "unknown"
+            media_files.append(file_metadata)
 
-            output = {
-                "export_info": {
-                    "export_path": str(self.export_path),
-                    "export_name": self.export_path.name,
-                    "export_username": export_username,
-                    "username_source": detection_result.source,
-                    "processed_date": datetime.now().isoformat(),
-                    "total_albums": self.stats["total_albums"],
-                    "total_media_files": self.stats["total_media_files"],
-                    "matched_files": self.stats["matched_files"],
-                    "unmatched_files": self.stats["unmatched_files"],
-                    "unique_files": self.stats["unique_files"],
-                    "deduplicated_files": self.stats["deduplicated_files"],
-                },
-                "media_files": media_files,
-            }
-
-            with open(self.metadata_file, "w", encoding="utf-8") as f:
-                json.dump(output, f, indent=2, ensure_ascii=False)
-
-            logger.info("Saved metadata to %s", self.metadata_file)
-        except Exception as e:
-            logger.error(f"Failed to save metadata: {e}")
-            raise
+        # Sort by filename for consistency
+        media_files.sort(key=lambda x: x.get("filename", ""))
+        return media_files
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -1245,9 +1244,22 @@ class GooglePhotosPreprocessor(PreprocessorBase):
             True if processing succeeded, False otherwise
         """
         # Process all albums and media
-        albums = self.process_albums()
+        self.process_albums()
+
+        # Build file-centric media_files from merged contexts
+        media_files = self._build_media_files_from_contexts()
 
         # Save consolidated metadata
-        self.save_metadata(albums)
+        self.save_metadata(
+            media_files,
+            extra_export_info={
+                "total_albums": self.stats["total_albums"],
+                "total_media_files": self.stats["total_media_files"],
+                "matched_files": self.stats["matched_files"],
+                "unmatched_files": self.stats["unmatched_files"],
+                "unique_files": self.stats["unique_files"],
+                "deduplicated_files": self.stats["deduplicated_files"],
+            },
+        )
 
         return True

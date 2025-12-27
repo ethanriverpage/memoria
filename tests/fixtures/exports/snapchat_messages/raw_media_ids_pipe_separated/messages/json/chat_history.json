@@ -1,0 +1,14 @@
+{
+  "conversation_multi_media": [
+    {
+      "From": "friend_user",
+      "Media Type": "MEDIA",
+      "Created": "2024-05-01 12:00:00 UTC",
+      "Conversation Title": null,
+      "IsSender": false,
+      "Content": "Multiple files!",
+      "Media IDs": "b~abc123 | b~def456 | b~ghi789"
+    }
+  ]
+}
+

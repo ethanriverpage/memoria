@@ -12,11 +12,6 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.dedup.catalog import catalog_media_files
-from common.dedup.hashing import (
-    find_live_photo_video,
-    find_live_photo_videos_in_files,
-)
 from common.dedup.service import is_file_primary_by_hash
 from common.dedup.description import (
     SourceEntry,
@@ -36,7 +31,6 @@ from common.processing import (
 )
 from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import (
-    ALL_MEDIA_EXTENSIONS,
     default_worker_count,
     FilenameGenerator,
     sanitize_filename,
@@ -80,9 +74,7 @@ class IMessageProcessor(ProcessorBase):
             # Check for iPhone export: SMS/sms.db + SMS/Attachments/
             sms_dir = input_path / "SMS"
             if sms_dir.exists():
-                if (sms_dir / "sms.db").exists() and (
-                    sms_dir / "Attachments"
-                ).is_dir():
+                if (sms_dir / "sms.db").exists() and (sms_dir / "Attachments").is_dir():
                     return True
 
             # Check for preprocessed iMessage export
@@ -186,91 +178,43 @@ class IMessageProcessor(ProcessorBase):
     def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata.
 
-        Scans all media files in the iMessage export, computes hashes,
-        and returns a catalog structure without copying any files.
+        Requires preprocessed directory with metadata.json and source_path fields.
 
         Args:
-            input_dir: Path to input directory
+            input_dir: Path to preprocessed input directory
             **kwargs: Additional arguments (verbose, workers)
 
-        Returns:
-            Catalog dictionary with processor name and file entries.
+        Yields:
+            Catalog entries with processor name and file data.
         """
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
 
-        # Load metadata for preprocessed exports
-        metadata_index: Dict[str, Any] = {}
-        metadata_file = input_path / "metadata.json"
-        if metadata_file.exists():
-            try:
-                metadata = IMessageProcessor.load_metadata(metadata_file)
-                metadata_index = build_filename_index(metadata)
-            except Exception as e:
-                logger.warning(f"Could not load metadata.json: {e}")
-
-        # Find attachments directory (Mac or iPhone format)
-        attachments_dir = None
-        if (input_path / "Attachments").is_dir():
-            attachments_dir = input_path / "Attachments"
-        elif (input_path / "SMS" / "Attachments").is_dir():
-            attachments_dir = input_path / "SMS" / "Attachments"
-        elif (input_path / "media").is_dir():
-            # Preprocessed format
-            attachments_dir = input_path / "media"
-
-        if not attachments_dir or not attachments_dir.exists():
-            logger.warning(f"Attachments directory not found in: {input_path}")
-            return
-
-        # Collect all media files
-        all_files = []
-        for file_path in attachments_dir.rglob("*"):
-            if file_path.is_file() and file_path.suffix.lower() in ALL_MEDIA_EXTENSIONS:
-                all_files.append(file_path)
-
-        # Identify Live Photo pairs and filter out videos
-        # Videos will be linked via live_photo_video field on their paired images
-        live_photo_videos = find_live_photo_videos_in_files(all_files)
-        media_files = [f for f in all_files if f not in live_photo_videos]
-
-        if live_photo_videos:
-            log.logger.info(
-                "Found %d media files to catalog (%d Live Photo videos grouped with images)",
-                len(media_files),
-                len(live_photo_videos),
-            )
-
-        def extract_metadata(file_path: Path) -> Dict[str, Any]:
-            """Extract iMessage metadata for a media file."""
+        def extract_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
+            """Extract metadata from preprocessed entry."""
             result: Dict[str, Any] = {}
-
-            # Extract message context from metadata index
-            message = metadata_index.get(file_path.name, {})
-            if message:
-                if message.get("sender"):
-                    result["sender"] = message["sender"]
-                if message.get("conversation_title"):
-                    result["conversation"] = message["conversation_title"]
-                if message.get("created"):
-                    result["timestamp"] = message["created"]
-                if message.get("content"):
-                    result["content"] = message["content"]
-
-            # Check for Live Photo video component
-            video_path = find_live_photo_video(file_path)
-            if video_path:
-                result["live_photo_video"] = str(video_path)
-
+            if "sender" in entry:
+                result["sender"] = entry["sender"]
+            if "conversation_title" in entry:
+                result["conversation"] = entry["conversation_title"]
+            if "created" in entry:
+                result["timestamp"] = entry["created"]
+            if "content" in entry:
+                result["content"] = entry["content"]
             return result
 
-        yield from catalog_media_files(
+        catalog_iter = IMessageProcessor.catalog_from_preprocessed_if_available(
             processor_name="iMessage",
             input_path=input_path,
-            media_files=media_files,
             workers=workers,
             metadata_extractor=extract_metadata,
+            container_key="conversations",
         )
+        if catalog_iter is not None:
+            yield from catalog_iter
+            return
+
+        logger.warning("Directory not preprocessed, skipping catalog: %s", input_path)
 
     @staticmethod
     def process_consolidated(
@@ -308,8 +252,9 @@ class IMessageProcessor(ProcessorBase):
             dedup_manifest=dedup_manifest,
         )
 
-    @staticmethod
+    @classmethod
     def process(
+        cls,
         input_dir: str,
         output_dir: Optional[str] = None,
         dedup_manifest: Optional[Dict[str, Any]] = None,
@@ -517,19 +462,26 @@ def _build_description(message: dict, export_username: str) -> str:
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[Optional[str], dict, str, Optional[str]]],
+    file_info: List[Tuple[Optional[str], dict, str, Optional[str], Optional[str]]],
 ) -> List[MetadataWriteRequest]:
     """Build MetadataWriteRequest objects for iMessage files.
 
     Args:
-        file_info: List of (file_path, message, export_username, content_hash) tuples
+        file_info: List of (file_path, message, export_username, content_hash,
+                   original_filename) tuples
 
     Returns:
         List of MetadataWriteRequest objects
     """
     requests: List[MetadataWriteRequest] = []
 
-    for file_path, message, export_username, content_hash in file_info:
+    for (
+        file_path,
+        message,
+        export_username,
+        content_hash,
+        original_filename,
+    ) in file_info:
         if file_path is None:
             continue
         is_merged = "messages" in message and isinstance(message["messages"], list)
@@ -554,6 +506,7 @@ def _build_metadata_requests(
                 ),
                 processor_name="imessage",
                 content_hash=content_hash,
+                original_filename=original_filename,
             )
         )
 
@@ -610,7 +563,7 @@ def build_filename_index(metadata: dict) -> dict:
     """
     return ProcessorBase.build_media_filename_index(
         metadata,
-        media_keys=["media_file"],
+        media_keys=["media_files"],
         include_orphaned=True,
         orphaned_prefer_existing=True,
     )
@@ -676,14 +629,22 @@ def _process_file_worker(args_tuple):
     """Worker function for processing files (Phase 1: copy and rename).
 
     Args:
-        args_tuple: Tuple of (media_path, message, export_username, output_dir, output_filename, content_hash)
+        args_tuple: Tuple of (media_path, message, export_username, output_dir,
+                    output_filename, content_hash, original_filename)
 
     Returns:
-        Tuple of (success, output_path, message, export_username, content_hash)
+        Tuple of (success, output_path, message, export_username, content_hash,
+        original_filename)
     """
-    media_path, message, export_username, output_dir, output_filename, content_hash = (
-        args_tuple
-    )
+    (
+        media_path,
+        message,
+        export_username,
+        output_dir,
+        output_filename,
+        content_hash,
+        original_filename,
+    ) = args_tuple
 
     try:
         output_path = output_dir / output_filename
@@ -695,11 +656,25 @@ def _process_file_worker(args_tuple):
         timestamp_str = _extract_message_timestamp(message)
         update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
 
-        return (True, str(output_path), message, export_username, content_hash)
+        return (
+            True,
+            str(output_path),
+            message,
+            export_username,
+            content_hash,
+            original_filename,
+        )
 
     except Exception as e:
         logger.error(f"Error processing {media_path.name}: {e}")
-        return (False, None, message, export_username, content_hash)
+        return (
+            False,
+            None,
+            message,
+            export_username,
+            content_hash,
+            original_filename,
+        )
 
 
 # ============================================================================
@@ -798,7 +773,9 @@ def _process_working_directory(
         return False
 
     logger.info(f"Loading metadata from {metadata_file}...")
-    metadata = IMessageProcessor.load_metadata(metadata_file)
+    metadata = IMessageProcessor.load_metadata(
+        metadata_file, validate=True, require_source_paths=True
+    )
 
     export_username = metadata.get("export_info", {}).get("export_username", "unknown")
     logger.info(f"Export identifier: {export_username}")
@@ -806,26 +783,6 @@ def _process_working_directory(
     # Build filename index
     filename_index = build_filename_index(metadata)
     logger.info(f"Found {len(filename_index)} media files to process")
-
-    # Check if this is new format (source_path in metadata) or legacy format (media/ directory)
-    # Sample the first message to detect format
-    sample_message = (
-        next(iter(filename_index.values()), None) if filename_index else None
-    )
-    use_legacy_format = sample_message is None or "source_path" not in sample_message
-
-    if use_legacy_format:
-        # Legacy format: scan media/ directory
-        media_dir = working_dir / "media"
-        if not media_dir.exists():
-            logger.error(f"Media directory not found: {media_dir}")
-            return False
-        logger.info("Using legacy format (media/ directory)")
-        media_files = list(media_dir.iterdir())
-        media_files = [f for f in media_files if f.is_file()]
-        logger.info(f"Found {len(media_files)} files in media directory")
-    else:
-        logger.info("Using new format (source_path in metadata)")
 
     # Filter out secondary files based on dedup manifest (using hash-based lookup)
     # Use cached file_hashes from preprocessing when available to avoid re-hashing
@@ -839,77 +796,43 @@ def _process_working_directory(
     )
     matched_files = []
 
-    if use_legacy_format:
-        # Legacy format: match files from media/ directory to metadata
-        for media_file in media_files:
-            if media_file.name in filename_index:
-                message = filename_index[media_file.name]
+    # Read source_path from metadata
+    for media_filename, message in filename_index.items():
+        source_path_str = message.get("source_path")
+        if not source_path_str:
+            logger.warning(f"No source_path for file: {media_filename}")
+            continue
 
-                # Dedup filtering for legacy format
-                if dedup_manifest:
-                    content_hash = file_hashes.get(media_file.name)
-                    if content_hash:
-                        if not is_file_primary_by_hash(
-                            dedup_manifest, content_hash, "iMessage", str(media_file)
-                        ):
-                            skipped_dedup += 1
-                            continue
-                    else:
-                        if IMessageProcessor.should_skip_for_dedup(
-                            str(media_file), dedup_manifest, "iMessage"
-                        ):
-                            skipped_dedup += 1
-                            continue
+        source_path = Path(source_path_str)
+        if not source_path.exists():
+            logger.warning(f"Source file not found: {source_path}")
+            continue
 
-                file_ext = media_file.suffix.lower()
-                identifier = _build_imessage_identifier(message)
-                timestamp = _extract_message_timestamp(message)
-                output_filename = filename_gen.generate(timestamp, identifier, file_ext)
-                # Get content_hash for EXIF metadata
-                content_hash = file_hashes.get(media_file.name)
-                matched_files.append(
-                    (media_file, message, output_filename, content_hash)
-                )
-            else:
-                logger.warning(f"No metadata for file: {media_file.name}")
-    else:
-        # New format: read source_path from metadata directly
-        for media_filename, message in filename_index.items():
-            source_path_str = message.get("source_path")
-            if not source_path_str:
-                logger.warning(f"No source_path for file: {media_filename}")
-                continue
-
-            source_path = Path(source_path_str)
-            if not source_path.exists():
-                logger.warning(f"Source file not found: {source_path}")
-                continue
-
-            # Dedup filtering for new format
-            if dedup_manifest:
-                content_hash = file_hashes.get(media_filename)
-                if content_hash:
-                    # Pass source_path for within-processor dedup (e.g., same file
-                    # in multiple iMessage exports from different devices)
-                    if not is_file_primary_by_hash(
-                        dedup_manifest, content_hash, "iMessage", source_path_str
-                    ):
-                        skipped_dedup += 1
-                        continue
-                else:
-                    if IMessageProcessor.should_skip_for_dedup(
-                        str(source_path), dedup_manifest, "iMessage"
-                    ):
-                        skipped_dedup += 1
-                        continue
-
-            file_ext = source_path.suffix.lower()
-            identifier = _build_imessage_identifier(message)
-            timestamp = _extract_message_timestamp(message)
-            output_filename = filename_gen.generate(timestamp, identifier, file_ext)
-            # Get content_hash for EXIF metadata
+        # Dedup filtering
+        if dedup_manifest:
             content_hash = file_hashes.get(media_filename)
-            matched_files.append((source_path, message, output_filename, content_hash))
+            if content_hash:
+                # Pass source_path for within-processor dedup (e.g., same file
+                # in multiple iMessage exports from different devices)
+                if not is_file_primary_by_hash(
+                    dedup_manifest, content_hash, "iMessage", source_path_str
+                ):
+                    skipped_dedup += 1
+                    continue
+            else:
+                if IMessageProcessor.should_skip_for_dedup(
+                    str(source_path), dedup_manifest, "iMessage"
+                ):
+                    skipped_dedup += 1
+                    continue
+
+        file_ext = source_path.suffix.lower()
+        identifier = _build_imessage_identifier(message)
+        timestamp = _extract_message_timestamp(message)
+        output_filename = filename_gen.generate(timestamp, identifier, file_ext)
+        # Get content_hash for EXIF metadata
+        content_hash = file_hashes.get(media_filename)
+        matched_files.append((source_path, message, output_filename, content_hash))
 
     if skipped_dedup > 0:
         logger.info(f"Skipped {skipped_dedup} secondary files (dedup)")
@@ -923,7 +846,7 @@ def _process_working_directory(
     num_workers = workers if workers is not None else default_worker_count()
     logger.info(f"Using {num_workers} workers")
 
-    # Prepare arguments (include content_hash for EXIF)
+    # Prepare arguments (include content_hash and original_filename for EXIF)
     process_args = [
         (
             media_file,
@@ -932,6 +855,7 @@ def _process_working_directory(
             output_dir,
             output_filename,
             content_hash,
+            media_file.name,  # original_filename
         )
         for media_file, message, output_filename, content_hash in matched_files
     ]
@@ -953,9 +877,15 @@ def _process_working_directory(
             results.append(_process_file_worker(args))
 
     # Collect successful files for EXIF processing
-    # Result tuple: (success, output_path, message, exp_username, content_hash)
+    # Result tuple: (success, output_path, message, exp_username, content_hash, original_filename)
     def extract_info(r):
-        return (r[1], r[2], r[3], r[4])  # (output_path, message, exp_username, hash)
+        return (
+            r[1],
+            r[2],
+            r[3],
+            r[4],
+            r[5],
+        )  # (output_path, message, exp_username, hash, original_filename)
 
     collected = IMessageProcessor.collect_processing_results(results, extract_info)
 

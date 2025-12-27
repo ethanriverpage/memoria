@@ -13,7 +13,6 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.dedup.catalog import catalog_media_files
 from common.dedup.description import (
     SourceEntry,
     build_description,
@@ -28,11 +27,7 @@ from common.media.exiftool import (
     build_datetime_tags,
 )
 from common.output.logging import get_processor_logger
-from common.processing import (
-    get_preprocessing_cache_path,
-    is_preprocessing_cache_valid,
-    print_processing_summary,
-)
+from common.processing import print_processing_summary
 from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import (
     default_worker_count,
@@ -170,106 +165,44 @@ class DiscordProcessor(ProcessorBase):
 
     @staticmethod
     def build_catalog(input_dir: str, **kwargs):
-        """Build catalog of files with hashes and metadata (generator)."""
+        """Build catalog of files with hashes and metadata (generator).
+
+        Requires preprocessed directories (with metadata.json and source_path).
+        """
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
 
-        # Determine the working directory for cataloging
-        working_dir = None
-        media_dir = input_path / "media"
-
-        if media_dir.exists():
-            # Already preprocessed
-            working_dir = input_path
-        else:
-            # Check for raw export structure (Messages/ directory with channel folders)
-            messages_dir = input_path / "Messages"
-            if messages_dir.exists():
-                # Check for existing preprocessing cache
-                cache_path = get_preprocessing_cache_path(input_path, "Discord")
-
-                if is_preprocessing_cache_valid(cache_path):
-                    log.using_cache(str(cache_path))
-                    working_dir = cache_path
-                else:
-                    # Auto-preprocess to cache directory (downloads attachments)
-                    log.logger.info(
-                        "Raw Discord export detected, preprocessing to cache: %s",
-                        cache_path,
-                    )
-                    log.logger.info(
-                        "This will download attachments from Discord CDN..."
-                    )
-                    cache_path.mkdir(parents=True, exist_ok=True)
-
-                    preprocessor = DiscordPreprocessor(
-                        export_path=input_path,
-                        output_dir=cache_path,
-                        workers=workers,
-                    )
-                    if not preprocessor.run():
-                        return
-
-                    working_dir = cache_path
-            else:
-                log.logger.warning("No media directory found in: %s", input_path)
-                return
-
-        if working_dir is None:
-            return
-
-        # Now catalog from the working directory
-        media_dir = working_dir / "media"
-        if not media_dir.exists():
-            log.logger.warning(
-                "No media directory found after preprocessing: %s", working_dir
-            )
-            return
-
-        # Load metadata for preprocessed exports
-        metadata_index: Dict[str, dict] = {}
-        metadata_file = working_dir / "metadata.json"
-        if metadata_file.exists():
-            try:
-                metadata = DiscordProcessor.load_metadata(metadata_file)
-                metadata_index = build_filename_index(metadata)
-            except Exception as e:
-                log.logger.warning("Could not load metadata.json: %s", e)
-
-        # Collect all media files
-        media_files = [
-            f for f in media_dir.iterdir() if f.is_file() and get_media_type(f)
-        ]
-
-        def extract_metadata(file_path: Path) -> Dict[str, Any]:
-            """Extract Discord metadata for a media file."""
-            info = metadata_index.get(file_path.name, {})
+        def extract_preprocessed_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
+            """Extract metadata from preprocessed entry."""
             result: Dict[str, Any] = {}
-            if info:
-                message = info.get("message", {})
-                # Build conversation name from guild + channel or just channel
-                guild_name = info.get("guild_name")
-                channel_title = info.get("channel_title", "")
-                if guild_name:
-                    result["conversation"] = f"{guild_name} / {channel_title}"
-                elif channel_title:
-                    result["conversation"] = channel_title
-                # Extract sender and other fields
-                if message.get("sender"):
-                    result["sender"] = message["sender"]
-                if message.get("timestamp"):
-                    result["timestamp"] = message["timestamp"]
-                if message.get("content"):
-                    result["content"] = message["content"]
+            # Build conversation from guild + channel
+            guild_name = entry.get("guild_name")
+            channel_title = entry.get("channel_title", "")
+            if guild_name:
+                result["conversation"] = f"{guild_name} / {channel_title}"
+            elif channel_title:
+                result["conversation"] = channel_title
+            if "sender" in entry:
+                result["sender"] = entry["sender"]
+            if "timestamp" in entry:
+                result["timestamp"] = entry["timestamp"]
+            if "content" in entry:
+                result["content"] = entry["content"]
             return result
 
-        yield from catalog_media_files(
+        catalog_iter = DiscordProcessor.catalog_from_preprocessed_if_available(
             processor_name="Discord",
-            input_path=working_dir,
-            media_files=media_files,
+            input_path=input_path,
             workers=workers,
-            metadata_extractor=extract_metadata if metadata_index else None,
+            metadata_extractor=extract_preprocessed_metadata,
+            container_key="conversations",
         )
+        if catalog_iter is not None:
+            yield from catalog_iter
+        else:
+            log.logger.warning(
+                "Directory not preprocessed, skipping catalog: %s", input_path
+            )
 
     @classmethod
     def process(
@@ -347,19 +280,26 @@ def _build_description(message_info: dict, export_username: str) -> str:
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[Optional[str], dict, str, Optional[str]]],
+    file_info: List[Tuple[Optional[str], dict, str, Optional[str], Optional[str]]],
 ) -> List[MetadataWriteRequest]:
     """Build MetadataWriteRequest objects for Discord files.
 
     Args:
-        file_info: List of (file_path, message_info, export_username, content_hash) tuples
+        file_info: List of (file_path, message_info, export_username, content_hash,
+                   original_filename) tuples
 
     Returns:
         List of MetadataWriteRequest objects
     """
     requests: List[MetadataWriteRequest] = []
 
-    for file_path, message_info, export_username, content_hash in file_info:
+    for (
+        file_path,
+        message_info,
+        export_username,
+        content_hash,
+        original_filename,
+    ) in file_info:
         if file_path is None:
             continue
         message = message_info.get("message", {})
@@ -383,6 +323,7 @@ def _build_metadata_requests(
                 ),
                 processor_name="discord",
                 content_hash=content_hash,
+                original_filename=original_filename,
             )
         )
 
@@ -446,6 +387,7 @@ def _process_file_worker(args_tuple):
         output_dir,
         output_filename,
         content_hash,
+        original_filename,
     ) = args_tuple
 
     try:
@@ -459,11 +401,25 @@ def _process_file_worker(args_tuple):
         if timestamp_str:
             update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
 
-        return (True, str(output_path), message_info, export_username, content_hash)
+        return (
+            True,
+            str(output_path),
+            message_info,
+            export_username,
+            content_hash,
+            original_filename,
+        )
 
     except Exception as e:
         logger.error(f"Error processing {media_path.name}: {e}")
-        return (False, None, message_info, export_username, content_hash)
+        return (
+            False,
+            None,
+            message_info,
+            export_username,
+            content_hash,
+            original_filename,
+        )
 
 
 def process_logic(
@@ -529,7 +485,9 @@ def _process_working_directory(
 
     # Load metadata
     log.loading_metadata(str(metadata_file))
-    metadata = DiscordProcessor.load_metadata(metadata_file)
+    metadata = DiscordProcessor.load_metadata(
+        metadata_file, validate=True, require_source_paths=True
+    )
 
     export_username = metadata.get("export_info", {}).get("export_username", "unknown")
     log.export_username(export_username)
@@ -620,6 +578,9 @@ def _process_working_directory(
     # Prepare arguments for parallel processing
     process_args = []
     for media_file, message_info, output_filename, content_hash in matched_files:
+        # Get original filename for XMP:PreservedFileName embedding
+        original_filename = media_file.name
+
         process_args.append(
             (
                 media_file,
@@ -628,6 +589,7 @@ def _process_working_directory(
                 output_dir,
                 output_filename,
                 content_hash,
+                original_filename,
             )
         )
 
@@ -649,14 +611,15 @@ def _process_working_directory(
             results.append(_process_file_worker(args_tuple))
 
     # Collect results for EXIF processing
-    # Result tuple: (success, output_path, message_info, exp_username, content_hash)
+    # Result tuple: (success, output_path, message_info, exp_username, content_hash, original_filename)
     def extract_info(r):
         return (
             r[1],
             r[2],
             r[3],
             r[4],
-        )  # (output_path, message_info, exp_username, hash)
+            r[5],
+        )  # (output_path, message_info, exp_username, hash, original_filename)
 
     collected = DiscordProcessor.collect_processing_results(results, extract_info)
 

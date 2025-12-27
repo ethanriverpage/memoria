@@ -1,0 +1,9 @@
+{
+  "name": "Main Group",
+  "members": [
+    {"name": "Test User", "email": "testuser@example.com", "user_type": "Human"},
+    {"name": "Alice", "email": "alice@example.com", "user_type": "Human"},
+    {"name": "Bob", "email": "bob@example.com", "user_type": "Human"}
+  ]
+}
+

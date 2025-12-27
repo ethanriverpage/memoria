@@ -13,7 +13,6 @@ import base64
 import logging
 import subprocess
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Set, Tuple, Union
 

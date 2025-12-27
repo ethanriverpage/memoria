@@ -1,0 +1,24 @@
+{
+  "title": "IMG_0001.jpg",
+  "photoTakenTime": {
+    "timestamp": "1673785845",
+    "formatted": "Jan 15, 2023, 10:30:45 AM UTC"
+  },
+  "geoData": {
+    "latitude": 37.7749,
+    "longitude": -122.4194,
+    "altitude": 10.0,
+    "latitudeSpan": 0.0,
+    "longitudeSpan": 0.0
+  },
+  "geoDataExif": {
+    "latitude": 37.7749,
+    "longitude": -122.4194,
+    "altitude": 10.0,
+    "latitudeSpan": 0.0,
+    "longitudeSpan": 0.0
+  },
+  "description": "Photo from 2023",
+  "url": "https://photos.google.com/photo/xxx"
+}
+

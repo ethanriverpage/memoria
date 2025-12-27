@@ -438,7 +438,7 @@ class TestIMessageOrphanDetection:
         orphaned_media = preprocessor._detect_orphaned_media(processed_attachments)
 
         # Check that the orphan file was detected
-        orphaned_paths = [entry["media_file"] for entry in orphaned_media]
+        orphaned_paths = [entry["filename"] for entry in orphaned_media]
         assert "orphan_not_in_db.jpg" in orphaned_paths
 
         # Check FailureTracker was updated
@@ -478,3 +478,122 @@ class TestIMessageOrphanDetection:
         # No orphans should be found
         assert len(orphaned_media) == 0
         assert len(preprocessor.failure_tracker.orphaned_media) == 0
+
+
+class TestIMessageRealisticFixtures:
+    """Processing tests using committed schema-faithful iMessage fixtures."""
+
+    def test_mac_basic_database_structure(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly parse Mac export database structure."""
+        from tests.fixtures.export_tree import copy_export_fixture
+        import sqlite3
+
+        copy_export_fixture("imessage", "mac_basic", temp_export_dir)
+
+        # Verify database has expected tables and data
+        conn = sqlite3.connect(temp_export_dir / "chat.db")
+        cursor = conn.cursor()
+
+        # Check tables exist
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cursor.fetchall()}
+        assert "message" in tables
+        assert "handle" in tables
+        assert "chat" in tables
+        assert "attachment" in tables
+
+        # Check we have sample data
+        cursor.execute("SELECT id FROM handle WHERE ROWID = 1")
+        handle = cursor.fetchone()
+        assert handle[0] == "+14045551234"
+
+        conn.close()
+
+    def test_iphone_basic_database_structure(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly parse iPhone export database structure."""
+        from tests.fixtures.export_tree import copy_export_fixture
+        import sqlite3
+
+        copy_export_fixture("imessage", "iphone_basic", temp_export_dir)
+
+        # Verify SMS subdirectory structure
+        assert (temp_export_dir / "SMS" / "sms.db").exists()
+
+        # Verify database has expected data
+        conn = sqlite3.connect(temp_export_dir / "SMS" / "sms.db")
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT id FROM handle WHERE ROWID = 1")
+        handle = cursor.fetchone()
+        assert handle[0] == "+14045559876"
+
+        conn.close()
+
+    def test_live_photo_lp_image_filesystem_scan(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should identify Live Photo MOV not tracked in database."""
+        from tests.fixtures.export_tree import copy_export_fixture
+        import sqlite3
+
+        copy_export_fixture("imessage", "live_photo_lp_image_pair", temp_export_dir)
+
+        # The HEIC is in the database
+        conn = sqlite3.connect(temp_export_dir / "chat.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT filename FROM attachment")
+        attachments = [row[0] for row in cursor.fetchall()]
+        conn.close()
+
+        # Only HEIC should be in DB
+        heic_in_db = any("lp_image.HEIC" in a for a in attachments)
+        mov_in_db = any("lp_image.MOV" in a for a in attachments)
+        assert heic_in_db
+        assert not mov_in_db
+
+        # But both exist on filesystem
+        lp_dir = temp_export_dir / "Attachments" / "lp" / "00" / "LIVEPHOTO-UUID"
+        assert (lp_dir / "lp_image.HEIC").exists()
+        assert (lp_dir / "lp_image.MOV").exists()
+
+    def test_ventura_attributedbody_parsing(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should handle message with attributedBody instead of text."""
+        from tests.fixtures.export_tree import copy_export_fixture
+        import sqlite3
+
+        copy_export_fixture("imessage", "ventura_attributedbody", temp_export_dir)
+
+        conn = sqlite3.connect(temp_export_dir / "chat.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT text, attributedBody FROM message WHERE ROWID = 1")
+        text, attributed_body = cursor.fetchone()
+        conn.close()
+
+        # text should be NULL, attributedBody should have content
+        assert text is None
+        assert attributed_body is not None
+        # Check for streamtyped header per docs
+        assert b"streamtyped" in attributed_body
+
+    def test_contacts_vcf_format(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should parse contacts.vcf in standard vCard format."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("imessage", "with_contacts_vcf", temp_export_dir)
+
+        vcf_content = (temp_export_dir / "contacts.vcf").read_text()
+
+        # Verify vCard format
+        assert "BEGIN:VCARD" in vcf_content
+        assert "END:VCARD" in vcf_content
+        assert "FN:John Doe" in vcf_content
+        assert "TEL" in vcf_content
+        assert "+14045551234" in vcf_content

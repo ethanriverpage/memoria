@@ -1,0 +1,34 @@
+{
+  "conversation_abc123def456": [
+    {
+      "From": "friend_username",
+      "Media Type": "MEDIA",
+      "Created": "2024-04-20 01:29:22 UTC",
+      "Conversation Title": null,
+      "IsSender": false,
+      "Content": "Check this out!",
+      "Media IDs": "b~EiQSFTM0SEdmSTFNRzBDdkhlelFQS1hLUhoAGgAyAXxIAlAEYAE"
+    },
+    {
+      "From": "testuser",
+      "Media Type": "TEXT",
+      "Created": "2024-04-20 01:30:00 UTC",
+      "Conversation Title": null,
+      "IsSender": true,
+      "Content": "Nice photo!",
+      "Media IDs": ""
+    }
+  ],
+  "conversation_xyz789ghi012": [
+    {
+      "From": "group_member_1",
+      "Media Type": "MEDIA",
+      "Created": "2024-04-21 10:15:30 UTC",
+      "Conversation Title": "Weekend Trip Planning",
+      "IsSender": false,
+      "Content": "Here's the photo from yesterday",
+      "Media IDs": "b~xyz789abc123def456"
+    }
+  ]
+}
+

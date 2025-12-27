@@ -1,0 +1,7 @@
+{
+  "members": [
+    {"name": "Test User", "email": "testuser@example.com", "user_type": "Human"},
+    {"name": "Friend", "email": "friend@example.com", "user_type": "Human"}
+  ]
+}
+

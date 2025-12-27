@@ -62,8 +62,8 @@ class SnapchatPreprocessor(PreprocessorBase):
         # Set up context merger for message accumulation
         self.set_context_merger(merge_snapchat_context)
 
-        # Statistics specific to this preprocessor
-        self.stats = {
+        # Statistics specific to this preprocessor (preserves shared keys from base)
+        self.stats.update({
             "total_files": 0,
             "media_files": 0,
             "overlay_files": 0,
@@ -76,7 +76,7 @@ class SnapchatPreprocessor(PreprocessorBase):
             "media_messages": 0,
             "duplicate_files": 0,
             "deduplicated_files": 0,
-        }
+        })
 
     def log_failure(
         self, category: str, filename: str, reason: str, details: str = ""
@@ -106,17 +106,14 @@ class SnapchatPreprocessor(PreprocessorBase):
         return DetectionResult(username="unknown", source="none")
 
     def validate_export(self) -> bool:
-        """Validate that export directory has required structure"""
-        if not self.export_path.exists():
-            logger.error("Export path does not exist: %s", self.export_path)
+        """Validate that export directory has required structure."""
+        if not self.require_exists(self.export_path, label="Export path"):
             return False
 
-        if not self.chat_media_dir.exists():
-            logger.error("chat_media directory not found: %s", self.chat_media_dir)
+        if not self.require_exists(self.chat_media_dir, label="chat_media directory"):
             return False
 
-        if not self.chat_history_file.exists():
-            logger.error("chat_history.json not found: %s", self.chat_history_file)
+        if not self.require_exists(self.chat_history_file, label="chat_history.json"):
             return False
 
         return True
@@ -813,6 +810,10 @@ class SnapchatPreprocessor(PreprocessorBase):
                 )
                 logger.error("Failed to copy %s: %s", filename, e)
 
+    def get_content_key(self) -> str:
+        """Return the content key for Snapchat Messages metadata."""
+        return "conversations"
+
     def build_metadata_from_results(self, chat_history: Dict) -> Dict:
         """Build metadata from hash_with_dedup results."""
         # Get merged contexts from base class
@@ -821,11 +822,12 @@ class SnapchatPreprocessor(PreprocessorBase):
         metadata = {
             "export_info": {
                 "export_path": str(self.export_path),
+                "export_name": self.export_path.name,
                 "export_username": self.extract_username(chat_history),
                 "processed_date": datetime.now().isoformat(),
             },
             "conversations": {},
-            "orphaned_media": [],
+            "unmatched_media": [],  # Files processable but lacking conversation context
             "file_hashes": {},  # Maps filename -> content_hash for dedup optimization
         }
 
@@ -857,8 +859,8 @@ class SnapchatPreprocessor(PreprocessorBase):
                     "content": "",
                     "is_sender": None,
                     "media_id": messages[0].get("media_id", "") if messages else "",
-                    "media_file": filename,
-                    "source_path": source_path,
+                    "media_files": [filename],
+                    "source_paths": {filename: source_path},
                 }
                 if overlay_file:
                     entry["overlay_file"] = overlay_file
@@ -869,8 +871,8 @@ class SnapchatPreprocessor(PreprocessorBase):
                 if conv_id is None:
                     continue
                 entry = {
-                    "media_file": filename,
-                    "source_path": source_path,
+                    "media_files": [filename],
+                    "source_paths": {filename: source_path},
                     "messages": messages,
                     "primary_created": context.get("primary_created"),
                     "is_duplicate": True,
@@ -897,8 +899,8 @@ class SnapchatPreprocessor(PreprocessorBase):
                     "content": msg.get("content"),
                     "is_sender": msg.get("is_sender"),
                     "media_id": msg.get("media_id"),
-                    "media_file": filename,
-                    "source_path": source_path,
+                    "media_files": [filename],
+                    "source_paths": {filename: source_path},
                 }
                 if overlay_file:
                     entry["overlay_file"] = overlay_file
@@ -930,7 +932,7 @@ class SnapchatPreprocessor(PreprocessorBase):
                 "messages": entries,
             }
 
-        metadata["orphaned_media"] = orphaned_entries
+        metadata["unmatched_media"] = orphaned_entries
 
         # Build file_hashes lookup table for cross-processor dedup optimization
         for content_hash, registry_entry in self._hash_registry.items():
@@ -1016,17 +1018,6 @@ class SnapchatPreprocessor(PreprocessorBase):
             "Created %d folders in %s", len(ambiguous_cases), self.needs_matching_dir
         )
 
-    def save_metadata(self, metadata: Dict) -> None:
-        """Save cleaned metadata to metadata.json"""
-        try:
-            with open(self.metadata_file, "w", encoding="utf-8") as f:
-                json.dump(metadata, f, indent=2, ensure_ascii=False)
-
-            logger.info(f"SUCCESS: Saved metadata to {self.metadata_file}")
-        except Exception as e:
-            logger.error(f"Failed to save metadata: {e}")
-            raise
-
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
         stats = {
@@ -1093,6 +1084,10 @@ class SnapchatPreprocessor(PreprocessorBase):
         self.organize_ambiguous_files(ambiguous_cases, export_username)
 
         # Save metadata
-        self.save_metadata(metadata)
+        self.set_unmatched_media(metadata.get("unmatched_media", []))
+        self.save_metadata(
+            metadata["conversations"],
+            extra_export_info={},  # export_info already built in build_metadata_from_results
+        )
 
         return True

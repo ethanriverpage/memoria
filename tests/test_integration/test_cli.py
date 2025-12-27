@@ -101,8 +101,15 @@ class TestCLIDetection:
 
     def test_detect_snapchat_memories(self, project_root, tmp_path):
         """Should detect Snapchat Memories export."""
+        import os
+
         export_dir = tmp_path / "snapchat_export"
         create_snapchat_memories_export(export_dir)
+
+        # Snapchat Memories is a raw processor (doesn't use preprocessing),
+        # so cross-processor dedup needs to be disabled for detection test
+        env = os.environ.copy()
+        env["CROSS_PROCESSOR_DEDUP"] = "false"
 
         result = subprocess.run(
             [
@@ -116,6 +123,7 @@ class TestCLIDetection:
             capture_output=True,
             text=True,
             timeout=30,
+            env=env,
         )
 
         assert "Snapchat Memories" in result.stdout or "Detected" in result.stdout

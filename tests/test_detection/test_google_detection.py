@@ -219,3 +219,114 @@ class TestGoogleMultiProcessorDetection:
         assert google_photos_processor.detect(temp_export_dir) is True
         assert google_chat_processor.detect(temp_export_dir) is True
         assert google_voice_processor.detect(temp_export_dir) is True
+
+
+class TestGooglePhotosRealisticFixtures:
+    """Tests using committed schema-faithful Google Photos fixtures."""
+
+    def test_detect_takeout_basic_fixture(
+        self, google_photos_processor, temp_export_dir
+    ):
+        """Should detect the takeout_basic fixture (standard Takeout structure)."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("google_photos", "takeout_basic", temp_export_dir)
+
+        # The export should be detected at the Takeout level
+        takeout_dir = temp_export_dir / "Takeout"
+        assert google_photos_processor.detect(takeout_dir) is True
+
+    def test_detect_takeout_duplicate_album_vs_library(
+        self, google_photos_processor, temp_export_dir
+    ):
+        """Should detect fixture with same file in album and library."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "google_photos", "takeout_duplicate_album_vs_library", temp_export_dir
+        )
+
+        takeout_dir = temp_export_dir / "Takeout"
+        assert google_photos_processor.detect(takeout_dir) is True
+
+        # Verify both locations exist
+        photos_lib = takeout_dir / "Google Photos" / "Photos from 2023" / "shared_photo.jpg"
+        photos_album = (
+            takeout_dir / "Google Photos" / "Albums" / "Favorites" / "shared_photo.jpg"
+        )
+        assert photos_lib.exists()
+        assert photos_album.exists()
+
+    def test_detect_takeout_missing_json_some(
+        self, google_photos_processor, temp_export_dir
+    ):
+        """Should detect fixture with mixed JSON metadata presence."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("google_photos", "takeout_missing_json_some", temp_export_dir)
+
+        takeout_dir = temp_export_dir / "Takeout"
+        assert google_photos_processor.detect(takeout_dir) is True
+
+        photos_dir = takeout_dir / "Google Photos" / "Photos from 2023"
+        # One file has JSON, one doesn't
+        assert (photos_dir / "with_metadata.jpg.json").exists()
+        assert not (photos_dir / "without_metadata.jpg.json").exists()
+
+
+class TestGoogleChatRealisticFixtures:
+    """Tests using committed schema-faithful Google Chat fixtures."""
+
+    def test_detect_doc_timestamp_format_fixture(
+        self, google_chat_processor, temp_export_dir
+    ):
+        """Should detect fixture with doc-style timestamp strings."""
+        from tests.fixtures.export_tree import copy_export_fixture
+        import json
+
+        copy_export_fixture("google_chat", "doc_timestamp_format", temp_export_dir)
+        assert google_chat_processor.detect(temp_export_dir) is True
+
+        # Verify timestamp format matches docs
+        messages_path = (
+            temp_export_dir
+            / "Google Chat"
+            / "Groups"
+            / "Space 12345678"
+            / "messages.json"
+        )
+        data = json.loads(messages_path.read_text())
+        timestamp = data["messages"][0]["created_date"]
+        # Doc format: "Thursday, November 3, 2016 at 11:59:50 AM UTC"
+        assert "at" in timestamp
+        assert "UTC" in timestamp
+        assert "," in timestamp
+
+    def test_detect_file_naming_patterns_fixture(
+        self, google_chat_processor, temp_export_dir
+    ):
+        """Should detect fixture with various file naming patterns."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("google_chat", "file_naming_patterns", temp_export_dir)
+        assert google_chat_processor.detect(temp_export_dir) is True
+
+        # Verify different naming patterns exist
+        base = temp_export_dir / "Google Chat" / "Groups" / "DM 98765432"
+        assert (base / "File-2016-09-06.png").exists()
+        assert (base / "File-2016-09-06(1).png").exists()
+        assert (base / "File-03b06911-def0-4c33-ad50-03f90084a158.mov").exists()
+        assert (base / "File-284346614161283602_account_id=3.jpg").exists()
+
+    def test_detect_groups_and_users_fixture(
+        self, google_chat_processor, temp_export_dir
+    ):
+        """Should detect fixture with both Groups and Users directories."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("google_chat", "groups_and_users", temp_export_dir)
+        assert google_chat_processor.detect(temp_export_dir) is True
+
+        # Verify both Groups and Users exist
+        assert (temp_export_dir / "Google Chat" / "Groups").exists()
+        assert (temp_export_dir / "Google Chat" / "Users").exists()

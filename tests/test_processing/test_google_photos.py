@@ -314,3 +314,90 @@ class TestGooglePhotosContentHashCaching:
             assert len(media_entry["content_hash"]) == 16, (
                 "content_hash should be a 16-char xxHash64 hex digest"
             )
+
+
+class TestGooglePhotosRealisticFixtures:
+    """Processing tests using committed schema-faithful Google Photos fixtures."""
+
+    def test_takeout_basic_structure(
+        self, google_photos_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly parse Takeout-style export structure."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("google_photos", "takeout_basic", temp_export_dir)
+
+        takeout_dir = temp_export_dir / "Takeout"
+        photos_dir = takeout_dir / "Google Photos"
+
+        # Verify structure matches docs
+        assert (photos_dir / "Photos from 2023" / "IMG_0001.jpg").exists()
+        assert (photos_dir / "Photos from 2023" / "IMG_0001.jpg.json").exists()
+        assert (photos_dir / "Albums" / "Summer 2023" / "vacation.jpg").exists()
+        assert (photos_dir / "Albums" / "Summer 2023" / "vacation.jpg.json").exists()
+        assert (photos_dir / "metadata.json").exists()
+
+    def test_takeout_json_metadata_format(
+        self, google_photos_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly parse JSON metadata with all documented fields."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("google_photos", "takeout_basic", temp_export_dir)
+
+        json_path = (
+            temp_export_dir
+            / "Takeout"
+            / "Google Photos"
+            / "Photos from 2023"
+            / "IMG_0001.jpg.json"
+        )
+        metadata = json.loads(json_path.read_text())
+
+        # Verify all documented fields are present
+        assert "title" in metadata
+        assert "photoTakenTime" in metadata
+        assert "timestamp" in metadata["photoTakenTime"]
+        assert "formatted" in metadata["photoTakenTime"]
+        assert "geoData" in metadata
+        assert "latitude" in metadata["geoData"]
+        assert "longitude" in metadata["geoData"]
+
+    def test_takeout_duplicate_detection(
+        self, google_photos_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should identify same file appearing in album and library."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "google_photos", "takeout_duplicate_album_vs_library", temp_export_dir
+        )
+
+        takeout_dir = temp_export_dir / "Takeout"
+        lib_file = takeout_dir / "Google Photos" / "Photos from 2023" / "shared_photo.jpg"
+        album_file = (
+            takeout_dir / "Google Photos" / "Albums" / "Favorites" / "shared_photo.jpg"
+        )
+
+        # Both files should exist and have same content
+        assert lib_file.exists()
+        assert album_file.exists()
+        assert lib_file.read_bytes() == album_file.read_bytes()
+
+    def test_takeout_missing_json_handling(
+        self, google_photos_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should handle files with and without JSON metadata."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("google_photos", "takeout_missing_json_some", temp_export_dir)
+
+        photos_dir = (
+            temp_export_dir / "Takeout" / "Google Photos" / "Photos from 2023"
+        )
+
+        # One has metadata, one doesn't
+        assert (photos_dir / "with_metadata.jpg").exists()
+        assert (photos_dir / "with_metadata.jpg.json").exists()
+        assert (photos_dir / "without_metadata.jpg").exists()
+        assert not (photos_dir / "without_metadata.jpg.json").exists()

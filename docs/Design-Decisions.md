@@ -20,6 +20,30 @@ This document explains key architectural and UX decisions in Memoria and the rat
 - Modifying metadata later requires specialized tools (exiftool)
 - Slightly increases file size (typically <1% overhead)
 
+## Original Filename Preservation
+
+**Decision:** Original source filenames are embedded in file metadata using `XMP:PreservedFileName`.
+
+**Rationale:**
+
+- Files are renamed during processing (to timestamp-based names)
+- Original filenames may contain context (e.g., `IMG_1234.jpg`, `Screenshot_2023-01-15`)
+- Preserves traceability back to source export
+- Uses dedicated XMP field rather than overloading description/caption fields
+- Standard field used by Adobe Lightroom and other professional tools
+
+**Implementation:**
+
+- **XMP-supported formats** (JPEG, PNG, HEIC, MP4, MOV, etc.): `XMP:PreservedFileName` via exiftool
+- **MKV files** (Snapchat overlays): `ORIGINAL_FILENAME` Matroska tag via FFmpeg
+- **Unsupported formats** (BMP, WebM): Skipped gracefully
+
+**Trade-offs:**
+
+- Adds small amount of metadata overhead
+- Not all viewers display this field (but it's always readable via exiftool)
+- BMP and WebM files cannot store this information
+
 **Alternatives considered:**
 
 - **Sidecar files** (`.json`, `.xmp`): Easy to lose or separate from media
@@ -145,63 +169,6 @@ Sequential uploads with concurrent processing provides the best balance.
 
 **Related:** See [Immich Upload](Immich-Upload) for implementation details.
 
-## ExifTool Over Native Libraries
-
-**Decision:** Use ExifTool subprocess calls instead of Python EXIF libraries.
-
-**Rationale:**
-
-- ExifTool is the gold standard for metadata handling (20+ years of development)
-- Supports more formats and tags than any Python library
-- Handles edge cases and malformed files gracefully
-- Widely available, well-maintained, and trusted by professionals
-- Provides consistent behavior across platforms
-- Better error messages and debugging output
-
-**Trade-offs:**
-
-- External dependency (must be installed separately)
-- Subprocess overhead (slower than native library calls)
-- Requires parsing text output in some cases
-
-**Why not Python libraries:**
-Testing of `piexif`, `Pillow.ExifTags`, and others showed:
-
-- Limited tag support (many tags not writable)
-- Format restrictions (JPEG only, no video support)
-- Inconsistent behavior across file types
-- Poor handling of malformed EXIF data
-- Active maintenance concerns
-
-ExifTool is worth the subprocess overhead for reliability and completeness.
-
-## FFmpeg for Video Processing
-
-**Decision:** Use FFmpeg for video re-encoding and overlay embedding.
-
-**Rationale:**
-
-- Industry standard for video processing
-- Supports essentially all video formats and codecs
-- Handles complex operations (overlay compositing, re-encoding) reliably
-- Widely available and well-documented
-- Active development and excellent codec support
-- Provides hardware acceleration when available
-
-**Trade-offs:**
-
-- External dependency
-- Re-encoding videos is slow (CPU/GPU intensive)
-- Increases file size for some source formats
-- Requires careful codec selection for compatibility
-
-**Why re-encode videos with overlays:**
-Unlike images (where overlay is simply composited), video overlays require re-encoding because:
-
-- Video is not a single image but a stream of frames
-- Overlay must be applied to every frame
-- Cannot modify compressed video stream directly
-
 ## Non-Destructive Processing
 
 **Decision:** Original exports are never modified; all operations work on copies.
@@ -323,24 +290,7 @@ All three processors match and should run. Priority ensures they run in a sensib
 - Requires developers to choose appropriate priority values
 - Potential for priority conflicts (mitigated by documentation)
 
-## Verbose Logging Optional
 
-**Decision:** Normal operation uses INFO-level console output; `--verbose` enables DEBUG logging and file logs.
-
-**Rationale:**
-
-- Most users don't need detailed logs for successful processing
-- Verbose output can be overwhelming for large exports
-- File logs use disk space and require cleanup
-- DEBUG logs slow processing slightly due to I/O
-- But detailed logs are essential for troubleshooting
-
-**Balance:**
-
-- Default: Clean, minimal output suitable for normal operation
-- Verbose: Comprehensive logging for debugging and progress monitoring
-
-**Related:** See [Logging](Logging) for details.
 
 ## Default to Immich Upload
 

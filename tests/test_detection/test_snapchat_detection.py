@@ -187,3 +187,139 @@ class TestSnapchatCombinedDetection:
         """Messages processor should not match a Memories-only export."""
         create_snapchat_memories_export(temp_export_dir)
         assert snapchat_messages_processor.detect(temp_export_dir) is False
+
+
+class TestSnapchatMessagesRealisticFixtures:
+    """Tests using committed schema-faithful Snapchat Messages fixtures."""
+
+    def test_detect_raw_conversation_id_map_fixture(
+        self, snapchat_messages_processor, temp_export_dir
+    ):
+        """Should detect fixture with conversation-ID-keyed chat_history.json."""
+        from tests.fixtures.export_tree import copy_export_fixture
+        import json
+
+        copy_export_fixture(
+            "snapchat_messages", "raw_conversation_id_map", temp_export_dir
+        )
+        assert snapchat_messages_processor.detect(temp_export_dir) is True
+
+        # Verify chat_history.json structure matches docs
+        chat_history = (
+            temp_export_dir / "messages" / "json" / "chat_history.json"
+        )
+        data = json.loads(chat_history.read_text())
+        # Keys should be conversation IDs
+        assert "conversation_abc123def456" in data
+        assert "conversation_xyz789ghi012" in data
+        # Messages should have documented fields
+        msg = data["conversation_abc123def456"][0]
+        assert "From" in msg
+        assert "Media Type" in msg
+        assert "Created" in msg
+        assert "Media IDs" in msg
+
+    def test_detect_raw_media_ids_pipe_separated_fixture(
+        self, snapchat_messages_processor, temp_export_dir
+    ):
+        """Should detect fixture with pipe-separated Media IDs."""
+        from tests.fixtures.export_tree import copy_export_fixture
+        import json
+
+        copy_export_fixture(
+            "snapchat_messages", "raw_media_ids_pipe_separated", temp_export_dir
+        )
+        assert snapchat_messages_processor.detect(temp_export_dir) is True
+
+        # Verify pipe-separated Media IDs
+        chat_history = (
+            temp_export_dir / "messages" / "json" / "chat_history.json"
+        )
+        data = json.loads(chat_history.read_text())
+        msg = data["conversation_multi_media"][0]
+        assert " | " in msg["Media IDs"]
+        media_ids = msg["Media IDs"].split(" | ")
+        assert len(media_ids) == 3
+
+    def test_detect_overlay_ambiguous_mtime_fixture(
+        self, snapchat_messages_processor, temp_export_dir
+    ):
+        """Should detect fixture with ambiguous overlay timestamps."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "snapchat_messages", "overlay_ambiguous_mtime", temp_export_dir
+        )
+        assert snapchat_messages_processor.detect(temp_export_dir) is True
+
+        # Verify multiple videos and overlays exist
+        chat_media = temp_export_dir / "messages" / "chat_media"
+        videos = list(chat_media.glob("*_media~*.mp4"))
+        overlays = list(chat_media.glob("*_overlay~*.png"))
+        assert len(videos) == 2
+        assert len(overlays) == 2
+
+
+class TestSnapchatMemoriesRealisticFixtures:
+    """Tests using committed schema-faithful Snapchat Memories fixtures."""
+
+    def test_detect_memories_basic_fixture(
+        self, snapchat_memories_processor, temp_export_dir
+    ):
+        """Should detect the memories_basic fixture."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("snapchat_memories", "memories_basic", temp_export_dir)
+        assert snapchat_memories_processor.detect(temp_export_dir) is True
+
+        # Verify structure matches docs
+        memories_dir = temp_export_dir / "memories"
+        assert (memories_dir / "metadata.json").exists()
+        assert (memories_dir / "media").is_dir()
+        assert (memories_dir / "overlays").is_dir()
+
+    def test_memories_metadata_json_format(
+        self, snapchat_memories_processor, temp_export_dir
+    ):
+        """Should have metadata.json with documented fields."""
+        from tests.fixtures.export_tree import copy_export_fixture
+        import json
+
+        copy_export_fixture("snapchat_memories", "memories_basic", temp_export_dir)
+
+        metadata_path = temp_export_dir / "memories" / "metadata.json"
+        data = json.loads(metadata_path.read_text())
+
+        # Should be an array
+        assert isinstance(data, list)
+        assert len(data) == 3
+
+        # Check documented fields
+        entry = data[0]
+        assert "date" in entry
+        assert "media_type" in entry
+        assert "media_filename" in entry
+        # Optional overlay_filename
+        assert "overlay_filename" in entry
+
+        # Third entry has no overlay
+        assert "overlay_filename" not in data[2]
+
+    def test_memories_media_and_overlays_structure(
+        self, snapchat_memories_processor, temp_export_dir
+    ):
+        """Should have media/ and overlays/ directories with files."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("snapchat_memories", "memories_basic", temp_export_dir)
+
+        memories_dir = temp_export_dir / "memories"
+
+        # Media files
+        assert (memories_dir / "media" / "snap_001.jpg").exists()
+        assert (memories_dir / "media" / "snap_002.mp4").exists()
+        assert (memories_dir / "media" / "snap_003.jpg").exists()
+
+        # Overlay files
+        assert (memories_dir / "overlays" / "overlay_001.png").exists()
+        assert (memories_dir / "overlays" / "overlay_002.png").exists()

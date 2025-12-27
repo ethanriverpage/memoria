@@ -1,0 +1,14 @@
+{
+  "conversation_ambiguous": [
+    {
+      "From": "friend_user",
+      "Media Type": "MEDIA",
+      "Created": "2024-06-15 14:30:00 UTC",
+      "Conversation Title": null,
+      "IsSender": false,
+      "Content": "Multiple videos same time",
+      "Media IDs": "b~video1 | b~video2"
+    }
+  ]
+}
+

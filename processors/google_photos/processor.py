@@ -1,13 +1,10 @@
 """Google Photos Media Processor - handles renaming, metadata embedding, and timestamps."""
 
-import json
 import logging
 import os
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.dedup.catalog import catalog_media_files
 from common.dedup.description import (
     SourceEntry,
     build_description,
@@ -16,10 +13,6 @@ from common.dedup.description import (
 )
 from common.files.utils import batch_correct_extensions, copy_file
 from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
-from common.dedup.hashing import (
-    find_live_photo_video,
-    find_live_photo_videos_in_files,
-)
 from common.media.exiftool import (
     DescriptionWriteSpec,
     GPSData,
@@ -33,7 +26,6 @@ from common.processing import (
     print_processing_summary,
 )
 from common.utils import (
-    ALL_MEDIA_EXTENSIONS,
     default_worker_count,
     extract_username_from_export_dir,
     FilenameGenerator,
@@ -55,9 +47,17 @@ class GooglePhotosProcessor(ProcessorBase):
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        """Check if this is a Google Photos export (has Google Photos/ with albums)."""
+        """Check if this is a Google Photos export.
+
+        Supported source layouts:
+        - Raw (non-Takeout): <input>/Google Photos/...
+        - Takeout: <input>/Takeout/Google Photos/...
+        """
         try:
             photos_dir = input_path / "Google Photos"
+            if not photos_dir.exists() or not photos_dir.is_dir():
+                # Google Takeout structure
+                photos_dir = input_path / "Takeout" / "Google Photos"
 
             # Check if Google Photos directory exists
             if not photos_dir.exists() or not photos_dir.is_dir():
@@ -105,7 +105,8 @@ class GooglePhotosProcessor(ProcessorBase):
         # Check for raw export structure (Google Photos/ directory)
         input_path = Path(input_dir)
         photos_dir = input_path / "Google Photos"
-        if photos_dir.exists():
+        takeout_photos_dir = input_path / "Takeout" / "Google Photos"
+        if photos_dir.exists() or takeout_photos_dir.exists():
             return True
 
         return False
@@ -133,99 +134,39 @@ class GooglePhotosProcessor(ProcessorBase):
 
     @staticmethod
     def build_catalog(input_dir: str, **kwargs):
-        """Build catalog of files with hashes and metadata."""
+        """Build catalog of files with hashes and metadata.
+
+        Requires preprocessed directory with metadata.json and source_path fields.
+
+        Args:
+            input_dir: Path to preprocessed input directory
+            **kwargs: Additional arguments (verbose, workers)
+
+        Yields:
+            Catalog entries with processor name and file data.
+        """
         input_path = Path(input_dir)
-        photos_dir = input_path / "Google Photos"
         workers = kwargs.get("workers", 4)
 
-        if not photos_dir.exists():
-            log.logger.warning("Google Photos directory not found: %s", photos_dir)
-            return
+        def extract_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
+            """Extract metadata from preprocessed entry."""
+            result: Dict[str, Any] = {}
+            for key in ("albums", "gps", "people", "capture_timestamp"):
+                if key in entry:
+                    result[key] = entry[key]
+            return result
 
-        # Collect all media files
-        all_files = []
-        for album_dir in photos_dir.iterdir():
-            if not album_dir.is_dir():
-                continue
-            for file_path in album_dir.iterdir():
-                if (
-                    file_path.is_file()
-                    and file_path.suffix.lower() in ALL_MEDIA_EXTENSIONS
-                ):
-                    all_files.append(file_path)
-
-        # Identify Live Photo pairs
-        live_photo_videos = find_live_photo_videos_in_files(all_files)
-
-        # Filter out Live Photo videos (they'll be cataloged with their image)
-        media_files = [f for f in all_files if f not in live_photo_videos]
-
-        log.logger.info(
-            "Found %d media files to catalog (%d Live Photo videos grouped with images)",
-            len(media_files),
-            len(live_photo_videos),
-        )
-
-        def extract_google_photos_metadata(file_path: Path) -> Dict[str, Any]:
-            """Extract metadata from Google Photos JSON sidecar."""
-            from datetime import timezone
-
-            metadata: Dict[str, Any] = {}
-
-            # Extract metadata from JSON sidecar if present
-            json_path = file_path.with_suffix(file_path.suffix + ".json")
-            if not json_path.exists():
-                # Try supplemental metadata pattern
-                json_path = Path(str(file_path) + ".supplemental-metadata.json")
-
-            if json_path.exists():
-                try:
-                    with open(json_path, "r", encoding="utf-8") as f:
-                        json_data = json.load(f)
-
-                    # Extract timestamp
-                    photo_taken = json_data.get("photoTakenTime", {})
-                    if photo_taken.get("timestamp"):
-                        ts = int(photo_taken["timestamp"])
-                        dt = datetime.fromtimestamp(ts, timezone.utc)
-                        metadata["capture_timestamp"] = dt.isoformat()
-
-                    # Extract GPS
-                    geo_data = json_data.get("geoData") or json_data.get("geoDataExif")
-                    if geo_data:
-                        metadata["gps"] = {
-                            "latitude": geo_data.get("latitude", 0.0),
-                            "longitude": geo_data.get("longitude", 0.0),
-                        }
-
-                    # Extract people tags
-                    people = json_data.get("people", [])
-                    if people:
-                        metadata["people"] = [
-                            p.get("name") for p in people if p.get("name")
-                        ]
-
-                except Exception as e:
-                    logger.debug(f"Failed to parse JSON for {file_path}: {e}")
-
-            # Add album information
-            album_name = file_path.parent.name
-            metadata["albums"] = [album_name]
-
-            # Check if this is a Live Photo image and record video path
-            video_path = find_live_photo_video(file_path)
-            if video_path:
-                metadata["live_photo_video"] = str(video_path)
-
-            return metadata
-
-        yield from catalog_media_files(
+        catalog_iter = GooglePhotosProcessor.catalog_from_preprocessed_if_available(
             processor_name="Google Photos",
             input_path=input_path,
-            media_files=media_files,
             workers=workers,
-            metadata_extractor=extract_google_photos_metadata,
+            metadata_extractor=extract_metadata,
         )
+        if catalog_iter is not None:
+            yield from catalog_iter
+            return
+
+        logger.warning("Directory not preprocessed, skipping catalog: %s", input_path)
 
     @classmethod
     def process(
@@ -282,19 +223,27 @@ def get_live_photo_group_key(media_data):
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[str, dict, str, str, Optional[str]]],
+    file_info: List[Tuple[str, dict, str, str, Optional[str], Optional[str]]],
 ) -> List[MetadataWriteRequest]:
     """Build MetadataWriteRequest objects for Google Photos files.
 
     Args:
-        file_info: List of (file_path, media_data, album_name, export_username, content_hash) tuples
+        file_info: List of (file_path, media_data, album_name, export_username,
+                   content_hash, original_filename) tuples
 
     Returns:
         List of MetadataWriteRequest objects
     """
     requests: List[MetadataWriteRequest] = []
 
-    for file_path, media_data, _album_name, export_username, content_hash in file_info:
+    for (
+        file_path,
+        media_data,
+        _album_name,
+        export_username,
+        content_hash,
+        original_filename,
+    ) in file_info:
         # Build datetime tags (ISO format)
         datetime_tags = build_datetime_tags(media_data.get("capture_timestamp"))
 
@@ -331,6 +280,7 @@ def _build_metadata_requests(
                 ),
                 processor_name="google_photos",
                 content_hash=content_hash,
+                original_filename=original_filename,
             )
         )
 
@@ -342,11 +292,13 @@ def process_media_batch(batch_args):
 
     Args:
         batch_args: List of tuples, each containing (media_file, media_data,
-                    album_name, output_filename, media_dir, output_dir, export_username, content_hash)
+                    album_name, output_filename, media_dir, output_dir, export_username,
+                    content_hash, original_filename)
 
     Returns:
         List of (success, output_path, file_info_tuple) tuples where file_info_tuple is
-        (output_path, media_data, album_name, export_username, content_hash) or None on failure
+        (output_path, media_data, album_name, export_username, content_hash, original_filename)
+        or None on failure
     """
     results = []
 
@@ -364,6 +316,7 @@ def process_media_batch(batch_args):
             output_dir,
             export_username,
             content_hash,
+            original_filename,
         ) = args_tuple
 
         media_path = os.path.join(media_dir, media_file)
@@ -378,7 +331,14 @@ def process_media_batch(batch_args):
             copy_file(media_path, output_path)
             file_paths.append(output_path)
             file_info.append(
-                (output_path, media_data, album_name, export_username, content_hash)
+                (
+                    output_path,
+                    media_data,
+                    album_name,
+                    export_username,
+                    content_hash,
+                    original_filename,
+                )
             )
         except Exception as e:
             log.copy_error(media_file, e)
@@ -393,12 +353,19 @@ def process_media_batch(batch_args):
         # Update file_paths and file_info with corrected paths
         file_paths = [corrections.get(p, p) for p in file_paths]
         file_info = [
-            (corrections.get(fp, fp), md, an, eu, ch)
-            for fp, md, an, eu, ch in file_info
+            (corrections.get(fp, fp), md, an, eu, ch, of)
+            for fp, md, an, eu, ch, of in file_info
         ]
 
     # Phase 3: Update timestamps and compile results
-    for output_path, media_data, album_name, export_username, content_hash in file_info:
+    for (
+        output_path,
+        media_data,
+        album_name,
+        export_username,
+        content_hash,
+        original_filename,
+    ) in file_info:
         # Google Photos uses ISO 8601 format: "2018-01-10T00:30:37Z"
         timestamp_str = media_data.get("capture_timestamp")
         if timestamp_str:
@@ -407,7 +374,14 @@ def process_media_batch(batch_args):
             (
                 True,
                 output_path,
-                (output_path, media_data, album_name, export_username, content_hash),
+                (
+                    output_path,
+                    media_data,
+                    album_name,
+                    export_username,
+                    content_hash,
+                    original_filename,
+                ),
             )
         )
 
@@ -465,7 +439,9 @@ def _process_working_directory(
 
     # Load metadata
     log.loading_metadata(metadata_file)
-    metadata_json = GooglePhotosProcessor.load_metadata(Path(metadata_file))
+    metadata_json = GooglePhotosProcessor.load_metadata(
+        Path(metadata_file), validate=True, require_source_paths=True
+    )
 
     export_info = metadata_json.get("export_info", {})
     media_files = metadata_json.get("media_files", [])
@@ -475,20 +451,6 @@ def _process_working_directory(
 
     log.found_files(total_media_files, "media")
 
-    # Check if this is new format (source_path in metadata) or legacy format (media/ directory)
-    sample_media = media_files[0] if media_files else None
-    use_legacy_format = sample_media is None or "source_path" not in sample_media
-
-    if use_legacy_format:
-        media_dir = os.path.join(working_dir, "media")
-        if not os.path.exists(media_dir):
-            log.file_not_found(media_dir, "Media directory")
-            return
-        log.logger.info("Using legacy format (media/ directory)")
-    else:
-        media_dir = None  # Will read from source_path
-        log.logger.info("Using new format (source_path in metadata)")
-
     # Filter out secondary files based on dedup manifest (using hash-based lookup)
     skipped_secondary_files = []
     if dedup_manifest:
@@ -497,12 +459,7 @@ def _process_working_directory(
         for media_data in media_files:
             media_file = media_data.get("filename")
             if media_file:
-                if use_legacy_format:
-                    full_path = os.path.join(media_dir, media_file)
-                    source_path_for_dedup = None
-                else:
-                    full_path = media_data.get("source_path", "")
-                    source_path_for_dedup = full_path
+                source_path = media_data.get("source_path", "")
                 content_hash = media_data.get("content_hash")
                 if content_hash:
                     # Use cached hash from preprocessing (avoids re-hashing)
@@ -511,17 +468,17 @@ def _process_working_directory(
                         dedup_manifest,
                         content_hash,
                         "Google Photos",
-                        source_path_for_dedup,
+                        source_path,
                     ):
                         filtered_media_files.append(media_data)
                     else:
-                        skipped_secondary_files.append(full_path)
+                        skipped_secondary_files.append(source_path)
                 else:
                     # Fallback for metadata without cached hash
                     if GooglePhotosProcessor.should_skip_for_dedup(
-                        full_path, dedup_manifest, "Google Photos"
+                        source_path, dedup_manifest, "Google Photos"
                     ):
-                        skipped_secondary_files.append(full_path)
+                        skipped_secondary_files.append(source_path)
                     else:
                         filtered_media_files.append(media_data)
         media_files = filtered_media_files
@@ -601,18 +558,22 @@ def _process_working_directory(
         albums_list = media_data.get("albums", [])
         album_name = albums_list[0] if albums_list else "unknown"
 
-        # Determine source path based on format
-        if use_legacy_format:
-            source_path = media_dir
-            source_file = media_file
-        else:
-            source_path = os.path.dirname(media_data.get("source_path", ""))
-            source_file = os.path.basename(media_data.get("source_path", media_file))
+        # Get source path from metadata
+        full_source_path = media_data.get("source_path")
+        if not full_source_path:
+            logger.warning(f"No source_path for file: {media_file}")
+            continue
+        source_path = os.path.dirname(full_source_path)
+        source_file = os.path.basename(full_source_path)
 
         # Get content_hash from metadata (if available from preprocessing)
         content_hash = media_data.get("content_hash")
 
-        # Create task tuple for worker (include content_hash for EXIF)
+        # Get original filename for XMP:PreservedFileName embedding
+        # Prefer original_filename from metadata, fall back to source file basename
+        original_filename = media_data.get("original_filename") or source_file
+
+        # Create task tuple for worker (include content_hash and original_filename for EXIF)
         processing_tasks.append(
             (
                 source_file,
@@ -623,6 +584,7 @@ def _process_working_directory(
                 output_dir,
                 export_username,
                 content_hash,
+                original_filename,
             )
         )
 

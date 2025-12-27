@@ -4,6 +4,16 @@ Base class for all media preprocessors.
 
 Provides common initialization, logging, and utility methods that are
 shared across all preprocessor implementations.
+
+Template Enforcement:
+    All preprocessors must inherit from PreprocessorBase and implement:
+    - validate_export(): Validate export directory structure
+    - detect_username(): Detect export owner username
+    - process_export(): Platform-specific processing logic
+    - print_statistics(): Display processing statistics
+    - get_content_key(): Return content key for metadata.json
+
+    The template is enforced at class definition time via __init_subclass__.
 """
 
 import logging
@@ -17,6 +27,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
+import json
+
 from common.dedup.config import get_dedup_config
 from common.dedup.database import get_thread_db
 from common.dedup.hashing import compute_content_hash
@@ -24,10 +36,20 @@ from common.detection import DetectionResult
 from common.failure_tracker import FailureTracker
 from common.files.filter import BannedFilesFilter
 from common.files.utils import copy_file
+from common.metadata.schema import validate_metadata, CONTENT_KEYS
 from common.output.progress import PHASE_PREPROCESS, futures_progress
 from common.utils import default_worker_count
 
 logger = logging.getLogger(__name__)
+
+# Minimal shared stats keys - preprocessors may add additional keys
+SHARED_STATS_KEYS = {
+    "files_total",
+    "files_unique",
+    "files_duplicates",
+    "files_missing",
+    "files_banned_skipped",
+}
 
 
 @dataclass
@@ -153,16 +175,86 @@ class PreprocessorBase(ABC):
     - File hashing for deduplication
     - Failure tracking
     - Batch copy with deduplication
+    - Cached username detection
+    - Standardized metadata saving
 
     Subclasses must implement:
     - validate_export(): Validate export directory structure
     - detect_username(): Detect export owner username
     - process_export(): Platform-specific processing logic
     - print_statistics(): Display processing statistics
+    - get_content_key(): Return content key for metadata.json
+
+    Template enforcement:
+    - Subclasses must NOT assign _context_merger directly; use set_context_merger()
+    - get_content_key() must return one of: 'conversations', 'media', 'media_files'
 
     The run() method provides a standardized preprocessing pipeline that calls
     these methods in the correct order.
     """
+
+    # Guard attribute for detecting direct _context_merger assignment
+    _context_merger_guard_active: bool = False
+
+    # Required hooks that subclasses must implement
+    _REQUIRED_HOOKS = frozenset(
+        {
+            "validate_export",
+            "detect_username",
+            "process_export",
+            "print_statistics",
+            "get_content_key",
+        }
+    )
+
+    def __init_subclass__(cls, **kwargs):
+        """Validate subclass implementation at class definition time.
+
+        Enforces that preprocessor subclasses follow the required template:
+        - All required hooks must be implemented (not just inherited from base)
+        - get_content_key() must be overridden (enforced via @abstractmethod)
+
+        Runtime enforcement (via __setattr__ and __init__):
+        - _context_merger cannot be assigned directly (use set_context_merger())
+        - get_content_key() must return a value in CONTENT_KEYS
+
+        Raises:
+            TypeError: If subclass violates template requirements.
+        """
+        super().__init_subclass__(**kwargs)
+
+        # Skip validation for abstract classes (they can't be instantiated anyway)
+        if getattr(cls, "__abstractmethods__", None):
+            return
+
+        # Verify all required hooks are implemented (not just inherited stubs)
+        for hook_name in cls._REQUIRED_HOOKS:
+            method = getattr(cls, hook_name, None)
+            if method is None:
+                raise TypeError(f"{cls.__name__} must implement {hook_name}()")
+            # Check it's not the abstract base version
+            base_method = getattr(PreprocessorBase, hook_name, None)
+            if method is base_method:
+                raise TypeError(
+                    f"{cls.__name__} must override {hook_name}() - cannot use base class stub"
+                )
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Guard against direct _context_merger assignment.
+
+        Subclasses must use set_context_merger() instead of directly assigning
+        to _context_merger. This ensures consistent behavior and allows for
+        future validation or logging of context merger changes.
+
+        Raises:
+            TypeError: If attempting to directly set _context_merger after init.
+        """
+        if name == "_context_merger" and self._context_merger_guard_active:
+            raise TypeError(
+                f"{self.__class__.__name__}: Direct assignment to _context_merger is "
+                "not allowed. Use set_context_merger() instead."
+            )
+        super().__setattr__(name, value)
 
     def __init__(
         self,
@@ -227,8 +319,14 @@ class PreprocessorBase(ABC):
         self.destination_lock = Lock()
         self.dedup_lock = Lock()
 
-        # Statistics - subclasses populate with specific keys
-        self.stats: Dict[str, Any] = {}
+        # Statistics - initialize with minimal shared keys, subclasses add more
+        self.stats: Dict[str, Any] = {
+            "files_total": 0,
+            "files_unique": 0,
+            "files_duplicates": 0,
+            "files_missing": 0,
+            "files_banned_skipped": 0,
+        }
 
         # Log entries
         self.log_entries = []
@@ -237,6 +335,23 @@ class PreprocessorBase(ABC):
         self._context_merger: Optional[Callable[[Dict, Dict], None]] = None
         self._hash_registry: Dict[str, Dict[str, Any]] = {}
         self._used_filenames: Dict[str, int] = {}
+
+        # Unmatched media tracking (files processable but lacking full context)
+        self._unmatched_media: List[Dict[str, Any]] = []
+
+        # Cached username detection result
+        self._detection_result: Optional[DetectionResult] = None
+
+        # Validate get_content_key() returns a valid value
+        content_key = self.get_content_key()
+        if content_key not in CONTENT_KEYS:
+            raise TypeError(
+                f"{self.__class__.__name__}.get_content_key() returned '{content_key}', "
+                f"but must return one of: {sorted(CONTENT_KEYS)}"
+            )
+
+        # Activate guard after initialization to prevent direct _context_merger assignment
+        self._context_merger_guard_active = True
 
     @classmethod
     @contextmanager
@@ -273,12 +388,18 @@ class PreprocessorBase(ABC):
         The merger function is called when duplicates are found, allowing
         metadata from duplicate files to be merged into the primary's context.
 
+        This is the ONLY way to set the context merger - direct assignment to
+        _context_merger is blocked and will raise TypeError.
+
         Args:
             merger: Function with signature (existing: Dict, new: Dict) -> None
                     that modifies existing in-place to merge data from new.
                     Pass None for first-occurrence-wins behavior (no merging).
         """
+        # Temporarily disable guard for controlled assignment
+        self._context_merger_guard_active = False
         self._context_merger = merger
+        self._context_merger_guard_active = True
 
     def get_merged_contexts(self) -> Dict[str, Dict[str, Any]]:
         """Get all merged contexts after deduplication.
@@ -334,6 +455,169 @@ class PreprocessorBase(ABC):
 
         # For non-accumulating patterns, just return the single merged context
         return [merged_context]
+
+    # =========================================================================
+    # Cached Username Detection
+    # =========================================================================
+
+    def ensure_detection_result(self) -> DetectionResult:
+        """Ensure username detection has been performed and return the result.
+
+        This method caches the result of detect_username() so it's only called
+        once per preprocessor lifecycle. Subsequent calls return the cached result.
+
+        Returns:
+            DetectionResult with username and source
+        """
+        if self._detection_result is None:
+            self._detection_result = self.detect_username()
+        return self._detection_result
+
+    def get_detection_result(self) -> Optional[DetectionResult]:
+        """Get the cached detection result, or None if not yet computed.
+
+        Unlike ensure_detection_result(), this does not trigger detection.
+        Use this to check if detection has already been performed.
+
+        Returns:
+            Cached DetectionResult or None
+        """
+        return self._detection_result
+
+    # =========================================================================
+    # Export Layout Resolution + Validation Helpers
+    # =========================================================================
+
+    def resolve_first_existing_dir(self, candidates: List[Path], *, label: str) -> Path:
+        """Resolve the first existing directory from a list of candidates.
+
+        Useful for supporting multiple export layouts (e.g., raw vs Takeout).
+
+        Args:
+            candidates: List of directory paths to check, in priority order.
+            label: Human-readable label for error messages (e.g., "Google Photos").
+
+        Returns:
+            First existing directory Path.
+
+        Raises:
+            FileNotFoundError: If no candidate directory exists.
+        """
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_dir():
+                logger.debug("Resolved %s directory: %s", label, candidate)
+                return candidate
+
+        checked_paths = ", ".join(str(c) for c in candidates)
+        raise FileNotFoundError(
+            f"{label} directory not found. Checked: {checked_paths}"
+        )
+
+    def require_exists(self, path: Path, *, label: str) -> bool:
+        """Require that a path exists (file or directory).
+
+        Logs an error if the path does not exist.
+
+        Args:
+            path: Path to check.
+            label: Human-readable label for error messages.
+
+        Returns:
+            True if exists, False otherwise.
+        """
+        if not path.exists():
+            logger.error("%s not found: %s", label, path)
+            return False
+        return True
+
+    def require_any_files(self, directory: Path, pattern: str, *, label: str) -> bool:
+        """Require that at least one file matching pattern exists in directory.
+
+        Args:
+            directory: Directory to search.
+            pattern: Glob pattern (e.g., "*.html", "*.json").
+            label: Human-readable label for error messages.
+
+        Returns:
+            True if at least one matching file exists, False otherwise.
+        """
+        if not directory.exists():
+            logger.error("%s directory not found: %s", label, directory)
+            return False
+
+        matching = list(directory.glob(pattern))
+        if not matching:
+            logger.error("No %s files found in %s", label, directory)
+            return False
+        return True
+
+    def require_any_dirs(
+        self,
+        directory: Path,
+        *,
+        label: str,
+        filter_fn: Optional[Callable[[Path], bool]] = None,
+    ) -> bool:
+        """Require that at least one subdirectory exists.
+
+        Args:
+            directory: Directory to search.
+            label: Human-readable label for error messages.
+            filter_fn: Optional filter function to apply to subdirectories.
+                       If provided, only directories where filter_fn returns True count.
+
+        Returns:
+            True if at least one matching subdirectory exists, False otherwise.
+        """
+        if not directory.exists():
+            logger.error("%s directory not found: %s", label, directory)
+            return False
+
+        subdirs = [d for d in directory.iterdir() if d.is_dir()]
+        if filter_fn:
+            subdirs = [d for d in subdirs if filter_fn(d)]
+
+        if not subdirs:
+            logger.error("No %s subdirectories found in %s", label, directory)
+            return False
+        return True
+
+    # =========================================================================
+    # Stats Helpers
+    # =========================================================================
+
+    def bump_stat(self, key: str, amount: int = 1) -> None:
+        """Thread-safe increment of a stat key.
+
+        Args:
+            key: Stat key to increment.
+            amount: Amount to add (default 1).
+        """
+        with self.stats_lock:
+            self.stats[key] = self.stats.get(key, 0) + amount
+
+    def summarize_dedup_results(
+        self, results: Dict[Path, Union["HashResult", "CopyResult"]]
+    ) -> Tuple[int, int]:
+        """Summarize deduplication results and update shared stats.
+
+        Computes unique and duplicate counts from results and updates
+        the shared stats keys (files_unique, files_duplicates).
+
+        Args:
+            results: Results dict from hash_with_dedup or copy_with_dedup.
+
+        Returns:
+            Tuple of (unique_count, duplicate_count).
+        """
+        unique = sum(1 for r in results.values() if not r.is_duplicate)
+        duplicates = sum(1 for r in results.values() if r.is_duplicate)
+
+        with self.stats_lock:
+            self.stats["files_unique"] = unique
+            self.stats["files_duplicates"] = duplicates
+
+        return unique, duplicates
 
     def log_message(self, category: str, message: str, details: str = "") -> None:
         """Add a log entry (thread-safe).
@@ -824,11 +1108,12 @@ class PreprocessorBase(ABC):
         This method provides the common preprocessing flow:
         1. Log start information
         2. Validate export structure
-        3. Run platform-specific processing
-        4. Save log file
-        5. Handle failures
-        6. Print statistics
-        7. Log completion
+        3. Detect username (cached for reuse)
+        4. Run platform-specific processing
+        5. Save log file
+        6. Handle failures
+        7. Print statistics
+        8. Log completion
 
         Subclasses implement process_export() for platform-specific logic.
 
@@ -842,6 +1127,14 @@ class PreprocessorBase(ABC):
         if not self.validate_export():
             return False
 
+        # Cache username detection result for use in build_export_info() and subclasses
+        detection = self.ensure_detection_result()
+        logger.info(
+            "Detected username: %s (via %s)",
+            detection.username or "unknown",
+            detection.source,
+        )
+
         try:
             if not self.process_export():
                 return False
@@ -854,6 +1147,214 @@ class PreprocessorBase(ABC):
         self.print_statistics()
         logger.info("Preprocessing complete!")
         return True
+
+    # =========================================================================
+    # Standardized Metadata Methods
+    # =========================================================================
+
+    @abstractmethod
+    def get_content_key(self) -> str:
+        """Return the content key for this processor's metadata.json.
+
+        Must return one of: 'conversations', 'media', 'media_files'
+
+        This method is abstract and must be implemented by all preprocessor
+        subclasses. The implementation is validated at class definition time.
+
+        Returns:
+            Content key string (one of CONTENT_KEYS)
+        """
+
+    def add_unmatched_media(
+        self,
+        filename: str,
+        source_path: Path,
+        content_hash: Optional[str] = None,
+        timestamp: Optional[str] = None,
+        **metadata: Any,
+    ) -> None:
+        """Track media file that can be processed but lacks full context.
+
+        Unlike FailureTracker.add_orphaned_media (which copies to issues/),
+        these files ARE included in metadata.json for processing.
+
+        Args:
+            filename: Output filename
+            source_path: Absolute path to source file
+            content_hash: Optional xxHash64 of file content
+            timestamp: Optional ISO format timestamp
+            **metadata: Additional metadata fields
+        """
+        entry: Dict[str, Any] = {
+            "filename": filename,
+            "source_path": str(source_path),
+        }
+        if content_hash:
+            entry["content_hash"] = content_hash
+        if timestamp:
+            entry["timestamp"] = timestamp
+        if metadata:
+            entry["metadata"] = metadata
+
+        self._unmatched_media.append(entry)
+
+    def build_file_hashes(self) -> Dict[str, str]:
+        """Build file_hashes lookup from hash registry.
+
+        Returns:
+            Dict mapping filename -> content_hash
+        """
+        file_hashes: Dict[str, str] = {}
+        for content_hash, registry_entry in self._hash_registry.items():
+            filename = registry_entry.get("filename", "")
+            if filename:
+                file_hashes[filename] = content_hash
+        return file_hashes
+
+    def build_export_info(
+        self,
+        extra_fields: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build standardized export_info.
+
+        Uses the cached detection result from ensure_detection_result().
+        If detection hasn't been performed yet, this will trigger it.
+
+        Args:
+            extra_fields: Processor-specific fields to add
+
+        Returns:
+            export_info dict with required fields
+        """
+        # Use cached result (ensure_detection_result caches on first call)
+        detection_result = self.ensure_detection_result()
+
+        info: Dict[str, Any] = {
+            "export_path": str(self.export_path),
+            "export_name": self.export_path.name,
+            "export_username": detection_result.username or "unknown",
+            "username_source": detection_result.source,
+            "processed_date": datetime.now().isoformat(),
+        }
+
+        if extra_fields:
+            info.update(extra_fields)
+
+        return info
+
+    def build_metadata(
+        self,
+        content_data: Any,
+        content_key: Optional[str] = None,
+        extra_export_info: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build complete metadata.json structure.
+
+        Args:
+            content_data: Data for the content key (conversations/media/media_files)
+            content_key: Override content key (uses get_content_key() if None)
+            extra_export_info: Processor-specific stats for export_info
+
+        Returns:
+            Complete metadata dict ready for validation and saving
+        """
+        key = content_key or self.get_content_key()
+        if key not in CONTENT_KEYS:
+            raise ValueError(
+                f"Invalid content_key '{key}', must be one of: {CONTENT_KEYS}"
+            )
+
+        metadata: Dict[str, Any] = {
+            "export_info": self.build_export_info(extra_export_info),
+            key: content_data,
+            "file_hashes": self.build_file_hashes(),
+        }
+
+        # Include unmatched_media if present
+        if self._unmatched_media:
+            metadata["unmatched_media"] = self._unmatched_media
+
+        return metadata
+
+    def save_metadata_standardized(
+        self,
+        content_data: Any,
+        content_key: Optional[str] = None,
+        extra_export_info: Optional[Dict[str, Any]] = None,
+        validate: bool = True,
+    ) -> None:
+        """Build, validate, and save metadata.json using standardized structure.
+
+        This is the preferred method for saving metadata. It ensures:
+        - Required fields are present (export_info, file_hashes)
+        - Content key is valid
+        - All media entries have source_path for cross-processor dedup
+        - unmatched_media is included if present
+
+        Args:
+            content_data: Data for the content key
+            content_key: Override content key (uses get_content_key() if None)
+            extra_export_info: Processor-specific export_info fields
+            validate: Whether to validate structure (default True)
+
+        Raises:
+            MetadataValidationError: If validation fails
+        """
+        metadata = self.build_metadata(content_data, content_key, extra_export_info)
+
+        if validate:
+            validate_metadata(metadata)
+
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(self.metadata_file, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
+
+        logger.info("Saved metadata to %s", self.metadata_file)
+
+    def save_metadata(
+        self,
+        content_data: Any,
+        *,
+        extra_export_info: Optional[Dict[str, Any]] = None,
+        validate: bool = True,
+    ) -> None:
+        """Standardized metadata save wrapper.
+
+        This is the preferred method for saving metadata from preprocessors.
+        It wraps save_metadata_standardized() with consistent logging and
+        error handling.
+
+        Uses get_content_key() automatically - subclasses just pass content_data.
+
+        Args:
+            content_data: Data for the content key (conversations/media/media_files).
+            extra_export_info: Optional processor-specific export_info fields.
+            validate: Whether to validate structure (default True).
+
+        Raises:
+            RuntimeError: If metadata save fails.
+        """
+        try:
+            self.save_metadata_standardized(
+                content_data=content_data,
+                content_key=None,  # Uses get_content_key()
+                extra_export_info=extra_export_info,
+                validate=validate,
+            )
+        except Exception as e:
+            logger.error("Failed to save metadata: %s", e)
+            raise RuntimeError(f"Failed to save metadata: {e}") from e
+
+    def set_unmatched_media(self, unmatched: List[Dict[str, Any]]) -> None:
+        """Set the unmatched media list for inclusion in metadata.json.
+
+        Use this instead of directly modifying _unmatched_media.
+
+        Args:
+            unmatched: List of unmatched media entries.
+        """
+        self._unmatched_media = unmatched
 
     @abstractmethod
     def validate_export(self) -> bool:

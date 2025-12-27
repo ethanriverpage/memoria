@@ -1,0 +1,12 @@
+{
+  "conversation_abc123def456": [
+    {
+      "From": "friend_username",
+      "Media Type": "IMAGE",
+      "Created": "2024-04-19 18:00:00 UTC",
+      "Conversation Title": null,
+      "IsSender": false
+    }
+  ]
+}
+

@@ -13,7 +13,6 @@ Output structure matches the standard iMessage processor format:
 """
 
 import csv
-import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -161,7 +160,7 @@ class ImazingPreprocessor(PreprocessorBase):
         self.owner_name = owner_name or self._extract_owner_name()
 
         # Set context merger for deduplication (accumulates messages)
-        self._context_merger = merge_imessage_context
+        self.set_context_merger(merge_imessage_context)
 
         # CSV message cache for cross-reference
         # (timestamp, attachment_filename) -> message_info
@@ -170,15 +169,17 @@ class ImazingPreprocessor(PreprocessorBase):
         # Track which CSV entries were matched to media files
         self.matched_csv_keys: set = set()
 
-        # Statistics specific to this preprocessor
-        self.stats = {
-            "total_files_scanned": 0,
-            "media_files_found": 0,
-            "unique_files": 0,
-            "duplicate_files": 0,
-            "csv_messages_loaded": 0,
-            "conversations": 0,
-        }
+        # Statistics specific to this preprocessor (preserves shared keys from base)
+        self.stats.update(
+            {
+                "total_files_scanned": 0,
+                "media_files_found": 0,
+                "unique_files": 0,
+                "duplicate_files": 0,
+                "csv_messages_loaded": 0,
+                "conversations": 0,
+            }
+        )
 
     def _extract_owner_name(self) -> str:
         """Extract owner name from Device-Info.txt if present.
@@ -363,8 +364,7 @@ class ImazingPreprocessor(PreprocessorBase):
         Returns:
             True if valid, False otherwise
         """
-        if not self.export_path.exists():
-            log.logger.error("Export path does not exist: %s", self.export_path)
+        if not self.require_exists(self.export_path, label="Export path"):
             return False
         return True
 
@@ -504,8 +504,8 @@ class ImazingPreprocessor(PreprocessorBase):
             if len(merged_contexts) > 1:
                 # Create merged message with messages array
                 merged_message = {
-                    "media_file": result.dest_filename,
-                    "source_path": str(result.source_path),
+                    "media_files": [result.dest_filename],
+                    "source_paths": {result.dest_filename: str(result.source_path)},
                     "primary_created": primary_context.get("created"),
                     "is_duplicate": True,
                     "messages": [],
@@ -541,8 +541,8 @@ class ImazingPreprocessor(PreprocessorBase):
                     "created": primary_context.get("created"),
                     "content": primary_context.get("content"),
                     "is_sender": primary_context.get("is_sender"),
-                    "media_file": result.dest_filename,
-                    "source_path": str(result.source_path),
+                    "media_files": [result.dest_filename],
+                    "source_paths": {result.dest_filename: str(result.source_path)},
                     "media_type": media_type,
                 }
 
@@ -558,42 +558,9 @@ class ImazingPreprocessor(PreprocessorBase):
 
         return conversations, orphaned_media
 
-    def _generate_metadata(
-        self, conversations: Dict[str, Dict], orphaned_media: List[Dict]
-    ) -> Dict:
-        """Generate metadata.json structure matching iMessage format.
-
-        Args:
-            conversations: Conversations dictionary
-            orphaned_media: List of orphaned media entries
-
-        Returns:
-            Metadata dictionary
-        """
-        # Build file_hashes lookup table for cross-processor dedup optimization
-        file_hashes = {}
-        for content_hash, registry_entry in self._hash_registry.items():
-            filename = registry_entry.get("filename", "")
-            if filename:
-                file_hashes[filename] = content_hash
-
-        metadata = {
-            "export_info": {
-                "export_path": str(self.export_path),
-                "export_paths": [str(self.export_path)],
-                "export_username": self.owner_name,
-                "export_format": "imazing",
-                "processed_date": datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%d %H:%M:%S UTC"
-                ),
-                "csv_messages_loaded": self.stats["csv_messages_loaded"],
-            },
-            "conversations": conversations,
-            "orphaned_media": orphaned_media,
-            "file_hashes": file_hashes,
-        }
-
-        return metadata
+    def get_content_key(self) -> str:
+        """Return the content key for iMessage iMazing metadata."""
+        return "conversations"
 
     def process_export(self) -> bool:
         """Platform-specific preprocessing logic.
@@ -613,13 +580,17 @@ class ImazingPreprocessor(PreprocessorBase):
         self.stats["media_files_found"] = len(media_files)
         log.found_files(len(media_files), "media")
 
+        extra_export_info = {
+            "export_paths": [str(self.export_path)],
+            "export_format": "imazing",
+            "csv_messages_loaded": self.stats["csv_messages_loaded"],
+        }
+
         if not media_files:
             log.logger.warning("No media files found to process")
             # Still create output structure (no media directory needed - files read from source)
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            metadata = self._generate_metadata({}, [])
-            with open(self.metadata_file, "w", encoding="utf-8") as f:
-                json.dump(metadata, f, indent=2, ensure_ascii=False)
+            self.save_metadata({}, extra_export_info=extra_export_info)
             return True
 
         # Phase 3: Build conversations and copy files (with deduplication)
@@ -636,12 +607,10 @@ class ImazingPreprocessor(PreprocessorBase):
         self._detect_orphaned_csv_metadata()
 
         # Phase 5: Generate metadata
-        log.logger.info("Generating metadata.json")
+        log.logger.info("Saving metadata.json")
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        metadata = self._generate_metadata(conversations, orphaned_media)
-
-        with open(self.metadata_file, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=2, ensure_ascii=False)
+        self.set_unmatched_media(orphaned_media)
+        self.save_metadata(conversations, extra_export_info=extra_export_info)
 
         return True
 

@@ -57,16 +57,18 @@ class GoogleChatPreprocessor(PreprocessorBase):
         self.export_username = None
         self.export_email = None
 
-        # Statistics specific to this preprocessor
-        self.stats = {
-            "total_conversations": 0,
-            "total_messages_with_media": 0,
-            "total_media_files": 0,
-            "media_copied": 0,
-            "missing_files": 0,
-            "fuzzy_matches": 0,
-            "banned_files_skipped": 0,
-        }
+        # Statistics specific to this preprocessor (preserves shared keys from base)
+        self.stats.update(
+            {
+                "total_conversations": 0,
+                "total_messages_with_media": 0,
+                "total_media_files": 0,
+                "media_copied": 0,
+                "missing_files": 0,
+                "fuzzy_matches": 0,
+                "banned_files_skipped": 0,
+            }
+        )
 
         # Track used files for duplicate handling
         self.used_files = defaultdict(int)
@@ -75,26 +77,21 @@ class GoogleChatPreprocessor(PreprocessorBase):
         self.copied_media_paths = set()
 
         # Set context merger for deduplication (first occurrence wins)
-        self._context_merger = merge_first_occurrence
+        self.set_context_merger(merge_first_occurrence)
 
     def validate_export(self) -> bool:
-        """Validate that export directory has required structure"""
-        if not self.export_path.exists():
-            logger.error("Export path does not exist: %s", self.export_path)
+        """Validate that export directory has required structure."""
+        if not self.require_exists(self.export_path, label="Export path"):
             return False
 
-        if not self.chat_dir.exists():
-            logger.error("Google Chat directory not found: %s", self.chat_dir)
+        if not self.require_exists(self.chat_dir, label="Google Chat directory"):
             return False
 
-        if not self.groups_dir.exists():
-            logger.error("Groups directory not found: %s", self.groups_dir)
+        if not self.require_exists(self.groups_dir, label="Groups directory"):
             return False
 
         # Check if at least one conversation folder exists
-        conversation_folders = [d for d in self.groups_dir.iterdir() if d.is_dir()]
-        if not conversation_folders:
-            logger.error("No conversation folders found in %s", self.groups_dir)
+        if not self.require_any_dirs(self.groups_dir, label="conversation"):
             return False
 
         return True
@@ -914,7 +911,10 @@ class GoogleChatPreprocessor(PreprocessorBase):
 
             # Map this source path to the resulting (dest_filename, source_path)
             if source_path_str and result.dest_filename:
-                source_to_result[source_path_str] = (result.dest_filename, str(result.source_path))
+                source_to_result[source_path_str] = (
+                    result.dest_filename,
+                    str(result.source_path),
+                )
 
         # Phase 3: Update messages with resulting filenames and source paths
         for conv_idx, conversation in enumerate(conversations):
@@ -929,14 +929,18 @@ class GoogleChatPreprocessor(PreprocessorBase):
                         result_info = source_to_result.get(str(source_path))
                         if result_info:
                             dest_filename, src_path = result_info
-                            media_entries.append({
-                                "filename": dest_filename,
-                                "source_path": src_path,
-                            })
+                            media_entries.append(
+                                {
+                                    "filename": dest_filename,
+                                    "source_path": src_path,
+                                }
+                            )
 
                 # Update message with matched files (new format with source_path)
                 message["media_files"] = [e["filename"] for e in media_entries]
-                message["source_paths"] = {e["filename"]: e["source_path"] for e in media_entries}
+                message["source_paths"] = {
+                    e["filename"]: e["source_path"] for e in media_entries
+                }
                 # Remove export_names as it's no longer needed
                 if "export_names" in message:
                     del message["export_names"]
@@ -971,44 +975,9 @@ class GoogleChatPreprocessor(PreprocessorBase):
         if orphaned_media:
             logger.info(f"   Found {len(orphaned_media)} orphaned media files")
 
-    def save_metadata(self, conversations: List[Dict]) -> None:
-        """Save cleaned metadata to metadata.json"""
-        try:
-            # Add export info with username detection source
-            detection_result = self.detect_username()
-
-            # Build file_hashes lookup table for cross-processor dedup optimization
-            file_hashes = {}
-            for content_hash, registry_entry in self._hash_registry.items():
-                filename = registry_entry.get("filename", "")
-                if filename:
-                    file_hashes[filename] = content_hash
-
-            # Add export info
-            output = {
-                "export_info": {
-                    "export_path": str(self.export_path),
-                    "export_name": self.export_path.name,
-                    "export_username": self.export_username,
-                    "username_source": detection_result.source,
-                    "processed_date": datetime.now().isoformat(),
-                    "total_conversations": self.stats["total_conversations"],
-                    "total_messages_with_media": self.stats[
-                        "total_messages_with_media"
-                    ],
-                    "total_media_files": self.stats["media_copied"],
-                },
-                "conversations": conversations,
-                "file_hashes": file_hashes,
-            }
-
-            with open(self.metadata_file, "w", encoding="utf-8") as f:
-                json.dump(output, f, indent=2, ensure_ascii=False)
-
-            logger.info("Saved metadata to %s", self.metadata_file)
-        except Exception as e:
-            logger.error(f"Failed to save metadata: {e}")
-            raise
+    def get_content_key(self) -> str:
+        """Return the content key for Google Chat metadata."""
+        return "conversations"
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -1032,18 +1001,16 @@ class GoogleChatPreprocessor(PreprocessorBase):
         Returns:
             True if processing succeeded, False otherwise
         """
-        # Detect export username
-        logger.info("Detecting export username...")
-        result = self.detect_username()
-        if not result.username:
+        # Use cached detection result from run() pipeline
+        detection = self.ensure_detection_result()
+        if not detection.username:
             self.log_message(
                 "USERNAME_DETECTION_ERROR",
                 "All username detection methods failed",
             )
             logger.error("Could not detect export username")
             return False
-        self.export_username = result.username
-        logger.info("Detected export user: %s (via %s)", result.username, result.source)
+        self.export_username = detection.username
 
         # Count total media files for statistics
         logger.info("Scanning media directories...")
@@ -1057,6 +1024,13 @@ class GoogleChatPreprocessor(PreprocessorBase):
         self.copy_media_files(conversations)
 
         # Save metadata
-        self.save_metadata(conversations)
+        self.save_metadata(
+            conversations,
+            extra_export_info={
+                "total_conversations": self.stats["total_conversations"],
+                "total_messages_with_media": self.stats["total_messages_with_media"],
+                "total_media_files": self.stats["media_copied"],
+            },
+        )
 
         return True

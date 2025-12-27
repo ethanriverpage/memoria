@@ -271,6 +271,31 @@ This is intentional. When processing multiple exports in parallel (`--parallel-e
 
 See: [Immich Upload](Immich-Upload)
 
+## Original Filename Tracking
+
+### Can I find the original filename of a processed file?
+
+Yes. The original source filename is embedded in the `XMP:PreservedFileName` metadata field. You can read it with:
+
+```bash
+exiftool -XMP:PreservedFileName your_file.jpg
+```
+
+For MKV files (Snapchat overlays), use:
+
+```bash
+ffprobe -show_entries format_tags=ORIGINAL_FILENAME your_file.mkv
+```
+
+### Why are original filenames preserved?
+
+Files are renamed during processing to timestamp-based names for consistency and organization. However, original filenames often contain useful context (e.g., `IMG_1234.jpg`, `Screenshot_2023-01-15`) that helps trace files back to their source. This information is now embedded in metadata for future reference.
+
+### Which formats support original filename embedding?
+
+- **Supported**: JPEG, PNG, GIF, WebP, HEIC, HEIF, TIFF, DNG, AVIF, MP4, MOV, AVI, M4V, MKV
+- **Not supported**: BMP, WebM (these formats have limited metadata capabilities)
+
 ## Timestamps and Dates
 
 ### Why are some of my photos dated to today instead of when they were taken?

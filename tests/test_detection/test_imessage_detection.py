@@ -211,3 +211,83 @@ class TestIMessageCrossExportDetection:
     def test_supports_consolidation(self, imessage_processor):
         """iMessage processor should support consolidation."""
         assert imessage_processor.supports_consolidation() is True
+
+
+class TestIMessageRealisticFixtures:
+    """Tests using committed schema-faithful iMessage fixtures."""
+
+    def test_detect_mac_basic_fixture(self, imessage_processor, temp_export_dir):
+        """Should detect the mac_basic fixture."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("imessage", "mac_basic", temp_export_dir)
+        assert imessage_processor.detect(temp_export_dir) is True
+
+        # Verify structure matches docs
+        assert (temp_export_dir / "chat.db").exists()
+        assert (temp_export_dir / "Attachments").is_dir()
+
+    def test_detect_iphone_basic_fixture(self, imessage_processor, temp_export_dir):
+        """Should detect the iphone_basic fixture."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("imessage", "iphone_basic", temp_export_dir)
+        assert imessage_processor.detect(temp_export_dir) is True
+
+        # Verify structure matches docs
+        assert (temp_export_dir / "SMS" / "sms.db").exists()
+        assert (temp_export_dir / "SMS" / "Attachments").is_dir()
+
+    def test_detect_live_photo_lp_image_fixture(
+        self, imessage_processor, temp_export_dir
+    ):
+        """Should detect fixture with lp_image Live Photo pair."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("imessage", "live_photo_lp_image_pair", temp_export_dir)
+        assert imessage_processor.detect(temp_export_dir) is True
+
+        # Verify both HEIC and MOV exist (MOV not tracked in DB)
+        lp_dir = (
+            temp_export_dir / "Attachments" / "lp" / "00" / "LIVEPHOTO-UUID"
+        )
+        assert (lp_dir / "lp_image.HEIC").exists()
+        assert (lp_dir / "lp_image.MOV").exists()
+
+    def test_detect_ventura_attributedbody_fixture(
+        self, imessage_processor, temp_export_dir
+    ):
+        """Should detect fixture with attributedBody instead of text."""
+        from tests.fixtures.export_tree import copy_export_fixture
+        import sqlite3
+
+        copy_export_fixture("imessage", "ventura_attributedbody", temp_export_dir)
+        assert imessage_processor.detect(temp_export_dir) is True
+
+        # Verify message has NULL text and populated attributedBody
+        conn = sqlite3.connect(temp_export_dir / "chat.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT text, attributedBody FROM message WHERE ROWID = 1")
+        text, attributed_body = cursor.fetchone()
+        conn.close()
+
+        assert text is None
+        assert attributed_body is not None
+        assert len(attributed_body) > 0
+
+    def test_detect_with_contacts_vcf_fixture(
+        self, imessage_processor, temp_export_dir
+    ):
+        """Should detect fixture with contacts.vcf for name resolution."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("imessage", "with_contacts_vcf", temp_export_dir)
+        assert imessage_processor.detect(temp_export_dir) is True
+
+        # Verify contacts.vcf exists
+        assert (temp_export_dir / "contacts.vcf").exists()
+
+        # Verify it contains our test contact
+        vcf_content = (temp_export_dir / "contacts.vcf").read_text()
+        assert "John Doe" in vcf_content
+        assert "+14045551234" in vcf_content

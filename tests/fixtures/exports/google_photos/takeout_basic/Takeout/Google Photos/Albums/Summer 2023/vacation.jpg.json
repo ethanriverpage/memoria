@@ -1,0 +1,16 @@
+{
+  "title": "vacation.jpg",
+  "photoTakenTime": {
+    "timestamp": "1688227200",
+    "formatted": "Jul 1, 2023, 12:00:00 PM UTC"
+  },
+  "geoData": {
+    "latitude": 40.7128,
+    "longitude": -74.0060,
+    "altitude": 5.0,
+    "latitudeSpan": 0.0,
+    "longitudeSpan": 0.0
+  },
+  "description": "Summer vacation photo"
+}
+

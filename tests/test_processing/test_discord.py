@@ -312,3 +312,88 @@ class TestDiscordIndexFile:
         assert "c111" in index
         assert "c222" in index
         assert "c333" in index
+
+
+class TestDiscordRealisticFixtures:
+    """Processing tests using committed schema-faithful Discord fixtures."""
+
+    def test_string_channel_types_structure(
+        self, discord_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly parse exports with string channel type values."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("discord", "raw_string_channel_types", temp_export_dir)
+
+        # Verify all three channel types are present
+        messages_dir = temp_export_dir / "Messages"
+        guild_channel = json.loads(
+            (messages_dir / "c184324186284621824" / "channel.json").read_text()
+        )
+        dm_channel = json.loads(
+            (messages_dir / "c502291754930929684" / "channel.json").read_text()
+        )
+        group_dm_channel = json.loads(
+            (messages_dir / "c623392507828371479" / "channel.json").read_text()
+        )
+
+        assert guild_channel["type"] == "GUILD_TEXT"
+        assert dm_channel["type"] == "DM"
+        assert group_dm_channel["type"] == "GROUP_DM"
+
+    def test_attachments_with_query_params_structure(
+        self, discord_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly parse attachment URLs with query parameters."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "discord", "raw_attachments_with_query_params", temp_export_dir
+        )
+
+        messages = json.loads(
+            (
+                temp_export_dir
+                / "Messages"
+                / "c184324186284621824"
+                / "messages.json"
+            ).read_text()
+        )
+
+        # Single attachment with query params
+        assert messages[0]["Attachments"].startswith("https://cdn.discordapp.com/")
+        assert "photo.jpg?" in messages[0]["Attachments"]
+
+        # Multiple space-separated attachments
+        attachments = messages[1]["Attachments"].split(" ")
+        assert len(attachments) == 2
+        assert "file1.jpg?" in attachments[0]
+        assert "file2.png?" in attachments[1]
+
+    def test_spoiler_filename_structure(
+        self, discord_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should handle SPOILER_ prefixed filenames correctly."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("discord", "raw_spoiler_filename", temp_export_dir)
+
+        # Verify the spoiler file exists
+        spoiler_file = (
+            temp_export_dir
+            / "Messages"
+            / "c184324186284621824"
+            / "SPOILER_secret.jpg"
+        )
+        assert spoiler_file.exists()
+
+        # Verify message references spoiler filename
+        messages = json.loads(
+            (
+                temp_export_dir
+                / "Messages"
+                / "c184324186284621824"
+                / "messages.json"
+            ).read_text()
+        )
+        assert "SPOILER_secret.jpg" in messages[0]["Attachments"]

@@ -11,7 +11,6 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.dedup.catalog import catalog_media_files
 from common.dedup.service import is_file_primary_by_hash
 from common.dedup.description import (
     SourceEntry,
@@ -31,7 +30,6 @@ from common.processing import (
     print_processing_summary,
 )
 from common.utils import (
-    ALL_MEDIA_EXTENSIONS,
     default_worker_count,
     extract_username_from_export_dir,
     FilenameGenerator,
@@ -168,72 +166,41 @@ class InstagramMessagesProcessor(ProcessorBase):
     def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata.
 
-        Scans all media files in the Instagram Messages export, computes hashes,
-        and returns a catalog structure without copying any files.
+        Requires preprocessed directory with metadata.json and source_path fields.
 
         Args:
-            input_dir: Path to input directory
+            input_dir: Path to preprocessed input directory
             **kwargs: Additional arguments (verbose, workers)
 
-        Returns:
-            Catalog dictionary with processor name and file entries.
+        Yields:
+            Catalog entries with processor name and file data.
         """
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
 
-        # Load metadata for preprocessed exports
-        metadata_index: Dict[str, dict] = {}
-        metadata_file = input_path / "metadata.json"
-        if metadata_file.exists():
-            try:
-                metadata = InstagramMessagesProcessor.load_metadata(metadata_file)
-                metadata_index = build_filename_index(metadata)
-            except Exception as e:
-                logger.warning(f"Could not load metadata.json: {e}")
-
-        # Find inbox directory (new or legacy format)
-        inbox_dir = None
-        new_format = input_path / "your_instagram_activity" / "messages" / "inbox"
-        legacy_format = input_path / "messages" / "inbox"
-        media_dir = input_path / "media"  # Preprocessed
-
-        if new_format.exists():
-            inbox_dir = new_format
-        elif legacy_format.exists():
-            inbox_dir = legacy_format
-        elif media_dir.exists():
-            inbox_dir = media_dir
-
-        if not inbox_dir or not inbox_dir.exists():
-            logger.warning(f"No inbox directory found in: {input_path}")
-            return
-
-        media_files = []
-        for file_path in inbox_dir.rglob("*"):
-            if file_path.is_file() and file_path.suffix.lower() in ALL_MEDIA_EXTENSIONS:
-                media_files.append(file_path)
-
-        def extract_metadata(file_path: Path) -> Dict[str, Any]:
-            """Extract Instagram Messages metadata for a media file."""
-            info = metadata_index.get(file_path.name, {})
+        def extract_preprocessed_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
+            """Extract metadata from preprocessed entry."""
             result: Dict[str, Any] = {}
-            if info:
-                message = info.get("message", {})
-                if info.get("conversation_title"):
-                    result["conversation"] = info["conversation_title"]
-                if message.get("sender"):
-                    result["sender"] = message["sender"]
-                if message.get("timestamp"):
-                    result["timestamp"] = message["timestamp"]
+            if "conversation_title" in entry:
+                result["conversation"] = entry["conversation_title"]
+            if "sender" in entry:
+                result["sender"] = entry["sender"]
+            if "timestamp" in entry:
+                result["timestamp"] = entry["timestamp"]
             return result
 
-        yield from catalog_media_files(
+        catalog_iter = InstagramMessagesProcessor.catalog_from_preprocessed_if_available(
             processor_name="Instagram Messages",
             input_path=input_path,
-            media_files=media_files,
             workers=workers,
-            metadata_extractor=extract_metadata if metadata_index else None,
+            metadata_extractor=extract_preprocessed_metadata,
+            container_key="conversations",
         )
+        if catalog_iter is not None:
+            yield from catalog_iter
+            return
+
+        logger.warning("Directory not preprocessed, skipping catalog: %s", input_path)
 
     @classmethod
     def process(
@@ -285,12 +252,13 @@ class InstagramMessagesProcessor(ProcessorBase):
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[str, dict, str, str, Optional[str]]],
+    file_info: List[Tuple[str, dict, str, str, Optional[str], Optional[str]]],
 ) -> List[MetadataWriteRequest]:
     """Build MetadataWriteRequest objects for Instagram Messages files.
 
     Args:
-        file_info: List of (file_path, message_data, conversation_title, export_username, content_hash) tuples
+        file_info: List of (file_path, message_data, conversation_title, export_username,
+                   content_hash, original_filename) tuples
 
     Returns:
         List of MetadataWriteRequest objects
@@ -303,6 +271,7 @@ def _build_metadata_requests(
         conversation_title,
         export_username,
         content_hash,
+        original_filename,
     ) in file_info:
         # Build datetime tags
         datetime_tags = build_datetime_tags(message_data.get("timestamp"))
@@ -329,34 +298,11 @@ def _build_metadata_requests(
                 ),
                 processor_name="instagram_messages",
                 content_hash=content_hash,
+                original_filename=original_filename,
             )
         )
 
     return requests
-
-
-def build_filename_index(metadata: dict) -> Dict[str, dict]:
-    """Build index mapping media filename to message metadata.
-
-    Args:
-        metadata: Parsed metadata.json content with conversations list.
-
-    Returns:
-        Dict mapping media_file -> {message, conversation_title}
-    """
-
-    def _instagram_messages_context_builder(conversation: dict, message: dict) -> dict:
-        """Build Instagram Messages context with conversation title."""
-        return {
-            "message": message,
-            "conversation_title": conversation.get("conversation_title", "unknown"),
-        }
-
-    return ProcessorBase.build_media_filename_index(
-        metadata,
-        media_keys=["media_files"],
-        context_builder=_instagram_messages_context_builder,
-    )
 
 
 def process_media_batch(batch_args):
@@ -367,11 +313,13 @@ def process_media_batch(batch_args):
 
     Args:
         batch_args: List of tuples, each containing (media_file, message_data,
-                    conversation_title, output_filename, media_dir, output_dir, export_username, content_hash)
+                    conversation_title, output_filename, media_dir, output_dir,
+                    export_username, content_hash, original_filename)
 
     Returns:
         List of (success, output_path, file_info_tuple) tuples where file_info_tuple is
-        (output_path, message_data, conversation_title, export_username, content_hash) or None on failure
+        (output_path, message_data, conversation_title, export_username, content_hash,
+        original_filename) or None on failure
     """
     results = []
 
@@ -389,6 +337,7 @@ def process_media_batch(batch_args):
             output_dir,
             export_username,
             content_hash,
+            original_filename,
         ) = args_tuple
 
         media_path = os.path.join(media_dir, media_file)
@@ -409,6 +358,7 @@ def process_media_batch(batch_args):
                     conversation_title,
                     export_username,
                     content_hash,
+                    original_filename,
                 )
             )
         except Exception as e:
@@ -424,8 +374,8 @@ def process_media_batch(batch_args):
         # Update file_paths and file_info with corrected paths
         file_paths = [corrections.get(p, p) for p in file_paths]
         file_info = [
-            (corrections.get(fp, fp), md, ct, eu, ch)
-            for fp, md, ct, eu, ch in file_info
+            (corrections.get(fp, fp), md, ct, eu, ch, of)
+            for fp, md, ct, eu, ch, of in file_info
         ]
 
     # Phase 3: Update timestamps and compile results
@@ -435,6 +385,7 @@ def process_media_batch(batch_args):
         conversation_title,
         export_username,
         content_hash,
+        original_filename,
     ) in file_info:
         # Instagram Messages uses format: "2022-01-06 06:47:00"
         timestamp_str = message_data.get("timestamp")
@@ -450,6 +401,7 @@ def process_media_batch(batch_args):
                     conversation_title,
                     export_username,
                     content_hash,
+                    original_filename,
                 ),
             )
         )
@@ -518,7 +470,9 @@ def _process_working_directory(
 
     # Load metadata
     logger.info(f"Loading metadata from {metadata_file}...")
-    metadata_json = InstagramMessagesProcessor.load_metadata(Path(metadata_file))
+    metadata_json = InstagramMessagesProcessor.load_metadata(
+        Path(metadata_file), validate=True, require_source_paths=True
+    )
 
     export_info = metadata_json.get("export_info", {})
     conversations = metadata_json.get("conversations", [])
@@ -533,21 +487,6 @@ def _process_working_directory(
 
     logger.info(f"Found {len(conversations)} conversations")
     logger.info(f"Found {total_media_files} media files to process")
-
-    # Check if this is new format (source_paths in messages) or legacy format
-    use_legacy_format = (
-        InstagramMessagesProcessor.detect_metadata_format(metadata_json) == "legacy"
-    )
-
-    if use_legacy_format:
-        media_dir = os.path.join(working_dir, "media")
-        if not os.path.exists(media_dir):
-            logger.error(f"Media directory not found: {media_dir}")
-            return
-        logger.info("Using legacy format (media/ directory)")
-    else:
-        media_dir = None
-        logger.info("Using new format (source_path in metadata)")
 
     # Extract export username from export_info
     export_name = export_info.get("export_name", "")
@@ -584,22 +523,17 @@ def _process_working_directory(
                 # Use cached file_hashes from preprocessing when available
                 content_hash = file_hashes.get(media_file)
 
-                # Determine source path based on format
-                if use_legacy_format:
-                    source_file_path = media_dir
-                    source_file_name = media_file
-                else:
-                    source_paths = message.get("source_paths", {})
-                    source_file_path = os.path.dirname(source_paths.get(media_file, ""))
-                    source_file_name = os.path.basename(
-                        source_paths.get(media_file, media_file)
-                    )
+                # Get source path from metadata
+                source_paths = message.get("source_paths", {})
+                full_source_path = source_paths.get(media_file)
+                if not full_source_path:
+                    logger.warning(f"No source_path for file: {media_file}")
+                    continue
+
+                source_file_path = os.path.dirname(full_source_path)
+                source_file_name = os.path.basename(full_source_path)
 
                 if dedup_manifest:
-                    # Get full source path for within-processor dedup
-                    full_source_path = (
-                        source_paths.get(media_file) if not use_legacy_format else None
-                    )
                     if content_hash:
                         # Use cached hash from preprocessing (avoids re-hashing)
                         if not is_file_primary_by_hash(
@@ -612,13 +546,8 @@ def _process_working_directory(
                             continue
                     else:
                         # Fallback for files without cached hash
-                        full_path = (
-                            os.path.join(source_file_path, source_file_name)
-                            if source_file_path
-                            else source_file_name
-                        )
                         if InstagramMessagesProcessor.should_skip_for_dedup(
-                            full_path, dedup_manifest, "Instagram Messages"
+                            full_source_path, dedup_manifest, "Instagram Messages"
                         ):
                             skipped_dedup += 1
                             continue
@@ -634,7 +563,10 @@ def _process_working_directory(
                     file_ext,
                 )
 
-                # Create task tuple for worker (include content_hash for EXIF)
+                # Get original filename for XMP:PreservedFileName embedding
+                original_filename = source_file_name
+
+                # Create task tuple for worker (include content_hash and original_filename)
                 processing_tasks.append(
                     (
                         source_file_name,
@@ -645,6 +577,7 @@ def _process_working_directory(
                         output_dir,
                         export_username,
                         content_hash,
+                        original_filename,
                     )
                 )
 

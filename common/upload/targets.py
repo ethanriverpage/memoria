@@ -16,7 +16,7 @@ Examples:
 """
 
 from pathlib import Path
-from typing import List, Optional, Tuple, Union, TYPE_CHECKING
+from typing import List, Optional, Tuple, Type, Union, TYPE_CHECKING
 
 from common.output.paths import OutputInfo
 from common.utils import extract_username_from_export_dir
@@ -60,7 +60,7 @@ def _ig_public_media_targets(output_base: Path, username: str) -> List[Tuple[str
 
 
 def build_upload_targets(
-    processor: Union["ProcessorBase", OutputInfo, str],
+    processor: Union["ProcessorBase", Type["ProcessorBase"], OutputInfo, str],
     input_dir: str,
     output_base: str,
 ) -> List[Tuple[str, str]]:

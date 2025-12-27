@@ -488,17 +488,19 @@ class TestImazingHelpers:
         from processors.imessage_imazing.processor import build_filename_index
 
         metadata = {
+            "export_info": {"export_username": "test"},
             "conversations": {
                 "conv1": {
                     "messages": [
-                        {"media_file": "photo1.jpg", "content": "msg1"},
-                        {"media_file": "photo2.jpg", "content": "msg2"},
+                        {"media_files": ["photo1.jpg"], "source_paths": {"photo1.jpg": "/path/photo1.jpg"}, "content": "msg1"},
+                        {"media_files": ["photo2.jpg"], "source_paths": {"photo2.jpg": "/path/photo2.jpg"}, "content": "msg2"},
                     ]
                 }
             },
-            "orphaned_media": [
-                {"media_file": "orphan.jpg", "content": "orphan"}
+            "unmatched_media": [
+                {"media_files": ["orphan.jpg"], "source_paths": {"orphan.jpg": "/path/orphan.jpg"}, "content": "orphan"}
             ],
+            "file_hashes": {},
         }
 
         index = build_filename_index(metadata)
@@ -578,12 +580,30 @@ class TestImazingLivePhotos:
         media_dir = imazing_export_dir / "media"
         media_dir.mkdir()
 
-        write_media_file(media_dir / "IMG_1234.HEIC", "heic")
-        write_media_file(media_dir / "IMG_1234.MOV", "mov")
+        heic_path = media_dir / "IMG_1234.HEIC"
+        mov_path = media_dir / "IMG_1234.MOV"
+        write_media_file(heic_path, "heic")
+        write_media_file(mov_path, "mov")
 
+        # Create proper preprocessed metadata with source_paths
         metadata = {
             "export_info": {"export_format": "imazing"},
-            "conversations": {},
+            "conversations": {
+                "test_conv": {
+                    "conversation_title": "Test",
+                    "messages": [
+                        {
+                            "media_files": ["IMG_1234.HEIC", "IMG_1234.MOV"],
+                            "source_paths": {
+                                "IMG_1234.HEIC": str(heic_path),
+                                "IMG_1234.MOV": str(mov_path),
+                            },
+                            "timestamp": "2024-01-01T00:00:00Z",
+                        }
+                    ],
+                }
+            },
+            "file_hashes": {},
         }
         (imazing_export_dir / "metadata.json").write_text(json.dumps(metadata))
 

@@ -322,3 +322,107 @@ class TestInstagramMessagesEdgeCases:
             / "user_123"
         )
         assert (conv_dir / "message_1.html").exists()
+
+
+class TestInstagramMessagesRealisticFixtures:
+    """Processing tests using committed schema-faithful Instagram Messages fixtures."""
+
+    def test_current_format_html_structure(
+        self, instagram_messages_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly parse current format HTML with <h2> sender."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "instagram_messages", "current_format_doc_html", temp_export_dir
+        )
+
+        html_path = (
+            temp_export_dir
+            / "your_instagram_activity"
+            / "messages"
+            / "inbox"
+            / "friend_user_123456"
+            / "message_1.html"
+        )
+        html_content = html_path.read_text()
+
+        # Verify doc-style HTML structure
+        assert '<h2 class="_3-95 _2pim _a6-h _a6-i">' in html_content
+        assert '<div class="_3-94 _a6-o">' in html_content
+        # Verify timestamp format: "Sep 22, 2017 6:33 am" (no comma after year)
+        assert "Sep 22, 2017 6:33 am" in html_content
+        # Verify media references
+        assert 'src="photos/photo_123456789.jpg"' in html_content
+        assert 'src="videos/video_987654321.mp4"' in html_content
+
+    def test_legacy_format_html_structure(
+        self, instagram_messages_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly parse legacy format HTML with <div> sender."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "instagram_messages", "legacy_format_doc_html", temp_export_dir
+        )
+
+        html_path = (
+            temp_export_dir
+            / "messages"
+            / "inbox"
+            / "old_friend_789012"
+            / "message_1.html"
+        )
+        html_content = html_path.read_text()
+
+        # Verify legacy HTML structure (div instead of h2 for sender)
+        assert '<div class="_3-95 _2pim _a6-h _a6-i">' in html_content
+        # Verify legacy timestamp format: "Sep 22, 2017, 6:33 AM" (comma after year, uppercase AM)
+        assert "Sep 22, 2017, 6:33 AM" in html_content
+
+    def test_current_format_media_files(
+        self, instagram_messages_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should have media files in photos/ and videos/ subdirectories."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "instagram_messages", "current_format_doc_html", temp_export_dir
+        )
+
+        conv_dir = (
+            temp_export_dir
+            / "your_instagram_activity"
+            / "messages"
+            / "inbox"
+            / "friend_user_123456"
+        )
+        assert (conv_dir / "photos" / "photo_123456789.jpg").exists()
+        assert (conv_dir / "videos" / "video_987654321.mp4").exists()
+
+    def test_missing_media_reference_handling(
+        self, instagram_messages_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should handle HTML references to non-existent media files."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "instagram_messages", "missing_media_reference", temp_export_dir
+        )
+
+        conv_dir = (
+            temp_export_dir
+            / "your_instagram_activity"
+            / "messages"
+            / "inbox"
+            / "expired_media_user"
+        )
+
+        # HTML references files that don't exist
+        html_content = (conv_dir / "message_1.html").read_text()
+        assert "expired_photo.jpg" in html_content
+        assert "expired_video.mp4" in html_content
+
+        # But the actual files are missing (simulating expired View Once content)
+        assert not (conv_dir / "photos" / "expired_photo.jpg").exists()
+        assert not (conv_dir / "videos" / "expired_video.mp4").exists()

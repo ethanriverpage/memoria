@@ -1,0 +1,9 @@
+{
+  "title": "with_metadata.jpg",
+  "photoTakenTime": {
+    "timestamp": "1673785845",
+    "formatted": "Jan 15, 2023, 10:30:45 AM UTC"
+  },
+  "description": "Photo with JSON metadata"
+}
+

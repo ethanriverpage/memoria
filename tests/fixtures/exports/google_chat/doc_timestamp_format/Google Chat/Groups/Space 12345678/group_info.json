@@ -1,0 +1,8 @@
+{
+  "name": "Test Group",
+  "members": [
+    {"name": "Test User", "email": "testuser@example.com", "user_type": "Human"},
+    {"name": "Other User", "email": "other@example.com", "user_type": "Human"}
+  ]
+}
+

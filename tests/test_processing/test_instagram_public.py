@@ -259,3 +259,98 @@ class TestInstagramPublicFileTypes:
         )
 
         assert (posts_dir / "video.mp4").exists()
+
+
+class TestInstagramPublicRealisticFixtures:
+    """Processing tests using committed schema-faithful Instagram Public fixtures."""
+
+    def test_posts_and_archived_posts_structure(
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly parse posts and archived_posts directories."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "instagram_public", "posts_and_archived_posts", temp_export_dir
+        )
+
+        media_dir = temp_export_dir / "media"
+
+        # Verify posts structure
+        assert (media_dir / "posts" / "202301").exists()
+        assert (media_dir / "posts" / "202302").exists()
+
+        # Verify archived_posts structure
+        assert (media_dir / "archived_posts" / "202212").exists()
+
+    def test_yyyymm_folder_organization(
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly organize posts by YYYYMM folders."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "instagram_public", "posts_and_archived_posts", temp_export_dir
+        )
+
+        media_dir = temp_export_dir / "media"
+
+        # January 2023 post
+        assert (media_dir / "posts" / "202301" / "photo_123.jpg").exists()
+        # February 2023 post
+        assert (media_dir / "posts" / "202302" / "video_456.mp4").exists()
+        # December 2022 archived post
+        assert (media_dir / "archived_posts" / "202212" / "archived_photo.jpg").exists()
+
+    def test_json_sidecar_metadata(
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should have JSON sidecar files with documented fields."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "instagram_public", "posts_and_archived_posts", temp_export_dir
+        )
+
+        # Check posts JSON
+        posts_json = (
+            temp_export_dir / "media" / "posts" / "202301" / "photo_123.jpg.json"
+        )
+        posts_data = json.loads(posts_json.read_text())
+        assert "caption" in posts_data
+        assert "taken_at" in posts_data
+        assert "#photography" in posts_data["caption"]
+
+        # Check archived JSON
+        archived_json = (
+            temp_export_dir
+            / "media"
+            / "archived_posts"
+            / "202212"
+            / "archived_photo.jpg.json"
+        )
+        archived_data = json.loads(archived_json.read_text())
+        assert "caption" in archived_data
+        assert "taken_at" in archived_data
+
+    def test_mixed_media_types(
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should handle both photos and videos in posts."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "instagram_public", "posts_and_archived_posts", temp_export_dir
+        )
+
+        posts_dir = temp_export_dir / "media" / "posts"
+
+        # Photo
+        photo = posts_dir / "202301" / "photo_123.jpg"
+        assert photo.exists()
+        assert photo.stat().st_size > 0
+
+        # Video
+        video = posts_dir / "202302" / "video_456.mp4"
+        assert video.exists()
+        assert video.stat().st_size > 0

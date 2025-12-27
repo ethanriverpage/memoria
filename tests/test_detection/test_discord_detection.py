@@ -168,3 +168,89 @@ class TestDiscordPreprocessedDetection:
         (temp_export_dir / "metadata.json").write_text(json.dumps(metadata))
 
         assert discord_processor.detect(temp_export_dir) is False
+
+
+class TestDiscordRealisticFixtures:
+    """Tests using committed schema-faithful Discord fixtures."""
+
+    def test_detect_raw_minimal_fixture(self, discord_processor, temp_export_dir):
+        """Should detect the raw_minimal fixture (doc-faithful structure)."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("discord", "raw_minimal", temp_export_dir)
+        assert discord_processor.detect(temp_export_dir) is True
+
+    def test_detect_string_channel_types_fixture(
+        self, discord_processor, temp_export_dir
+    ):
+        """Should detect fixture with string channel types (DM, GROUP_DM, GUILD_TEXT)."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("discord", "raw_string_channel_types", temp_export_dir)
+        assert discord_processor.detect(temp_export_dir) is True
+
+        # Verify channel types are strings as documented
+        channel_json = (
+            temp_export_dir
+            / "Messages"
+            / "c184324186284621824"
+            / "channel.json"
+        )
+        channel_data = json.loads(channel_json.read_text())
+        assert channel_data["type"] == "GUILD_TEXT"
+
+    def test_detect_with_servers_optional_fixture(
+        self, discord_processor, temp_export_dir
+    ):
+        """Should detect fixture with optional Servers/ directory."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("discord", "with_servers_optional", temp_export_dir)
+        assert discord_processor.detect(temp_export_dir) is True
+
+        # Verify Servers directory exists
+        assert (temp_export_dir / "Servers" / "index.json").exists()
+        assert (
+            temp_export_dir / "Servers" / "184315303323238400" / "guild.json"
+        ).exists()
+
+    def test_detect_attachments_with_query_params_fixture(
+        self, discord_processor, temp_export_dir
+    ):
+        """Should detect fixture with CDN URLs including query params."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture(
+            "discord", "raw_attachments_with_query_params", temp_export_dir
+        )
+        assert discord_processor.detect(temp_export_dir) is True
+
+        # Verify messages have attachment URLs with query params
+        messages_json = (
+            temp_export_dir
+            / "Messages"
+            / "c184324186284621824"
+            / "messages.json"
+        )
+        messages = json.loads(messages_json.read_text())
+        assert "?ex=" in messages[0]["Attachments"]
+        assert "&is=" in messages[0]["Attachments"]
+        assert "&hm=" in messages[0]["Attachments"]
+
+    def test_detect_spoiler_filename_fixture(
+        self, discord_processor, temp_export_dir
+    ):
+        """Should detect fixture with SPOILER_ prefixed filenames."""
+        from tests.fixtures.export_tree import copy_export_fixture
+
+        copy_export_fixture("discord", "raw_spoiler_filename", temp_export_dir)
+        assert discord_processor.detect(temp_export_dir) is True
+
+        # Verify SPOILER_ file exists
+        spoiler_file = (
+            temp_export_dir
+            / "Messages"
+            / "c184324186284621824"
+            / "SPOILER_secret.jpg"
+        )
+        assert spoiler_file.exists()

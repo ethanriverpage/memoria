@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, unquote
 
 import requests
@@ -141,19 +141,21 @@ class DiscordPreprocessor(PreprocessorBase):
 
         # No context merger needed - first occurrence wins
 
-        # Statistics specific to this preprocessor
-        self.stats = {
-            "total_channels": 0,
-            "total_messages": 0,
-            "messages_with_attachments": 0,
-            "total_attachments": 0,
-            "downloads_successful": 0,
-            "downloads_failed": 0,
-            "downloads_skipped": 0,  # Non-media files
-            "banned_files_skipped": 0,
-            "unique_files": 0,
-            "duplicate_files": 0,
-        }
+        # Statistics specific to this preprocessor (preserves shared keys from base)
+        self.stats.update(
+            {
+                "total_channels": 0,
+                "total_messages": 0,
+                "messages_with_attachments": 0,
+                "total_attachments": 0,
+                "downloads_successful": 0,
+                "downloads_failed": 0,
+                "downloads_skipped": 0,  # Non-media files
+                "banned_files_skipped": 0,
+                "unique_files": 0,
+                "duplicate_files": 0,
+            }
+        )
 
         # Channel index cache
         self.channel_index: Dict[str, str] = {}
@@ -161,31 +163,30 @@ class DiscordPreprocessor(PreprocessorBase):
         # Server index cache
         self.server_index: Dict[str, str] = {}
 
+        # Export username (populated from cached detection)
+        self.export_username: str = ""
+
     def validate_export(self) -> bool:
         """Validate that export directory has required Discord structure.
 
         Returns:
             True if valid Discord export, False otherwise
         """
-        if not self.export_path.exists():
-            log.file_not_found(str(self.export_path), "Export path")
+        if not self.require_exists(self.export_path, label="Export path"):
             return False
 
-        if not self.messages_dir.exists():
-            log.file_not_found(str(self.messages_dir), "Messages directory")
+        if not self.require_exists(self.messages_dir, label="Messages directory"):
             return False
 
-        if not self.index_file.exists():
-            log.file_not_found(str(self.index_file), "Messages index.json")
+        if not self.require_exists(self.index_file, label="Messages index.json"):
             return False
 
-        # Check for at least one channel folder
-        channel_folders = [
-            d
-            for d in self.messages_dir.iterdir()
-            if d.is_dir() and d.name.startswith("c")
-        ]
-        if not channel_folders:
+        # Check for at least one channel folder (folders starting with 'c')
+        if not self.require_any_dirs(
+            self.messages_dir,
+            label="channel",
+            filter_fn=lambda d: d.name.startswith("c"),
+        ):
             log.logger.error("No channel folders found in %s", self.messages_dir)
             return False
 
@@ -553,6 +554,7 @@ class DiscordPreprocessor(PreprocessorBase):
             "success": True,
             "url": url,
             "filename": result.dest_filename,
+            "source_path": str(result.primary_source),
             "original_filename": original_filename,
             "channel_id": channel_id,
             "message_id": message_id,
@@ -578,7 +580,7 @@ class DiscordPreprocessor(PreprocessorBase):
 
         return channels
 
-    def build_metadata(
+    def build_channel_metadata(
         self, channel_dirs: List[Path]
     ) -> Tuple[Dict, List[Tuple[str, str, int, str, str]]]:
         """Build metadata structure and collect attachment download tasks.
@@ -587,22 +589,14 @@ class DiscordPreprocessor(PreprocessorBase):
             channel_dirs: List of channel directory paths
 
         Returns:
-            Tuple of (metadata dict, list of download task tuples)
+            Tuple of (conversations dict, list of download task tuples)
         """
-        # Detect username from export
-        detection_result = self.detect_username()
-        export_username = detection_result.username or "unknown"
+        # Use cached detection result from the run() pipeline
+        detection = self.ensure_detection_result()
+        self.export_username = detection.username or "unknown"
 
-        metadata = {
-            "export_info": {
-                "export_path": str(self.export_path),
-                "export_username": export_username,
-                "username_source": detection_result.source,
-                "processed_date": datetime.now().isoformat(),
-            },
-            "conversations": {},
-            "orphaned_media": [],
-        }
+        # Build just the conversations structure - export_info is handled by save_metadata
+        conversations: Dict[str, Any] = {}
 
         download_tasks = []
 
@@ -671,7 +665,7 @@ class DiscordPreprocessor(PreprocessorBase):
 
             # Only add channel if it has messages with attachments
             if channel_messages:
-                metadata["conversations"][channel_id] = {
+                conversations[channel_id] = {
                     "type": channel_info["type"],
                     "title": channel_info["title"],
                     "guild_name": channel_info.get("guild_name"),
@@ -679,11 +673,11 @@ class DiscordPreprocessor(PreprocessorBase):
                     "messages": channel_messages,
                 }
 
-        return metadata, download_tasks
+        return conversations, download_tasks
 
     def download_all_attachments(
         self, download_tasks: List[Tuple[str, str, int, str, str]]
-    ) -> Dict[Tuple[str, int], List[str]]:
+    ) -> Dict[Tuple[str, int], Dict[str, Any]]:
         """Download all attachments in parallel.
 
         Args:
@@ -701,7 +695,8 @@ class DiscordPreprocessor(PreprocessorBase):
         log.downloading(len(download_tasks), "attachments")
 
         # Map to track downloaded files per message
-        message_files: Dict[Tuple[str, int], List[str]] = {}
+        # Each value is a dict with 'filenames' (list) and 'source_paths' (dict)
+        message_files: Dict[Tuple[str, int], Dict[str, Any]] = {}
 
         with ThreadPoolExecutor(max_workers=self.workers) as executor:
             # Submit all download tasks
@@ -722,37 +717,44 @@ class DiscordPreprocessor(PreprocessorBase):
                 if result.get("success"):
                     key = (result["channel_id"], result["message_id"])
                     if key not in message_files:
-                        message_files[key] = []
-                    message_files[key].append(result["filename"])
+                        message_files[key] = {"filenames": [], "source_paths": {}}
+                    message_files[key]["filenames"].append(result["filename"])
+                    message_files[key]["source_paths"][result["filename"]] = result[
+                        "source_path"
+                    ]
 
         return message_files
 
-    def update_metadata_with_downloads(
-        self, metadata: Dict, message_files: Dict[Tuple[str, int], List[str]]
-    ) -> Dict:
-        """Update metadata with downloaded filenames.
+    def update_conversations_with_downloads(
+        self,
+        conversations: Dict[str, Any],
+        message_files: Dict[Tuple[str, int], Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Update conversations with downloaded filenames and source paths.
 
         Args:
-            metadata: Metadata dict to update
-            message_files: Dict mapping (channel_id, message_id) -> filenames
+            conversations: Conversations dict to update
+            message_files: Dict mapping (channel_id, message_id) -> {filenames, source_paths}
 
         Returns:
-            Updated metadata dict
+            Updated conversations dict
         """
-        for channel_id, conv_data in metadata["conversations"].items():
+        for channel_id, conv_data in conversations.items():
             for message in conv_data["messages"]:
                 msg_id = message["id"]
                 key = (channel_id, msg_id)
 
                 if key in message_files:
-                    message["media_files"] = message_files[key]
+                    message["media_files"] = message_files[key]["filenames"]
+                    message["source_paths"] = message_files[key]["source_paths"]
                 else:
                     # No files downloaded for this message
                     message["media_files"] = []
+                    message["source_paths"] = {}
 
         # Remove messages with no downloaded files
-        for channel_id in list(metadata["conversations"].keys()):
-            conv_data = metadata["conversations"][channel_id]
+        for channel_id in list(conversations.keys()):
+            conv_data = conversations[channel_id]
             conv_data["messages"] = [
                 msg for msg in conv_data["messages"] if msg["media_files"]
             ]
@@ -760,45 +762,13 @@ class DiscordPreprocessor(PreprocessorBase):
 
             # Remove empty conversations
             if not conv_data["messages"]:
-                del metadata["conversations"][channel_id]
+                del conversations[channel_id]
 
-        return metadata
+        return conversations
 
-    def save_metadata(self, metadata: Dict) -> None:
-        """Save cleaned metadata to metadata.json.
-
-        Args:
-            metadata: Metadata dict to save
-        """
-        try:
-            # Add final statistics to export_info
-            metadata["export_info"]["export_name"] = self.export_path.name
-            metadata["export_info"]["total_channels"] = self.stats["total_channels"]
-            metadata["export_info"]["total_attachments"] = self.stats[
-                "total_attachments"
-            ]
-            metadata["export_info"]["downloads_successful"] = self.stats[
-                "downloads_successful"
-            ]
-            metadata["export_info"]["downloads_failed"] = self.stats["downloads_failed"]
-            metadata["export_info"]["unique_files"] = self.stats["unique_files"]
-            metadata["export_info"]["duplicate_files"] = self.stats["duplicate_files"]
-
-            # Build file_hashes lookup table for cross-processor dedup optimization
-            file_hashes = {}
-            for content_hash, registry_entry in self._hash_registry.items():
-                filename = registry_entry.get("filename", "")
-                if filename:
-                    file_hashes[filename] = content_hash
-            metadata["file_hashes"] = file_hashes
-
-            with open(self.metadata_file, "w", encoding="utf-8") as f:
-                json.dump(metadata, f, indent=2, ensure_ascii=False)
-
-            log.saved_metadata(str(self.metadata_file))
-        except Exception as e:
-            log.logger.error("Failed to save metadata: %s", e)
-            raise
+    def get_content_key(self) -> str:
+        """Return the content key for Discord metadata."""
+        return "conversations"
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -833,17 +803,29 @@ class DiscordPreprocessor(PreprocessorBase):
         channel_dirs = self.scan_channels()
         log.found_items(len(channel_dirs), "channels with messages")
 
-        # Build metadata and collect download tasks
+        # Build conversations structure and collect download tasks
         log.parsing("messages")
-        metadata, download_tasks = self.build_metadata(channel_dirs)
+        conversations, download_tasks = self.build_channel_metadata(channel_dirs)
 
         # Download attachments
         message_files = self.download_all_attachments(download_tasks)
 
-        # Update metadata with downloaded filenames
-        metadata = self.update_metadata_with_downloads(metadata, message_files)
+        # Update conversations with downloaded filenames
+        conversations = self.update_conversations_with_downloads(
+            conversations, message_files
+        )
 
         # Save metadata
-        self.save_metadata(metadata)
+        self.save_metadata(
+            conversations,
+            extra_export_info={
+                "total_channels": self.stats["total_channels"],
+                "total_attachments": self.stats["total_attachments"],
+                "downloads_successful": self.stats["downloads_successful"],
+                "downloads_failed": self.stats["downloads_failed"],
+                "unique_files": self.stats["unique_files"],
+                "duplicate_files": self.stats["duplicate_files"],
+            },
+        )
 
         return True

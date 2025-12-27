@@ -10,8 +10,6 @@ Processes iMessage exports from Mac and iPhone backups:
 - Supports cross-export deduplication via xxHash64
 - Generates metadata.json matching Snapchat messages structure
 """
-
-import json
 import logging
 import re
 import sqlite3
@@ -262,32 +260,36 @@ class IMessagePreprocessor(PreprocessorBase):
         self.owner_name = owner_name or self._extract_owner_name()
 
         # Set context merger for deduplication (accumulates messages)
-        self._context_merger = merge_imessage_context
+        self.set_context_merger(merge_imessage_context)
 
         # Merged contact map from all vCards
         self.handle_to_name: Dict[str, str] = {}
 
-        # Statistics specific to this preprocessor
-        self.stats = {
-            "exports_processed": 0,
-            "total_attachments": 0,
-            "unique_files": 0,
-            "duplicate_files": 0,
-            "live_photos": 0,
-            "contacts_loaded": 0,
-            "conversations": 0,
-        }
+        # Statistics specific to this preprocessor (preserves shared keys from base)
+        self.stats.update(
+            {
+                "exports_processed": 0,
+                "total_attachments": 0,
+                "unique_files": 0,
+                "duplicate_files": 0,
+                "live_photos": 0,
+                "contacts_loaded": 0,
+                "conversations": 0,
+            }
+        )
 
     def _extract_owner_name(self) -> str:
         """Extract owner name (device identifier) from export directory name.
 
         Expected pattern: imessage-{device}-YYYYMMDD (e.g., imessage-iph17pm-20251121)
 
+        Uses cached detection result from run() pipeline.
+
         Returns:
             Extracted device name or 'unknown'
         """
-        result = self.detect_username()
-        return result.username or "unknown"
+        detection = self.ensure_detection_result()
+        return detection.username or "unknown"
 
     def detect_username(self) -> DetectionResult:
         """Detect device identifier from export directory name.
@@ -525,15 +527,16 @@ class IMessagePreprocessor(PreprocessorBase):
             True if valid, False otherwise
         """
         for export_path in self.export_paths:
-            if not export_path.exists():
-                logger.error("Export path does not exist: %s", export_path)
+            if not self.require_exists(export_path, label="Export path"):
                 return False
-            # Check for database
-            if (
-                not (export_path / "chat.db").exists()
-                and not (export_path / "SMS" / "sms.db").exists()
-            ):
-                logger.error("No iMessage database found in %s", export_path)
+            # Check for database (either chat.db or SMS/sms.db)
+            chat_db = export_path / "chat.db"
+            sms_db = export_path / "SMS" / "sms.db"
+            if not chat_db.exists() and not sms_db.exists():
+                logger.error(
+                    "No iMessage database found in %s (checked chat.db, SMS/sms.db)",
+                    export_path,
+                )
                 return False
         return True
 
@@ -809,8 +812,8 @@ class IMessagePreprocessor(PreprocessorBase):
             if len(merged_contexts) > 1:
                 # Create merged message with messages array
                 merged_message = {
-                    "media_file": result.dest_filename,
-                    "source_path": str(result.source_path),
+                    "media_files": [result.dest_filename],
+                    "source_paths": {result.dest_filename: str(result.source_path)},
                     "primary_created": primary_context.get("created"),
                     "is_duplicate": True,
                     "messages": [],
@@ -850,8 +853,8 @@ class IMessagePreprocessor(PreprocessorBase):
                     "created": primary_context.get("created"),
                     "content": primary_context.get("content"),
                     "is_sender": primary_context.get("is_sender"),
-                    "media_file": result.dest_filename,
-                    "source_path": str(result.source_path),
+                    "media_files": [result.dest_filename],
+                    "source_paths": {result.dest_filename: str(result.source_path)},
                     "media_type": media_type,
                 }
 
@@ -940,7 +943,8 @@ class IMessagePreprocessor(PreprocessorBase):
                         "media_type": get_media_type(str(file_path)),
                         "created": None,
                         "content": "",
-                        "media_file": file_path.name,
+                        "filename": file_path.name,
+                        "source_path": str(file_path),
                     }
                     orphaned_media.append(orphaned_entry)
 
@@ -962,45 +966,9 @@ class IMessagePreprocessor(PreprocessorBase):
         # Use original transfer_name or filename
         return attachment.get("transfer_name") or source_path.name
 
-    def _generate_metadata(
-        self, conversations: Dict[str, Dict], orphaned_media: List[Dict]
-    ) -> Dict:
-        """Generate metadata.json structure matching Snapchat format.
-
-        Args:
-            conversations: Conversations dictionary
-            orphaned_media: List of orphaned media entries
-
-        Returns:
-            Metadata dictionary
-        """
-        # Get username detection result for source info
-        detection_result = self.detect_username()
-
-        # Build file_hashes lookup table for cross-processor dedup optimization
-        file_hashes = {}
-        for content_hash, registry_entry in self._hash_registry.items():
-            filename = registry_entry.get("filename", "")
-            if filename:
-                file_hashes[filename] = content_hash
-
-        metadata = {
-            "export_info": {
-                "export_path": str(self.export_paths[0]),
-                "export_paths": [str(p) for p in self.export_paths],
-                "export_username": self.owner_name,
-                "username_source": detection_result.source,
-                "processed_date": datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%d %H:%M:%S UTC"
-                ),
-                "contacts_loaded": self.stats["contacts_loaded"],
-            },
-            "conversations": conversations,
-            "orphaned_media": orphaned_media,
-            "file_hashes": file_hashes,
-        }
-
-        return metadata
+    def get_content_key(self) -> str:
+        """Return the content key for iMessage metadata."""
+        return "conversations"
 
     def process_export(self) -> bool:
         """Platform-specific preprocessing logic.
@@ -1041,9 +1009,13 @@ class IMessagePreprocessor(PreprocessorBase):
             logger.warning("No attachments found to process")
             # Still create output structure (no media directory needed - files are read from source)
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            metadata = self._generate_metadata({}, [])
-            with open(self.metadata_file, "w", encoding="utf-8") as f:
-                json.dump(metadata, f, indent=2, ensure_ascii=False)
+            self.save_metadata(
+                {},
+                extra_export_info={
+                    "export_paths": [str(p) for p in self.export_paths],
+                    "contacts_loaded": self.stats["contacts_loaded"],
+                },
+            )
             return True
 
         # Phase 3: Deduplicate and organize by conversation
@@ -1058,13 +1030,17 @@ class IMessagePreprocessor(PreprocessorBase):
         # Phase 3b: Detect orphaned media (files in Attachments not in database)
         orphaned_media = self._detect_orphaned_media(all_attachments)
 
-        # Phase 4: Generate metadata
-        logger.info("Generating metadata.json")
+        # Phase 4: Save metadata
+        logger.info("Saving metadata.json")
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        metadata = self._generate_metadata(conversations, orphaned_media)
-
-        with open(self.metadata_file, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=2, ensure_ascii=False)
+        self.set_unmatched_media(orphaned_media)
+        self.save_metadata(
+            conversations,
+            extra_export_info={
+                "export_paths": [str(p) for p in self.export_paths],
+                "contacts_loaded": self.stats["contacts_loaded"],
+            },
+        )
 
         return True
 

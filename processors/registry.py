@@ -8,7 +8,7 @@ Supports detection of multiple processors per input directory.
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Type
 from processors.base import ProcessorBase
 
 # Set up logging
@@ -20,9 +20,9 @@ class ProcessorRegistry:
 
     def __init__(self):
         """Initialize empty processor registry"""
-        self.processors: List[ProcessorBase] = []
+        self.processors: List[Type[ProcessorBase]] = []
 
-    def register(self, processor: ProcessorBase) -> None:
+    def register(self, processor: Type[ProcessorBase]) -> None:
         """Register a processor
 
         Args:
@@ -45,7 +45,7 @@ class ProcessorRegistry:
 
         self.processors.append(processor)
 
-    def detect_all(self, input_path: Path) -> List[ProcessorBase]:
+    def detect_all(self, input_path: Path) -> List[Type[ProcessorBase]]:
         """Detect ALL processors that can handle this input
 
         Unlike typical detection that finds one match, this finds all matches
@@ -56,7 +56,7 @@ class ProcessorRegistry:
             input_path: Path to input directory
 
         Returns:
-            List of matching processors, sorted by priority (highest first)
+            List of matching processor classes, sorted by priority (highest first)
         """
         matches = []
 
@@ -74,11 +74,11 @@ class ProcessorRegistry:
 
         return matches
 
-    def get_all_processors(self) -> List[ProcessorBase]:
+    def get_all_processors(self) -> List[Type[ProcessorBase]]:
         """Get all registered processors sorted by priority
 
         Returns:
-            List of all processors, sorted by priority (highest first)
+            List of all processor classes, sorted by priority (highest first)
         """
         return sorted(self.processors, key=lambda p: p.get_priority(), reverse=True)
 
@@ -90,7 +90,7 @@ class ProcessorRegistry:
         """
         return len(self.processors)
 
-    def get_by_name(self, name: str) -> Optional[ProcessorBase]:
+    def get_by_name(self, name: str) -> Optional[Type[ProcessorBase]]:
         """Find processor by name (case-insensitive).
 
         Args:
@@ -107,7 +107,7 @@ class ProcessorRegistry:
 
     def group_for_consolidation(
         self, input_paths: List[Path]
-    ) -> Dict[ProcessorBase, List[Path]]:
+    ) -> Dict[Type[ProcessorBase], List[Path]]:
         """Group input paths by processor for consolidation.
 
         Only groups paths for processors that support consolidation and
@@ -117,7 +117,7 @@ class ProcessorRegistry:
             input_paths: List of input directory paths to analyze
 
         Returns:
-            Dict mapping processor -> list of paths it can handle
+            Dict mapping processor class -> list of paths it can handle
         """
         groups = {}
         for processor in self.processors:

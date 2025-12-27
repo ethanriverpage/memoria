@@ -1,0 +1,20 @@
+[
+  {
+    "date": "2023-01-15 10:30:45 UTC",
+    "media_type": "PHOTO",
+    "media_filename": "snap_001.jpg",
+    "overlay_filename": "overlay_001.png"
+  },
+  {
+    "date": "2023-02-20 14:22:10 UTC",
+    "media_type": "VIDEO",
+    "media_filename": "snap_002.mp4",
+    "overlay_filename": "overlay_002.png"
+  },
+  {
+    "date": "2023-03-15 09:00:00 UTC",
+    "media_type": "PHOTO",
+    "media_filename": "snap_003.jpg"
+  }
+]
+

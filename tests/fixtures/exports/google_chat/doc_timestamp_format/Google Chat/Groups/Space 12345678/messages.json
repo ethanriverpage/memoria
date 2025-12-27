@@ -1,0 +1,33 @@
+{
+  "messages": [
+    {
+      "creator": {
+        "name": "Test User",
+        "email": "testuser@example.com",
+        "user_type": "Human"
+      },
+      "created_date": "Thursday, November 3, 2016 at 11:59:50 AM UTC",
+      "text": "Hello everyone!",
+      "topic_id": "LqFDi4ScZAQ",
+      "message_id": "k6oxHQAAAAE/abc123"
+    },
+    {
+      "creator": {
+        "name": "Other User",
+        "email": "other@example.com",
+        "user_type": "Human"
+      },
+      "created_date": "Friday, November 4, 2016 at 9:30:00 AM UTC",
+      "text": "Check this out",
+      "attached_files": [
+        {
+          "original_name": "2016-11-04.png",
+          "export_name": "File-2016-11-04.png"
+        }
+      ],
+      "topic_id": "LqFDi4ScZAQ",
+      "message_id": "k6oxHQAAAAE/def456"
+    }
+  ]
+}
+

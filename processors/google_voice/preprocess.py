@@ -153,13 +153,14 @@ class GoogleVoicePreprocessor(PreprocessorBase):
             final_output_dir=final_output_dir,
         )
 
-        self.voice_dir = self.export_path / "Voice" / "Calls"
+        # Support both raw and Takeout layouts
+        self.voice_dir = self._resolve_voice_calls_dir(self.export_path)
 
         # Export username (detected from directory name)
         self.export_username = None
 
-        # Statistics specific to this preprocessor
-        self.stats = {
+        # Statistics specific to this preprocessor (preserves shared keys from base)
+        self.stats.update({
             "total_conversations": 0,
             "total_messages_with_media": 0,
             "total_media_files": 0,
@@ -167,7 +168,7 @@ class GoogleVoicePreprocessor(PreprocessorBase):
             "missing_files": 0,
             "fuzzy_matches": 0,
             "banned_files_skipped": 0,
-        }
+        })
 
         # Track used files for duplicate handling
         self.used_files = defaultdict(int)
@@ -181,7 +182,18 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         self.copied_media_paths = set()
 
         # Set context merger for deduplication (first occurrence wins)
-        self._context_merger = merge_first_occurrence
+        self.set_context_merger(merge_first_occurrence)
+
+    @staticmethod
+    def _resolve_voice_calls_dir(export_path: Path) -> Path:
+        """Resolve the Voice/Calls directory for both raw and Takeout exports."""
+        raw = export_path / "Voice" / "Calls"
+        if raw.exists() and raw.is_dir():
+            return raw
+        takeout = export_path / "Takeout" / "Voice" / "Calls"
+        if takeout.exists() and takeout.is_dir():
+            return takeout
+        return raw
 
     @staticmethod
     def _strip_copy_suffix(filename: str) -> str:
@@ -264,19 +276,18 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         return None
 
     def validate_export(self) -> bool:
-        """Validate that export directory has required structure"""
-        if not self.export_path.exists():
-            logger.error("Export path does not exist: %s", self.export_path)
+        """Validate that export directory has required structure."""
+        if not self.require_exists(self.export_path, label="Export path"):
             return False
 
-        if not self.voice_dir.exists():
-            logger.error("Voice/Calls directory not found: %s", self.voice_dir)
+        # Re-resolve in case export_path was populated after init (tests/generators)
+        self.voice_dir = self._resolve_voice_calls_dir(self.export_path)
+
+        if not self.require_exists(self.voice_dir, label="Voice/Calls directory"):
             return False
 
         # Check if at least one HTML file exists
-        html_files = list(self.voice_dir.glob("*.html"))
-        if not html_files:
-            logger.error("No HTML files found in %s", self.voice_dir)
+        if not self.require_any_files(self.voice_dir, "*.html", label="HTML"):
             return False
 
         return True
@@ -821,45 +832,9 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         if orphaned_media:
             logger.info(f"   Found {len(orphaned_media)} orphaned media files")
 
-    def save_metadata(self, conversations: List[Dict]) -> None:
-        """Save cleaned metadata to metadata.json"""
-
-        try:
-            # Add export info with username detection source
-            detection_result = self.detect_username()
-
-            # Build file_hashes lookup table for cross-processor dedup optimization
-            file_hashes = {}
-            for content_hash, registry_entry in self._hash_registry.items():
-                filename = registry_entry.get("filename", "")
-                if filename:
-                    file_hashes[filename] = content_hash
-
-            # Add export info
-            output = {
-                "export_info": {
-                    "export_path": str(self.export_path),
-                    "export_name": self.export_path.name,
-                    "export_username": self.export_username,
-                    "username_source": detection_result.source,
-                    "processed_date": datetime.now().isoformat(),
-                    "total_conversations": self.stats["total_conversations"],
-                    "total_messages_with_media": self.stats[
-                        "total_messages_with_media"
-                    ],
-                    "total_media_files": self.stats["media_copied"],
-                },
-                "conversations": conversations,
-                "file_hashes": file_hashes,
-            }
-
-            with open(self.metadata_file, "w", encoding="utf-8") as f:
-                json.dump(output, f, indent=2, ensure_ascii=False)
-
-            logger.info("Saved metadata to %s", self.metadata_file)
-        except Exception as e:
-            logger.error(f"Failed to save metadata: {e}")
-            raise
+    def get_content_key(self) -> str:
+        """Return the content key for Google Voice metadata."""
+        return "conversations"
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -883,18 +858,16 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         Returns:
             True if processing succeeded, False otherwise
         """
-        # Detect export username
-        logger.info("Detecting export username...")
-        result = self.detect_username()
-        if not result.username:
+        # Use cached detection result from run() pipeline
+        detection = self.ensure_detection_result()
+        if not detection.username:
             self.log_message(
                 "USERNAME_DETECTION_ERROR",
                 "All username detection methods failed",
             )
             logger.error("Could not detect export username")
             return False
-        self.export_username = result.username
-        logger.info("Detected export user: %s (via %s)", result.username, result.source)
+        self.export_username = detection.username
 
         # Scan and parse conversations
         conversations = self.scan_conversations()
@@ -903,6 +876,13 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         self.copy_media_files(conversations)
 
         # Save metadata
-        self.save_metadata(conversations)
+        self.save_metadata(
+            conversations,
+            extra_export_info={
+                "total_conversations": self.stats["total_conversations"],
+                "total_messages_with_media": self.stats["total_messages_with_media"],
+                "total_media_files": self.stats["media_copied"],
+            },
+        )
 
         return True

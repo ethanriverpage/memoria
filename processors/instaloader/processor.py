@@ -13,7 +13,6 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.dedup.catalog import catalog_media_files
 from common.dedup.service import is_file_primary_by_hash
 from common.dedup.description import (
     SourceEntry,
@@ -68,9 +67,10 @@ class InstaloaderProcessor(ProcessorBase):
         - Typically has .jpg/.mp4 and .txt pairs
         """
         try:
-            # Pattern for Instaloader files: YYYY-MM-DD_HH-MM-SS_UTC.*
+            # Pattern for Instaloader files: YYYY-MM-DD_HH-MM-SS_UTC[_N].*
+            # The optional _N suffix is for carousel posts (e.g., _1, _2)
             instaloader_pattern = re.compile(
-                r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_UTC\.(jpg|jpeg|mp4|txt|json\.xz)$"
+                r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_UTC(_\d+)?\.(jpg|jpeg|mp4|txt|json(\.xz)?)$"
             )
 
             # Count matching files in root directory
@@ -150,41 +150,41 @@ class InstaloaderProcessor(ProcessorBase):
 
     @staticmethod
     def build_catalog(input_dir: str, **kwargs):
-        """Build catalog of files with hashes and metadata."""
+        """Build catalog of files with hashes and metadata.
+
+        Requires preprocessed directory with metadata.json and source_path fields.
+
+        Args:
+            input_dir: Path to preprocessed input directory
+            **kwargs: Additional arguments (verbose, workers)
+
+        Yields:
+            Catalog entries with processor name and file data.
+        """
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
 
-        # Build caption lookup from metadata.json if preprocessed
-        caption_lookup: Dict[str, str] = {}
-        metadata_file = input_path / "metadata.json"
-        if metadata_file.exists():
-            metadata = InstaloaderProcessor.load_metadata(metadata_file)
-            for post in metadata.get("media", []):
-                caption = post.get("caption", "")
-                for filename in post.get("media_files", []):
-                    caption_lookup[filename] = caption
+        def extract_preprocessed_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
+            """Extract metadata from preprocessed entry."""
+            result: Dict[str, Any] = {}
+            if "caption" in entry:
+                result["caption"] = entry["caption"]
+            if "timestamp" in entry:
+                result["timestamp"] = entry["timestamp"]
+            return result
 
-        def extract_instaloader_metadata(file_path: Path) -> Dict[str, Any]:
-            """Extract caption metadata for dedup manifest."""
-            return {"caption": caption_lookup.get(file_path.name, "")}
-
-        # Instaloader format has files in root with timestamp pattern
-        instaloader_pattern = re.compile(
-            r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_UTC\.(jpg|jpeg|mp4)$"
-        )
-        media_files = [
-            f
-            for f in input_path.iterdir()
-            if f.is_file() and instaloader_pattern.match(f.name)
-        ]
-
-        yield from catalog_media_files(
+        catalog_iter = InstaloaderProcessor.catalog_from_preprocessed_if_available(
             processor_name="Instaloader",
             input_path=input_path,
-            media_files=media_files,
             workers=workers,
-            metadata_extractor=extract_instaloader_metadata,
+            metadata_extractor=extract_preprocessed_metadata,
+            media_files_key="media",  # Flat structure with posts
         )
+        if catalog_iter is not None:
+            yield from catalog_iter
+            return
+
+        logger.warning("Directory not preprocessed, skipping catalog: %s", input_path)
 
     @classmethod
     def process(
@@ -237,19 +237,27 @@ class InstaloaderProcessor(ProcessorBase):
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[str, dict, str, str, Optional[str]]],
+    file_info: List[Tuple[str, dict, str, str, Optional[str], Optional[str]]],
 ) -> List[MetadataWriteRequest]:
     """Build MetadataWriteRequest objects for Instaloader files.
 
     Args:
-        file_info: List of (file_path, post_data, export_username, media_type, content_hash) tuples
+        file_info: List of (file_path, post_data, export_username, media_type,
+                   content_hash, original_filename) tuples
 
     Returns:
         List of MetadataWriteRequest objects
     """
     requests: List[MetadataWriteRequest] = []
 
-    for file_path, post_data, export_username, media_type, content_hash in file_info:
+    for (
+        file_path,
+        post_data,
+        export_username,
+        media_type,
+        content_hash,
+        original_filename,
+    ) in file_info:
         # Build datetime tags (ISO format)
         datetime_tags = build_datetime_tags(post_data.get("timestamp"))
 
@@ -283,6 +291,7 @@ def _build_metadata_requests(
                 ),
                 processor_name="instaloader",
                 content_hash=content_hash,
+                original_filename=original_filename,
             )
         )
 
@@ -297,11 +306,13 @@ def process_media_batch(batch_args):
 
     Args:
         batch_args: List of tuples, each containing (media_file, post_data,
-                    output_filename, media_dir, output_dir, export_username, media_type, content_hash)
+                    output_filename, media_dir, output_dir, export_username,
+                    media_type, content_hash, original_filename)
 
     Returns:
         List of (success, output_path, file_info_tuple) tuples where file_info_tuple is
-        (output_path, post_data, export_username, media_type, content_hash) or None on failure
+        (output_path, post_data, export_username, media_type, content_hash, original_filename)
+        or None on failure
     """
     results = []
 
@@ -319,6 +330,7 @@ def process_media_batch(batch_args):
             export_username,
             media_type,
             content_hash,
+            original_filename,
         ) = args_tuple
 
         media_path = os.path.join(media_dir, media_file)
@@ -337,7 +349,9 @@ def process_media_batch(batch_args):
             logger.debug(f"Copying {media_file} ({file_size} bytes) to {output_path}")
             copy_file(media_path, output_path)
             file_paths.append(output_path)
-            file_info.append((output_path, post_data, export_username, media_type, content_hash))
+            file_info.append(
+                (output_path, post_data, export_username, media_type, content_hash, original_filename)
+            )
         except Exception as e:  # noqa: BLE001
             logger.error("Failed to copy %s: %s", media_file, e)
             results.append((False, None, None))
@@ -351,11 +365,19 @@ def process_media_batch(batch_args):
         # Update file_paths and file_info with corrected paths
         file_paths = [corrections.get(p, p) for p in file_paths]
         file_info = [
-            (corrections.get(fp, fp), pd, eu, mt, ch) for fp, pd, eu, mt, ch in file_info
+            (corrections.get(fp, fp), pd, eu, mt, ch, of)
+            for fp, pd, eu, mt, ch, of in file_info
         ]
 
     # Phase 3: Update timestamps and compile results
-    for output_path, post_data, export_username, media_type, content_hash in file_info:
+    for (
+        output_path,
+        post_data,
+        export_username,
+        media_type,
+        content_hash,
+        original_filename,
+    ) in file_info:
         if post_data.get("timestamp"):
             logger.debug(
                 f"Updating timestamps for {output_path} to {post_data['timestamp']}"
@@ -363,7 +385,11 @@ def process_media_batch(batch_args):
         update_file_timestamps(output_path, post_data.get("timestamp"))
         logger.debug(f"Successfully processed {output_path}")
         results.append(
-            (True, output_path, (output_path, post_data, export_username, media_type, content_hash))
+            (
+                True,
+                output_path,
+                (output_path, post_data, export_username, media_type, content_hash, original_filename),
+            )
         )
 
     return results
@@ -409,27 +435,15 @@ def process_logic(
 
         # Load metadata
         logger.info(f"Loading metadata from {metadata_file}...")
-        metadata_json = InstaloaderProcessor.load_metadata(Path(metadata_file))
+        metadata_json = InstaloaderProcessor.load_metadata(
+            Path(metadata_file), validate=True, require_source_paths=True
+        )
 
         export_info = metadata_json.get("export_info", {})
         media_posts = metadata_json.get("media", [])
         file_hashes = metadata_json.get("file_hashes", {})
 
         logger.info(f"Found {len(media_posts)} posts to process")
-
-        # Check if this is new format (source_paths in posts) or legacy format
-        sample_post = next((p for p in media_posts if p.get("media_files")), None)
-        use_legacy_format = sample_post is None or "source_paths" not in sample_post
-
-        if use_legacy_format:
-            media_dir = os.path.join(working_dir, "media")
-            if not os.path.exists(media_dir):
-                logger.error(f"Media directory not found: {media_dir}")
-                return
-            logger.info("Using legacy format (media/ directory)")
-        else:
-            media_dir = None
-            logger.info("Using new format (source_path in metadata)")
 
         # Extract export username from export_info
         export_name = export_info.get("export_name", "")
@@ -466,18 +480,17 @@ def process_logic(
                 # Use cached file_hashes from preprocessing when available
                 content_hash = file_hashes.get(media_file)
 
-                # Determine source path based on format
-                if use_legacy_format:
-                    source_file_path = media_dir
-                    source_file_name = media_file
-                else:
-                    source_paths = post.get("source_paths", {})
-                    source_file_path = os.path.dirname(source_paths.get(media_file, ""))
-                    source_file_name = os.path.basename(source_paths.get(media_file, media_file))
+                # Get source path from metadata
+                source_paths = post.get("source_paths", {})
+                full_source_path = source_paths.get(media_file)
+                if not full_source_path:
+                    logger.warning(f"No source_path for file: {media_file}")
+                    continue
+
+                source_file_path = os.path.dirname(full_source_path)
+                source_file_name = os.path.basename(full_source_path)
 
                 if dedup_manifest:
-                    # Get full source path for within-processor dedup
-                    full_source_path = source_paths.get(media_file) if not use_legacy_format else None
                     if content_hash:
                         # Use cached hash from preprocessing (avoids re-hashing)
                         if not is_file_primary_by_hash(
@@ -487,9 +500,8 @@ def process_logic(
                             continue
                     else:
                         # Fallback for files without cached hash
-                        full_path = os.path.join(source_file_path, source_file_name) if source_file_path else source_file_name
                         if InstaloaderProcessor.should_skip_for_dedup(
-                            full_path, dedup_manifest, "Instaloader"
+                            full_source_path, dedup_manifest, "Instaloader"
                         ):
                             skipped_dedup += 1
                             continue
@@ -505,7 +517,10 @@ def process_logic(
                     file_ext,
                 )
 
-                # Create task tuple for worker
+                # Get original filename for XMP:PreservedFileName embedding
+                original_filename = source_file_name
+
+                # Create task tuple for worker (include content_hash and original_filename)
                 processing_tasks.append(
                     (
                         source_file_name,
@@ -516,6 +531,7 @@ def process_logic(
                         export_username,
                         media_type,
                         content_hash,
+                        original_filename,
                     )
                 )
 

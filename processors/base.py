@@ -17,6 +17,12 @@ from common.dependency_checker import (
     print_ffmpeg_error,
     print_pillow_error,
 )
+from common.metadata.schema import (
+    validate_metadata,
+    get_content_type,
+    MetadataValidationError,
+    ContentType,
+)
 from common.output.paths import OutputInfo
 
 logger = logging.getLogger(__name__)
@@ -146,9 +152,10 @@ class ProcessorBase(ABC):
         """
         pass
 
-    @staticmethod
+    @classmethod
     @abstractmethod
     def process(
+        cls,
         input_dir: str,
         output_dir: Optional[str] = None,
         dedup_manifest: Optional[Dict[str, Any]] = None,
@@ -236,6 +243,157 @@ class ProcessorBase(ABC):
             "but does not implement preprocess()"
         )
 
+    @staticmethod
+    def check_preprocessed_source_path(
+        input_path: Path,
+        media_files_key: str = "media_files",
+        container_key: Optional[str] = None,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Check if directory has preprocessed metadata with source_path format.
+
+        Checks for metadata.json and whether media entries contain source_path,
+        indicating the new preprocessed format where files are not copied.
+
+        Args:
+            input_path: Path to the directory to check.
+            media_files_key: Key containing media file entries in metadata.
+                Default is "media_files" for flat structures (Google Photos).
+            container_key: Optional key for nested structures (e.g., "conversations"
+                for iMessage). If provided, looks for media_files inside messages.
+
+        Returns:
+            List of media file entries if preprocessed with source_path format,
+            None if not preprocessed or uses legacy format.
+
+        Example - Flat structure (Google Photos, Snapchat Memories):
+            media_files = ProcessorBase.check_preprocessed_source_path(input_path)
+            if media_files is not None:
+                yield from catalog_from_preprocessed(...)
+                return
+
+        Example - Nested structure (iMessage, Google Chat):
+            media_files = ProcessorBase.check_preprocessed_source_path(
+                input_path, container_key="conversations"
+            )
+        """
+        metadata_file = input_path / "metadata.json"
+        if not metadata_file.exists():
+            return None
+
+        try:
+            with open(metadata_file, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+
+            if container_key:
+                # Nested structure: conversations/messages with media_files
+                container = metadata.get(container_key, {})
+                if isinstance(container, dict):
+                    container_items = list(container.values())
+                else:
+                    container_items = container
+
+                # Check for source_paths in messages (conversations format)
+                for conv in container_items:
+                    messages = conv.get("messages", [])
+                    for msg in messages:
+                        source_paths = msg.get("source_paths", {})
+                        if source_paths:
+                            # Found source_paths - extract all entries using
+                            # unified extraction
+                            all_entries = list(
+                                ProcessorBase.extract_all_media_entries(metadata)
+                            )
+                            return all_entries if all_entries else None
+                        # Also check for source_path on message level
+                        if msg.get("source_path"):
+                            all_entries = list(
+                                ProcessorBase.extract_all_media_entries(metadata)
+                            )
+                            return all_entries if all_entries else None
+            else:
+                # Flat structure: media_files at top level
+                media_files = metadata.get(media_files_key, [])
+                if media_files:
+                    sample = (
+                        media_files[0] if isinstance(media_files[0], dict) else None
+                    )
+                    if sample and "source_path" in sample:
+                        return media_files
+
+        except Exception as e:
+            logger.debug(f"Could not check preprocessed format: {e}")
+
+        return None
+
+    @staticmethod
+    def catalog_from_preprocessed_if_available(
+        processor_name: str,
+        input_path: Path,
+        workers: int = 4,
+        metadata_extractor: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+        media_files_key: str = "media_files",
+        container_key: Optional[str] = None,
+    ) -> Optional[Iterator[Dict[str, Any]]]:
+        """Build catalog from preprocessed metadata if available.
+
+        Checks if directory has preprocessed metadata with source_path format
+        and returns a catalog iterator if so. This is the recommended way to
+        handle preprocessed directories in build_catalog() implementations.
+
+        Args:
+            processor_name: Name for the catalog (e.g., "Google Photos").
+            input_path: Path to the directory to check.
+            workers: Number of parallel workers for computing missing hashes.
+            metadata_extractor: Optional function to transform metadata from each
+                media_files entry. Signature: (entry: Dict) -> Dict[str, Any].
+            media_files_key: Key containing media file entries in metadata.
+            container_key: Optional key for nested structures.
+
+        Returns:
+            Iterator yielding catalog entries if preprocessed format found,
+            None if directory is not preprocessed or uses legacy format.
+
+        Example:
+            @staticmethod
+            def build_catalog(input_dir: str, **kwargs):
+                input_path = Path(input_dir)
+                workers = kwargs.get("workers", 4)
+
+                # Check for preprocessed format first
+                catalog_iter = ProcessorBase.catalog_from_preprocessed_if_available(
+                    processor_name="Google Photos",
+                    input_path=input_path,
+                    workers=workers,
+                    metadata_extractor=lambda e: {"albums": e.get("albums", [])},
+                )
+                if catalog_iter is not None:
+                    yield from catalog_iter
+                    return
+
+                # Fall back to raw export handling...
+        """
+        from common.dedup.catalog import catalog_from_preprocessed
+
+        media_files = ProcessorBase.check_preprocessed_source_path(
+            input_path, media_files_key, container_key
+        )
+
+        if media_files is None:
+            return None
+
+        logger.info(
+            "Building catalog from preprocessed metadata (%d files): %s",
+            len(media_files),
+            input_path.name,
+        )
+
+        return catalog_from_preprocessed(
+            processor_name=processor_name,
+            input_path=input_path,
+            workers=workers,
+            metadata_extractor=metadata_extractor,
+        )
+
     # =========================================================================
     # Shared Utility Methods
     # =========================================================================
@@ -253,17 +411,31 @@ class ProcessorBase(ABC):
         return cls
 
     @staticmethod
-    def load_metadata(metadata_path: Path) -> Dict[str, Any]:
-        """Load and parse metadata.json.
+    def load_metadata(
+        metadata_path: Path,
+        validate: bool = False,
+        require_source_paths: bool = True,
+    ) -> Dict[str, Any]:
+        """Load and optionally validate metadata.json.
 
         Args:
             metadata_path: Path to metadata.json file.
+            validate: Whether to validate metadata structure.
+            require_source_paths: If validating, whether source_paths are required.
 
         Returns:
             Parsed metadata dictionary.
+
+        Raises:
+            MetadataValidationError: If validation is enabled and fails.
         """
         with open(metadata_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            metadata = json.load(f)
+
+        if validate:
+            validate_metadata(metadata, require_source_paths=require_source_paths)
+
+        return metadata
 
     @staticmethod
     def validate_working_directory(
@@ -293,6 +465,83 @@ class ProcessorBase(ABC):
             return None, None
 
         return metadata_path, media_dir
+
+    @staticmethod
+    def extract_all_media_entries(
+        metadata: Dict[str, Any],
+    ) -> Iterator[Dict[str, Any]]:
+        """Extract all media entries from any metadata structure.
+
+        Handles all three content types uniformly:
+        - media_files: yields each entry directly
+        - media: yields each post's media files with post context
+        - conversations: yields each message's media files with context
+
+        Also includes unmatched_media if present.
+
+        This is useful for catalog building and cross-processor deduplication,
+        providing a single interface to iterate over all media regardless of
+        the underlying structure.
+
+        Args:
+            metadata: Parsed metadata.json dict
+
+        Yields:
+            Media entry dicts with at minimum: filename, source_path
+        """
+        content_type = None
+        try:
+            content_type = get_content_type(metadata)
+        except MetadataValidationError:
+            # No valid content key found - still extract unmatched_media below
+            pass
+
+        # Get file_hashes lookup for content_hash (used by cross-processor dedup)
+        file_hashes = metadata.get("file_hashes", {})
+
+        if content_type == ContentType.MEDIA_FILES:
+            # media_files entries should already have content_hash
+            yield from metadata.get("media_files", [])
+
+        elif content_type == ContentType.MEDIA:
+            for post in metadata.get("media", []):
+                source_paths = post.get("source_paths", {})
+                for filename in post.get("media_files", []):
+                    yield {
+                        "filename": filename,
+                        "source_path": source_paths.get(filename, ""),
+                        "content_hash": file_hashes.get(filename),
+                        "timestamp": post.get("timestamp"),
+                        "media_type": post.get("media_type"),
+                        "caption": post.get("caption"),
+                    }
+
+        elif content_type == ContentType.CONVERSATIONS:
+            conversations = metadata.get("conversations", {})
+            if isinstance(conversations, dict):
+                conv_items = list(conversations.values())
+            else:
+                conv_items = conversations
+
+            for conv in conv_items:
+                conv_title = conv.get("conversation_title") or conv.get(
+                    "conversation_name"
+                )
+                for msg in conv.get("messages", []):
+                    source_paths = msg.get("source_paths", {})
+                    for filename in msg.get("media_files", []):
+                        yield {
+                            "filename": filename,
+                            "source_path": source_paths.get(filename, ""),
+                            "content_hash": file_hashes.get(filename),
+                            "timestamp": msg.get("timestamp") or msg.get("created"),
+                            "sender": msg.get("sender"),
+                            "conversation": conv_title,
+                        }
+
+        # Include unmatched_media
+        for entry in metadata.get("unmatched_media", []):
+            yield entry
 
     @staticmethod
     def should_skip_for_dedup(
@@ -469,41 +718,6 @@ class ProcessorBase(ABC):
         return file_paths, file_info, exif_rebuilt_count
 
     @staticmethod
-    def detect_metadata_format(
-        metadata: dict,
-        conversations_key: str = "conversations",
-        source_path_key: str = "source_paths",
-    ) -> str:
-        """Detect if metadata uses legacy or new format.
-
-        Checks for presence of source_path fields in messages to determine
-        if metadata is in the new preprocessed format or legacy format.
-
-        Args:
-            metadata: Parsed metadata.json content.
-            conversations_key: Key for conversations in metadata.
-            source_path_key: Key to look for in messages (new format indicator).
-
-        Returns:
-            "legacy" or "new" based on presence of source_path_key in messages.
-        """
-        conversations = metadata.get(conversations_key, {})
-        if isinstance(conversations, dict):
-            conv_items = list(conversations.values())
-        else:
-            conv_items = conversations
-
-        for conv in conv_items:
-            for msg in conv.get("messages", []):
-                # Check if message has media files
-                if msg.get("media_files") or msg.get("media_file"):
-                    # Check for new format indicators
-                    if source_path_key in msg or "source_path" in msg:
-                        return "new"
-                    return "legacy"
-        return "legacy"
-
-    @staticmethod
     def build_media_filename_index(
         metadata: dict,
         conversations_key: str = "conversations",
@@ -524,8 +738,8 @@ class ProcessorBase(ABC):
             conversations_key: Key for conversations in metadata.
             messages_key: Key for messages within each conversation.
             media_keys: List of keys to check for media files in messages.
-                Defaults to ["media_files", "media_file"].
-            include_orphaned: If True, also index "orphaned_media" entries.
+                Defaults to ["media_files"].
+            include_orphaned: If True, also index "unmatched_media" entries.
             orphaned_prefer_existing: If True, skip orphaned entries that already
                 exist in the index (prefer conversation entries over orphaned).
             context_builder: Optional callable(conversation, message) -> dict
@@ -536,7 +750,7 @@ class ProcessorBase(ABC):
             Dict mapping media_file -> context dict
         """
         if media_keys is None:
-            media_keys = ["media_files", "media_file"]
+            media_keys = ["media_files"]
 
         filename_index: Dict[str, dict] = {}
         conversations = metadata.get(conversations_key, {})
@@ -566,9 +780,10 @@ class ProcessorBase(ABC):
                         context = message
                     filename_index[media_file] = context
 
-        # Handle orphaned media if requested
+        # Handle unmatched media if requested
         if include_orphaned:
-            for message in metadata.get("orphaned_media", []):
+            unmatched = metadata.get("unmatched_media", [])
+            for message in unmatched:
                 media_files = []
                 for key in media_keys:
                     value = message.get(key)

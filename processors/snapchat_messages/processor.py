@@ -8,7 +8,6 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.dedup.catalog import catalog_media_files
 from common.dedup.service import is_file_primary_by_hash
 from common.dedup.description import (
     SourceEntry,
@@ -19,7 +18,6 @@ from common.dedup.description import (
     SERVICE_MESSAGES,
 )
 from common.files.utils import copy_file
-from common.utils import ALL_MEDIA_EXTENSIONS
 from common.media.exiftool import (
     DEFAULT_PREAMBLE,
     DescriptionWriteSpec,
@@ -210,88 +208,41 @@ class SnapchatMessagesProcessor(ProcessorBase):
     def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata (generator).
 
-        Scans media files directly from the export without preprocessing.
-        For raw exports, scans chat_media/. For preprocessed exports, scans media/.
+        Requires preprocessed directory with metadata.json and source_path fields.
+
+        Args:
+            input_dir: Path to preprocessed input directory
+            **kwargs: Additional arguments (verbose, workers)
+
+        Yields:
+            Catalog entries with processor name and file data.
         """
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
 
-        # Find media files - check preprocessed first, then raw export
-        media_files = []
-        catalog_input_path = input_path
-
-        # Check for preprocessed export (has media/ directory)
-        media_dir = input_path / "media"
-        if media_dir.exists():
-            media_files = [
-                f for f in media_dir.iterdir() if f.is_file() and get_media_type(f)
-            ]
-        else:
-            # Check for consolidated structure with messages/ subdirectory
-            messages_subdir = input_path / "messages"
-            if messages_subdir.exists():
-                media_subdir = messages_subdir / "media"
-                if media_subdir.exists():
-                    catalog_input_path = messages_subdir
-                    media_files = [
-                        f
-                        for f in media_subdir.iterdir()
-                        if f.is_file() and get_media_type(f)
-                    ]
-
-        # If no preprocessed directory, check for raw export (chat_media/)
-        if not media_files:
-            # Check for raw export structure
-            chat_media_dir = input_path / "chat_media"
-            if not chat_media_dir.exists():
-                # Check in messages/ subdirectory
-                messages_subdir = input_path / "messages"
-                if messages_subdir.exists():
-                    chat_media_dir = messages_subdir / "chat_media"
-                    if chat_media_dir.exists():
-                        catalog_input_path = messages_subdir
-
-            if chat_media_dir.exists():
-                media_files = [
-                    f
-                    for f in chat_media_dir.iterdir()
-                    if f.is_file() and get_media_type(f)
-                ]
-
-        if not media_files:
-            logger.warning(f"No media files found in: {input_path}")
-            return
-
-        # Load metadata for preprocessed exports
-        metadata_index: Dict[str, dict] = {}
-        metadata_file = catalog_input_path / "metadata.json"
-        if metadata_file.exists():
-            try:
-                metadata = SnapchatMessagesProcessor.load_metadata(metadata_file)
-                metadata_index = build_filename_index(metadata)
-            except Exception as e:
-                logger.warning(f"Could not load metadata.json: {e}")
-
-        def extract_metadata(file_path: Path) -> Dict[str, Any]:
-            """Extract Snapchat Messages metadata for a media file."""
-            message = metadata_index.get(file_path.name, {})
+        def extract_preprocessed_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
+            """Extract metadata from preprocessed entry."""
             result: Dict[str, Any] = {}
-            if message:
-                if message.get("sender"):
-                    result["sender"] = message["sender"]
-                if message.get("conversation_title"):
-                    result["conversation"] = message["conversation_title"]
-                if message.get("created"):
-                    result["timestamp"] = message["created"]
+            if "sender" in entry:
+                result["sender"] = entry["sender"]
+            if "conversation_title" in entry:
+                result["conversation"] = entry["conversation_title"]
+            if "created" in entry:
+                result["timestamp"] = entry["created"]
             return result
 
-        yield from catalog_media_files(
+        catalog_iter = SnapchatMessagesProcessor.catalog_from_preprocessed_if_available(
             processor_name="Snapchat Messages",
-            input_path=catalog_input_path,
-            media_files=media_files,
+            input_path=input_path,
             workers=workers,
-            metadata_extractor=extract_metadata if metadata_index else None,
+            metadata_extractor=extract_preprocessed_metadata,
+            container_key="conversations",
         )
+        if catalog_iter is not None:
+            yield from catalog_iter
+            return
+
+        logger.warning("Directory not preprocessed, skipping catalog: %s", input_path)
 
     @classmethod
     def process(
@@ -420,19 +371,26 @@ def _build_description(message: dict, export_username: str) -> str:
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[Optional[str], dict, str, Optional[str]]],
+    file_info: List[Tuple[Optional[str], dict, str, Optional[str], Optional[str]]],
 ) -> List[MetadataWriteRequest]:
     """Build MetadataWriteRequest objects for Snapchat Messages files.
 
     Args:
-        file_info: List of (file_path, message, export_username, content_hash) tuples
+        file_info: List of (file_path, message, export_username, content_hash,
+                   original_filename) tuples
 
     Returns:
         List of MetadataWriteRequest objects
     """
     requests: List[MetadataWriteRequest] = []
 
-    for file_path, message, export_username, content_hash in file_info:
+    for (
+        file_path,
+        message,
+        export_username,
+        content_hash,
+        original_filename,
+    ) in file_info:
         if file_path is None:
             continue
         # Skip MKV files (they already have metadata from overlay creation)
@@ -462,6 +420,7 @@ def _build_metadata_requests(
                 ),
                 processor_name="snapchat_messages",
                 content_hash=content_hash,
+                original_filename=original_filename,
             )
         )
 
@@ -483,8 +442,9 @@ def build_media_index(metadata: dict) -> dict:
                     if mid:
                         media_index[mid] = message
 
-    # Index orphaned media
-    for message in metadata.get("orphaned_media", []):
+    # Index unmatched media
+    unmatched_media = metadata.get("unmatched_media", [])
+    for message in unmatched_media:
         media_id = message.get("media_id", "")
         if media_id:
             # Split by " | " to handle multiple media IDs
@@ -497,10 +457,10 @@ def build_media_index(metadata: dict) -> dict:
 
 
 def build_filename_index(metadata: dict) -> dict:
-    """Build index mapping media_file to message metadata."""
+    """Build index mapping media filename to message metadata."""
     return ProcessorBase.build_media_filename_index(
         metadata,
-        media_keys=["media_file", "media_files"],
+        media_keys=["media_files"],
         include_orphaned=True,
     )
 
@@ -586,10 +546,12 @@ def _create_file_worker(args_tuple):
     """Worker function for creating output files with overlays.
 
     Args:
-        args_tuple: (media_path, message, export_username, output_dir, overlays_dir, output_filename, content_hash)
+        args_tuple: (media_path, message, export_username, output_dir, overlays_dir,
+                    output_filename, content_hash, original_filename)
 
     Returns:
-        Tuple of (success, output_path, is_mkv, message, export_username, content_hash)
+        Tuple of (success, output_path, is_mkv, message, export_username, content_hash,
+        original_filename)
     """
     (
         media_path,
@@ -599,6 +561,7 @@ def _create_file_worker(args_tuple):
         overlays_dir,
         output_filename,
         content_hash,
+        original_filename,
     ) = args_tuple
 
     try:
@@ -645,11 +608,12 @@ def _create_file_worker(args_tuple):
                     video_metadata,
                     export_username=export_username,
                     description=video_description,
+                    original_filename=original_filename,
                 )
 
                 if success:
                     _update_snapchat_timestamps(output_path, message)
-                    # MKV files already have metadata embedded
+                    # MKV files already have metadata embedded (including original_filename)
                     return (
                         True,
                         str(output_path),
@@ -657,6 +621,7 @@ def _create_file_worker(args_tuple):
                         message,
                         export_username,
                         content_hash,
+                        original_filename,
                     )
                 else:
                     # Fallback: copy original video with original extension
@@ -672,6 +637,7 @@ def _create_file_worker(args_tuple):
                         message,
                         export_username,
                         content_hash,
+                        original_filename,
                     )
 
             elif is_image:
@@ -690,6 +656,7 @@ def _create_file_worker(args_tuple):
                         message,
                         export_username,
                         content_hash,
+                        original_filename,
                     )
                 else:
                     # Fallback: copy original
@@ -702,6 +669,7 @@ def _create_file_worker(args_tuple):
                         message,
                         export_username,
                         content_hash,
+                        original_filename,
                     )
             else:
                 # Unknown file type with overlay - just copy
@@ -714,6 +682,7 @@ def _create_file_worker(args_tuple):
                     message,
                     export_username,
                     content_hash,
+                    original_filename,
                 )
         else:
             # No overlay - just copy
@@ -727,11 +696,20 @@ def _create_file_worker(args_tuple):
                 message,
                 export_username,
                 content_hash,
+                original_filename,
             )
 
     except Exception as e:
         logger.error(f"Error processing {media_path.name}: {e}")
-        return (False, None, False, message, export_username, content_hash)
+        return (
+            False,
+            None,
+            False,
+            message,
+            export_username,
+            content_hash,
+            original_filename,
+        )
 
 
 def process_logic(
@@ -799,7 +777,9 @@ def _process_snapchat_working_directory(
 
     # Load metadata
     logger.info(f"Loading metadata from {metadata_file}...")
-    metadata = SnapchatMessagesProcessor.load_metadata(metadata_file)
+    metadata = SnapchatMessagesProcessor.load_metadata(
+        metadata_file, validate=True, require_source_paths=True
+    )
 
     export_username = metadata.get("export_info", {}).get("export_username", "unknown")
     logger.info(f"Export username: {export_username}")
@@ -811,39 +791,19 @@ def _process_snapchat_working_directory(
     logger.info(f"Found {len(media_index)} messages with media IDs")
     logger.info(f"Found {len(filename_index)} orphaned media entries by filename")
 
-    # Check if this is new format (source_path in messages) or legacy format
-    use_legacy_format = (
-        SnapchatMessagesProcessor.detect_metadata_format(
-            metadata, source_path_key="source_path"
-        )
-        == "legacy"
-    )
-
-    if use_legacy_format:
-        media_dir = working_dir / "media"
-        if not media_dir.exists():
-            logger.error(f"Media directory not found: {media_dir}")
-            return
-        logger.info("Using legacy format (media/ directory)")
-
-        # Scan media directory
-        logger.info(f"Scanning media directory: {media_dir}")
-        media_files = []
-        for ext in ALL_MEDIA_EXTENSIONS:
-            media_files.extend(media_dir.glob(f"*{ext}"))
-        logger.info(f"Found {len(media_files)} media files")
-    else:
-        media_dir = None
-        logger.info("Using new format (source_path in metadata)")
-        # Build list of source files from metadata
-        media_files = []
-        for msg in filename_index.values():
-            source_path_str = msg.get("source_path")
-            if source_path_str:
-                source_path = Path(source_path_str)
-                if source_path.exists():
-                    media_files.append(source_path)
-        logger.info(f"Found {len(media_files)} media files from metadata")
+    # Build list of source files from metadata
+    media_files = []
+    for msg in filename_index.values():
+        source_path_str = msg.get("source_path")
+        if source_path_str:
+            source_path = Path(source_path_str)
+            if source_path.exists():
+                media_files.append(source_path)
+            else:
+                logger.warning(f"Source file not found: {source_path}")
+        else:
+            logger.warning("No source_path for file in metadata")
+    logger.info(f"Found {len(media_files)} media files from metadata")
 
     # Filter out secondary files based on dedup manifest (using hash-based lookup)
     # Use cached file_hashes from preprocessing when available to avoid re-hashing
@@ -853,8 +813,7 @@ def _process_snapchat_working_directory(
         filtered_files = []
         for f in media_files:
             content_hash = file_hashes.get(f.name)
-            # Get source_path for within-processor dedup (new format has full path in f)
-            source_path_str = str(f) if not use_legacy_format else None
+            source_path_str = str(f)
             if content_hash:
                 # Use cached hash from preprocessing (avoids re-hashing)
                 if is_file_primary_by_hash(
@@ -864,7 +823,7 @@ def _process_snapchat_working_directory(
             else:
                 # Fallback for files without cached hash
                 if not SnapchatMessagesProcessor.should_skip_for_dedup(
-                    str(f), dedup_manifest, "Snapchat Messages"
+                    source_path_str, dedup_manifest, "Snapchat Messages"
                 ):
                     filtered_files.append(f)
         media_files = filtered_files
@@ -942,6 +901,8 @@ def _process_snapchat_working_directory(
         output_filename = output_filenames[idx]
         # Get content_hash from cached file_hashes (computed during catalog phase)
         content_hash = file_hashes.get(media_file.name)
+        # Get original filename for XMP:PreservedFileName embedding
+        original_filename = media_file.name
         process_args.append(
             (
                 media_file,
@@ -951,6 +912,7 @@ def _process_snapchat_working_directory(
                 overlays_dir,
                 output_filename,
                 content_hash,
+                original_filename,
             )
         )
 
@@ -984,13 +946,19 @@ def _process_snapchat_working_directory(
             results.append(_create_file_worker(args_tuple))
 
     # Phase 2: Collect non-MKV files for batch EXIF processing
-    # Result tuple: (success, output_path, is_mkv, message, exp_username, content_hash)
+    # Result tuple: (success, output_path, is_mkv, message, exp_username, content_hash, original_filename)
     # Skip MKV files in file_info (they already have metadata from overlay creation)
     def extract_non_mkv_info(r):
         is_mkv = r[2]
         if is_mkv:
             return None  # Skip MKV files from EXIF processing
-        return (r[1], r[3], r[4], r[5])  # (output_path, message, exp_username, hash)
+        return (
+            r[1],
+            r[3],
+            r[4],
+            r[5],
+            r[6],
+        )  # (output_path, message, exp_username, hash, original_filename)
 
     collected = SnapchatMessagesProcessor.collect_processing_results(
         results, extract_non_mkv_info

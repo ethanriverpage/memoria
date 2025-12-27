@@ -8,7 +8,6 @@ Organizes Instagram message export files and creates cleaned metadata:
 - Creates metadata.json with essential information (sender, timestamps, conversation)
 """
 
-import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -66,8 +65,8 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
         # No context merger needed - first occurrence wins
         # (no accumulating fields like albums)
 
-        # Statistics specific to this preprocessor
-        self.stats = {
+        # Statistics specific to this preprocessor (preserves shared keys from base)
+        self.stats.update({
             "total_conversations": 0,
             "total_messages_with_media": 0,
             "total_media_files": 0,
@@ -77,7 +76,7 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
             "banned_files_skipped": 0,
             "unique_files": 0,
             "duplicate_files": 0,
-        }
+        })
 
         # Deleted user counter
         self.deleted_user_counter = 0
@@ -87,19 +86,15 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
         self._referenced_files: set = set()
 
     def validate_export(self) -> bool:
-        """Validate that export directory has required structure"""
-        if not self.export_path.exists():
-            log.file_not_found(str(self.export_path), "Export path")
+        """Validate that export directory has required structure."""
+        if not self.require_exists(self.export_path, label="Export path"):
             return False
 
-        if not self.messages_dir.exists():
-            log.file_not_found(str(self.messages_dir), "Messages directory")
+        if not self.require_exists(self.messages_dir, label="Messages directory"):
             return False
 
         # Check if at least one conversation folder exists
-        conversation_folders = [d for d in self.messages_dir.iterdir() if d.is_dir()]
-        if not conversation_folders:
-            log.logger.error("No conversation folders found in %s", self.messages_dir)
+        if not self.require_any_dirs(self.messages_dir, label="conversation"):
             return False
 
         return True
@@ -736,47 +731,9 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
         log.logger.info("   Missing files: %d", self.stats["missing_files"])
         log.logger.info("   Orphaned files: %d", self.stats["orphaned_files"])
 
-    def save_metadata(self, conversations: List[Dict]) -> None:
-        """Save cleaned metadata to metadata.json"""
-        try:
-            # Detect username from export
-            detection_result = self.detect_username()
-            export_username = detection_result.username or "unknown"
-
-            # Build file_hashes lookup table for cross-processor dedup optimization
-            file_hashes = {}
-            for content_hash, registry_entry in self._hash_registry.items():
-                filename = registry_entry.get("filename", "")
-                if filename:
-                    file_hashes[filename] = content_hash
-
-            # Add export info
-            output = {
-                "export_info": {
-                    "export_path": str(self.export_path),
-                    "export_name": self.export_path.name,
-                    "export_username": export_username,
-                    "username_source": detection_result.source,
-                    "processed_date": datetime.now().isoformat(),
-                    "total_conversations": self.stats["total_conversations"],
-                    "total_messages_with_media": self.stats[
-                        "total_messages_with_media"
-                    ],
-                    "total_media_files": self.stats["media_copied"],
-                    "unique_files": self.stats["unique_files"],
-                    "duplicate_files": self.stats["duplicate_files"],
-                },
-                "conversations": conversations,
-                "file_hashes": file_hashes,
-            }
-
-            with open(self.metadata_file, "w", encoding="utf-8") as f:
-                json.dump(output, f, indent=2, ensure_ascii=False)
-
-            log.saved_metadata(str(self.metadata_file))
-        except Exception as e:
-            log.logger.error("Failed to save metadata: %s", e)
-            raise RuntimeError(f"Failed to save metadata: {e}")
+    def get_content_key(self) -> str:
+        """Return the content key for Instagram Messages metadata."""
+        return "conversations"
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -812,6 +769,15 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
         self.copy_media_files(conversations, file_catalog)
 
         # Save metadata
-        self.save_metadata(conversations)
+        self.save_metadata(
+            conversations,
+            extra_export_info={
+                "total_conversations": self.stats["total_conversations"],
+                "total_messages_with_media": self.stats["total_messages_with_media"],
+                "total_media_files": self.stats["media_copied"],
+                "unique_files": self.stats["unique_files"],
+                "duplicate_files": self.stats["duplicate_files"],
+            },
+        )
 
         return True

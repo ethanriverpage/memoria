@@ -63,10 +63,31 @@ class MetadataWriteRequest:
     description: Optional[DescriptionWriteSpec] = None
     processor_name: str = "unknown"
     content_hash: Optional[str] = None  # For dedup description lookup
+    original_filename: Optional[str] = None  # For XMP:PreservedFileName embedding
 
 
 # Default preamble used by most processors
 DEFAULT_PREAMBLE = ["-E", "-api", "largefilesupport=1", "-overwrite_original"]
+
+# Formats that support XMP:PreservedFileName for original filename embedding
+# Excludes: .bmp (no metadata), .webm/.mkv (Matroska read-only in exiftool)
+XMP_PRESERVED_FILENAME_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".heic",
+    ".heif",
+    ".tiff",
+    ".tif",
+    ".dng",
+    ".avif",
+    ".mp4",
+    ".mov",
+    ".m4v",
+    ".avi",
+}
 
 
 # =============================================================================
@@ -215,6 +236,14 @@ def batch_write_metadata_requests(
                             and gps_to_write.altitude != 0.0
                         ):
                             argfile.write(f"-GPSAltitude={gps_to_write.altitude}\n")
+
+                    # Write original filename if provided and format supports XMP
+                    if request.original_filename:
+                        ext = Path(request.file_path).suffix.lower()
+                        if ext in XMP_PRESERVED_FILENAME_EXTENSIONS:
+                            argfile.write(
+                                f"-XMP:PreservedFileName={request.original_filename}\n"
+                            )
 
                     # Write description if provided (always overwrites existing)
                     if request.description:

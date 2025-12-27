@@ -580,7 +580,7 @@ def run_phased_dedup_processing(
         logger.info("No files to process. Exiting.")
         # Clean up empty run
         db.clear_run(run_id)
-        return 0, 0, []
+        return 0, 0, [], []
 
     # Phase 2: Deduplication Analysis (from database)
     phase_header("PHASE 2: DEDUP ANALYSIS")
@@ -833,7 +833,7 @@ def _process_export_worker(
             logger.info(mega_separator)
 
         # Process the export (no detection cache in parallel mode to avoid sharing issues)
-        success_count, failed_count, _upload_tasks = process_single_export(
+        success_count, failed_count, _results, _upload_tasks = process_single_export(
             export_dir,
             registry,
             args,
@@ -867,7 +867,7 @@ def process_single_export(
     temp_dir: str,
     detection_cache: Optional[dict] = None,
     upload_queue=None,
-) -> tuple[int, int, list]:
+) -> tuple[int, int, list, list]:
     """Process a single export directory
 
     Args:
@@ -884,7 +884,8 @@ def process_single_export(
         upload_queue: Optional multiprocessing queue to collect upload tasks
 
     Returns:
-        Tuple of (success_count, failed_count, upload_tasks)
+        Tuple of (success_count, failed_count, results, upload_tasks)
+        results is a list of processing result dicts
         upload_tasks is a list of (up_path, album_name, processor_name) tuples
     """
     # Detect ALL matching processors with caching
@@ -917,13 +918,13 @@ def process_single_export(
         if processor_filter:
             # Specified processor not found in this export - warning, not error
             logger.warning("No %s exports found in: %s", processor_filter, input_path)
-            return 0, 0, []
+            return 0, 0, [], []
         else:
             # No processors matched at all - this is an error
             logger.error("No processors matched input directory: %s", input_path)
             show_supported_formats()
             logger.info("Run with --list-processors to see all available processors.")
-            return 0, 1, []
+            return 0, 1, [], []
 
     # Show detected processors
     logger.info("Detected %d processor(s):", len(matching_processors))
@@ -939,7 +940,7 @@ def process_single_export(
             logger.error(
                 "Failed to create output base directory '%s': %s", args.output, e
             )
-            return 0, 1, []
+            return 0, 1, [], []
 
     # Run ALL matching processors
     success_count = 0
@@ -1091,7 +1092,7 @@ def process_single_export(
         )
         upload_queue.put((input_path.name, upload_tasks))
 
-    return success_count, failed_count, upload_tasks
+    return success_count, failed_count, results, upload_tasks
 
 
 def _collect_upload_files(path: Path, ignore_patterns: list[str]) -> list[Path]:
@@ -2142,7 +2143,7 @@ Examples:
 
                     # Process this export
                     try:
-                        success_count, failed_count, _upload_tasks = (
+                        success_count, failed_count, _results, _upload_tasks = (
                             process_single_export(
                                 export_dir,
                                 registry,

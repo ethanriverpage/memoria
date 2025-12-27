@@ -124,9 +124,14 @@ def _pass1_rotate_video_impl_with_metadata(
     """
     logger.debug(f"[{video_path.name}] PASS 1: Rotating with pre-fetched metadata")
 
-    # Use pre-fetched metadata
-    orig_width = video_meta.width
-    orig_height = video_meta.height
+    # Use pre-fetched metadata - validate dimensions are present
+    if video_meta.width is None or video_meta.height is None:
+        raise RuntimeError(
+            f"[{video_path.name}] Video has no dimensions in metadata"
+        )
+
+    orig_width: int = video_meta.width
+    orig_height: int = video_meta.height
     rotation = video_meta.rotation
     original_bitrate = video_meta.bitrate
 
@@ -567,6 +572,7 @@ def _pass3_combine_and_embed(
     metadata: Optional[dict] = None,
     export_username: Optional[str] = None,
     description: Optional[str] = None,
+    original_filename: Optional[str] = None,
 ) -> bool:
     """
     PASS 3: Combine videos into dual-track MKV and embed metadata.
@@ -576,7 +582,8 @@ def _pass3_combine_and_embed(
     in a single FFmpeg invocation:
     - Track 0 (default): Video with overlay embedded
     - Track 1: Original video without overlay
-    - Container metadata: creation time, GPS coordinates, source description
+    - Container metadata: creation time, GPS coordinates, source description,
+      original filename
 
     If a description is provided, it is used directly. Otherwise, auto-detects
     whether to use rich message metadata or simple memory metadata based on
@@ -591,6 +598,7 @@ def _pass3_combine_and_embed(
                   'conversation_title', 'sender', 'content'
         export_username: Optional username for source metadata
         description: Optional pre-built description string (takes precedence)
+        original_filename: Optional original source filename for ORIGINAL_FILENAME tag
 
     Returns:
         True if successful, False otherwise
@@ -663,6 +671,13 @@ def _pass3_combine_and_embed(
                 ]
             )
             logger.debug(f"[{with_overlay_path.name}] Adding GPS: {location_value}")
+
+    # Add original filename as Matroska tag (MKV doesn't support XMP)
+    if original_filename:
+        cmd.extend(["-metadata", f"ORIGINAL_FILENAME={original_filename}"])
+        logger.debug(
+            f"[{with_overlay_path.name}] Adding original filename: {original_filename}"
+        )
 
     # Add source description metadata
     if description:
@@ -857,6 +872,7 @@ def create_video_with_overlay(
     metadata: Optional[dict] = None,
     export_username: Optional[str] = None,
     description: Optional[str] = None,
+    original_filename: Optional[str] = None,
 ) -> bool:
     """
     Create an MKV video with dual tracks using a multi-pass approach.
@@ -884,6 +900,7 @@ def create_video_with_overlay(
                   'conversation_title', 'sender', 'content'
         export_username: Optional username for source metadata
         description: Optional pre-built description string (takes precedence)
+        original_filename: Optional original source filename for ORIGINAL_FILENAME tag
 
     Returns:
         True if successful, False otherwise
@@ -935,6 +952,7 @@ def create_video_with_overlay(
                 metadata,
                 export_username,
                 description,
+                original_filename,
             )
             if not success:
                 return False

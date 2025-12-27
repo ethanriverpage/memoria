@@ -1,0 +1,10 @@
+{
+  "id": "184324186284621824",
+  "type": "GUILD_TEXT",
+  "name": "general",
+  "guild": {
+    "id": "184315303323238400",
+    "name": "TestServer"
+  }
+}
+

@@ -55,21 +55,23 @@ class InstaloaderPreprocessor(PreprocessorBase):
             final_output_dir=final_output_dir,
         )
 
-        # Statistics specific to this preprocessor
-        self.stats = {
-            "total_posts": 0,
-            "total_media_files": 0,
-            "media_copied": 0,
-            "duplicate_files": 0,
-            "posts_with_json": 0,
-            "posts_with_txt": 0,
-            "posts_with_only_media": 0,
-            "carousel_posts": 0,
-            "banned_files_skipped": 0,
-        }
+        # Statistics specific to this preprocessor (preserves shared keys from base)
+        self.stats.update(
+            {
+                "total_posts": 0,
+                "total_media_files": 0,
+                "media_copied": 0,
+                "duplicate_files": 0,
+                "posts_with_json": 0,
+                "posts_with_txt": 0,
+                "posts_with_only_media": 0,
+                "carousel_posts": 0,
+                "banned_files_skipped": 0,
+            }
+        )
 
         # Set context merger for deduplication (first occurrence wins)
-        self._context_merger = merge_first_occurrence
+        self.set_context_merger(merge_first_occurrence)
 
     def normalize_text(self, text: str) -> str:
         """
@@ -104,21 +106,20 @@ class InstaloaderPreprocessor(PreprocessorBase):
         return text
 
     def validate_export(self) -> bool:
-        """Validate that export directory exists and contains media files"""
-        if not self.export_path.exists():
-            logger.error("Export path does not exist: %s", self.export_path)
+        """Validate that export directory exists and contains media files."""
+        if not self.require_exists(self.export_path, label="Export path"):
             return False
 
         if not self.export_path.is_dir():
             logger.error("Export path is not a directory: %s", self.export_path)
             return False
 
-        # Check if at least one media file exists
-        media_files = []
-        for ext in self.MEDIA_EXTENSIONS:
-            media_files.extend(list(self.export_path.glob(f"*{ext}")))
-
-        if not media_files:
+        # Check if at least one media file exists (any supported extension)
+        has_media = any(
+            self.require_any_files(self.export_path, f"*{ext}", label="media")
+            for ext in self.MEDIA_EXTENSIONS
+        )
+        if not has_media:
             logger.error("No media files found in %s", self.export_path)
             return False
 
@@ -560,7 +561,10 @@ class InstaloaderPreprocessor(PreprocessorBase):
 
             # Map this source path to the resulting (dest_filename, source_path)
             if source_path_str and result.dest_filename:
-                source_to_result[source_path_str] = (result.dest_filename, str(result.source_path))
+                source_to_result[source_path_str] = (
+                    result.dest_filename,
+                    str(result.source_path),
+                )
 
         # Phase 3: Update posts with resulting filenames and source paths
         for post_idx, post in enumerate(metadata):
@@ -573,54 +577,25 @@ class InstaloaderPreprocessor(PreprocessorBase):
                     result_info = source_to_result.get(str(source_path))
                     if result_info:
                         dest_filename, src_path = result_info
-                        media_entries.append({
-                            "filename": dest_filename,
-                            "source_path": src_path,
-                        })
+                        media_entries.append(
+                            {
+                                "filename": dest_filename,
+                                "source_path": src_path,
+                            }
+                        )
 
             # Update post with filenames and source paths (new format)
             post["media_files"] = [e["filename"] for e in media_entries]
-            post["source_paths"] = {e["filename"]: e["source_path"] for e in media_entries}
+            post["source_paths"] = {
+                e["filename"]: e["source_path"] for e in media_entries
+            }
 
         logger.info(f"   Copied {self.stats['media_copied']} unique files")
         logger.info(f"   Deduplicated {self.stats['duplicate_files']} duplicate files")
 
-    def save_metadata(self, metadata: List[Dict]) -> None:
-        """Save cleaned metadata to metadata.json"""
-        try:
-            # Detect username from export
-            detection_result = self.detect_username()
-            export_username = detection_result.username or "unknown"
-
-            # Build file_hashes lookup table for cross-processor dedup optimization
-            file_hashes = {}
-            for content_hash, registry_entry in self._hash_registry.items():
-                filename = registry_entry.get("filename", "")
-                if filename:
-                    file_hashes[filename] = content_hash
-
-            # Add export info
-            output = {
-                "export_info": {
-                    "export_path": str(self.export_path),
-                    "export_name": self.export_path.name,
-                    "export_username": export_username,
-                    "username_source": detection_result.source,
-                    "processed_date": datetime.now().isoformat(),
-                    "total_posts": self.stats["total_posts"],
-                    "total_media_files": self.stats["media_copied"],
-                },
-                "media": metadata,
-                "file_hashes": file_hashes,
-            }
-
-            with open(self.metadata_file, "w", encoding="utf-8") as f:
-                json.dump(output, f, indent=2, ensure_ascii=False)
-
-            logger.info("Saved metadata to %s", self.metadata_file)
-        except Exception as e:
-            logger.error(f"Failed to save metadata: {e}")
-            raise
+    def get_content_key(self) -> str:
+        """Return the content key for Instaloader metadata."""
+        return "media"
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -655,6 +630,12 @@ class InstaloaderPreprocessor(PreprocessorBase):
         self.copy_media_files(metadata)
 
         # Save metadata
-        self.save_metadata(metadata)
+        self.save_metadata(
+            metadata,
+            extra_export_info={
+                "total_posts": self.stats["total_posts"],
+                "total_media_files": self.stats["media_copied"],
+            },
+        )
 
         return True
