@@ -52,67 +52,63 @@ logger = logging.getLogger(__name__)
 log = get_processor_logger(__name__)
 
 
-def detect(input_path: Path) -> bool:
-    """Check if this is a Discord export (Messages/index.json or preprocessed)."""
-    try:
-        # Check for raw Discord export structure
-        messages_dir = input_path / "Messages"
-        if messages_dir.exists() and messages_dir.is_dir():
-            index_file = messages_dir / "index.json"
-            if index_file.exists():
-                # Verify at least one channel folder exists
-                channel_folders = [
-                    d
-                    for d in messages_dir.iterdir()
-                    if d.is_dir() and d.name.startswith("c")
-                ]
-                if channel_folders:
-                    return True
-
-        # Check for preprocessed Discord export
-        metadata_file = input_path / "metadata.json"
-        media_dir = input_path / "media"
-
-        if metadata_file.exists() and media_dir.exists():
-            try:
-                with open(metadata_file, "r", encoding="utf-8") as f:
-                    metadata = json.load(f)
-
-                # Discord preprocessed format has conversations dict
-                if isinstance(metadata, dict) and "conversations" in metadata:
-                    export_info = metadata.get("export_info", {})
-                    # Check for Discord-specific indicators
-                    if (
-                        "downloads_successful" in export_info
-                        or "downloads_failed" in export_info
-                    ):
-                        return True
-                    # Check for Discord-style conversation structure
-                    conversations = metadata.get("conversations", {})
-                    if conversations:
-                        # Check first conversation for Discord-specific fields
-                        first_conv = next(iter(conversations.values()), {})
-                        if "guild_name" in first_conv or "original_urls" in str(
-                            first_conv
-                        ):
-                            return True
-
-            except (json.JSONDecodeError, KeyError):
-                pass
-
-        return False
-
-    except Exception as e:
-        log.detection_failed("Discord", e)
-        return False
-
-
 class DiscordProcessor(ProcessorBase):
     """Processor for Discord data exports."""
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        return detect(input_path)
+        """Check if this is a Discord export (Messages/index.json or preprocessed)."""
+        try:
+            # Check for raw Discord export structure
+            messages_dir = input_path / "Messages"
+            if messages_dir.exists() and messages_dir.is_dir():
+                index_file = messages_dir / "index.json"
+                if index_file.exists():
+                    # Verify at least one channel folder exists
+                    channel_folders = [
+                        d
+                        for d in messages_dir.iterdir()
+                        if d.is_dir() and d.name.startswith("c")
+                    ]
+                    if channel_folders:
+                        return True
+
+            # Check for preprocessed Discord export
+            metadata_file = input_path / "metadata.json"
+            media_dir = input_path / "media"
+
+            if metadata_file.exists() and media_dir.exists():
+                try:
+                    with open(metadata_file, "r", encoding="utf-8") as f:
+                        metadata = json.load(f)
+
+                    # Discord preprocessed format has conversations dict
+                    if isinstance(metadata, dict) and "conversations" in metadata:
+                        export_info = metadata.get("export_info", {})
+                        # Check for Discord-specific indicators
+                        if (
+                            "downloads_successful" in export_info
+                            or "downloads_failed" in export_info
+                        ):
+                            return True
+                        # Check for Discord-style conversation structure
+                        conversations = metadata.get("conversations", {})
+                        if conversations:
+                            # Check first conversation for Discord-specific fields
+                            first_conv = next(iter(conversations.values()), {})
+                            if "guild_name" in first_conv or "original_urls" in str(
+                                first_conv
+                            ):
+                                return True
+
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            return False
+
+        except Exception as e:
+            log.detection_failed("Discord", e)
+            return False
 
     @staticmethod
     def get_name() -> str:
@@ -666,18 +662,15 @@ def _process_working_directory(
 
     log.copied_files(collected.success_count, collected.failed_count)
 
-    # Correct file extensions based on actual content
-    file_paths, file_info = DiscordProcessor.correct_extensions_and_update_info(
-        collected.file_paths, collected.file_info, path_index=0
+    # Correct file extensions and batch process EXIF metadata
+    log.exif_batch_start()
+    _, _, exif_rebuilt_count = DiscordProcessor.finalize_files(
+        collected.file_paths,
+        collected.file_info,
+        _build_metadata_requests,
+        dedup_manifest,
+        path_index=0,
     )
-
-    # Batch process EXIF operations
-    exif_rebuilt_count = 0
-    if file_paths:
-        log.exif_batch_start()
-        exif_rebuilt_count = DiscordProcessor.batch_process_exif(
-            file_paths, file_info, _build_metadata_requests, dedup_manifest
-        )
 
     # Handle unmatched files
     if unmatched_files:
@@ -717,7 +710,3 @@ def _process_working_directory(
             "Unmatched files saved to: %s",
             (output_dir / "issues" / "failed-matching" / "media").absolute(),
         )
-
-
-def get_processor():
-    return DiscordProcessor

@@ -235,12 +235,15 @@ def should_cleanup_temp() -> bool:
 
 
 def is_preprocessed_directory(input_dir: str) -> bool:
-    """Return True if directory contains metadata.json and media/."""
+    """Return True if directory contains metadata.json.
+
+    The metadata.json file is the canonical indicator of preprocessing.
+    Hash-only preprocessing creates only metadata.json (no media/ directory),
+    while copy-based preprocessing creates both. This function accepts either.
+    """
     input_path = Path(input_dir)
     metadata_file = input_path / "metadata.json"
-    media_dir = input_path / "media"
-
-    return metadata_file.exists() and media_dir.exists()
+    return metadata_file.exists()
 
 
 def update_file_timestamps(

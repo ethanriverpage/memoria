@@ -56,71 +56,61 @@ log = get_processor_logger(__name__)
 # ============================================================================
 
 
-def detect(input_path: Path) -> bool:
-    """Check if this processor can handle the input directory
-
-    Detection criteria for Instagram Public Media (New Format):
-    - Directory contains 'media/posts/' or 'media/archived_posts/'
-    - These directories contain YYYYMM date-organized folders
-
-    Args:
-        input_path: Path to the input directory
-
-    Returns:
-        True if this is a new Instagram export, False otherwise
-    """
-    try:
-        media_dir = input_path / "media"
-        posts_dir = media_dir / "posts"
-        archived_posts_dir = media_dir / "archived_posts"
-
-        # Check if media directory exists
-        if not media_dir.exists() or not media_dir.is_dir():
-            return False
-
-        # Check for posts or archived_posts directories
-        has_posts = posts_dir.exists() and posts_dir.is_dir()
-        has_archived = archived_posts_dir.exists() and archived_posts_dir.is_dir()
-
-        if not (has_posts or has_archived):
-            return False
-
-        # Verify date-organized structure (YYYYMM folders)
-        date_folder_pattern = re.compile(r"^\d{6}$")  # YYYYMM format
-
-        # Check posts directory for date folders
-        if has_posts:
-            date_folders = [
-                d
-                for d in posts_dir.iterdir()
-                if d.is_dir() and date_folder_pattern.match(d.name)
-            ]
-            if len(date_folders) > 0:
-                return True
-
-        # Check archived_posts directory for date folders
-        if has_archived:
-            date_folders = [
-                d
-                for d in archived_posts_dir.iterdir()
-                if d.is_dir() and date_folder_pattern.match(d.name)
-            ]
-            if len(date_folders) > 0:
-                return True
-
-        return False
-
-    except Exception as e:
-        log.detection_failed("Instagram Public Media", e)
-        return False
-
-
 class InstagramPublicMediaProcessor(ProcessorBase):
     """Processor for Instagram public media exports (new format)"""
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        return detect(input_path)
+        """Check if this processor can handle the input directory.
+
+        Detection criteria for Instagram Public Media (New Format):
+        - Directory contains 'media/posts/' or 'media/archived_posts/'
+        - These directories contain YYYYMM date-organized folders
+        """
+        try:
+            media_dir = input_path / "media"
+            posts_dir = media_dir / "posts"
+            archived_posts_dir = media_dir / "archived_posts"
+
+            # Check if media directory exists
+            if not media_dir.exists() or not media_dir.is_dir():
+                return False
+
+            # Check for posts or archived_posts directories
+            has_posts = posts_dir.exists() and posts_dir.is_dir()
+            has_archived = archived_posts_dir.exists() and archived_posts_dir.is_dir()
+
+            if not (has_posts or has_archived):
+                return False
+
+            # Verify date-organized structure (YYYYMM folders)
+            date_folder_pattern = re.compile(r"^\d{6}$")  # YYYYMM format
+
+            # Check posts directory for date folders
+            if has_posts:
+                date_folders = [
+                    d
+                    for d in posts_dir.iterdir()
+                    if d.is_dir() and date_folder_pattern.match(d.name)
+                ]
+                if len(date_folders) > 0:
+                    return True
+
+            # Check archived_posts directory for date folders
+            if has_archived:
+                date_folders = [
+                    d
+                    for d in archived_posts_dir.iterdir()
+                    if d.is_dir() and date_folder_pattern.match(d.name)
+                ]
+                if len(date_folders) > 0:
+                    return True
+
+            return False
+
+        except Exception as e:
+            log.detection_failed("Instagram Public Media", e)
+            return False
 
     @staticmethod
     def get_name() -> str:
@@ -637,7 +627,3 @@ def _process_working_directory(
             "Media type subfolders": len(media_types_set),
         },
     )
-
-
-def get_processor():
-    return InstagramPublicMediaProcessor

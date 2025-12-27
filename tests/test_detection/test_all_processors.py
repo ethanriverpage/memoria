@@ -28,18 +28,63 @@ from tests.fixtures.generators import (
 from tests.fixtures.media_samples import write_media_file
 
 
-# Import all processor detect functions
-from processors.google_photos.processor import detect as detect_google_photos
-from processors.google_chat.processor import detect as detect_google_chat
-from processors.google_voice.processor import detect as detect_google_voice
-from processors.snapchat_memories.processor import detect as detect_snapchat_memories
-from processors.snapchat_messages.processor import detect as detect_snapchat_messages
-from processors.instagram_messages.processor import detect as detect_instagram_messages
-from processors.instagram_public_media.processor import detect as detect_instagram_public
-from processors.instaloader.processor import detect as detect_instaloader
-from processors.discord.processor import detect as detect_discord
-from processors.imessage.processor import detect as detect_imessage
-from processors.imessage_imazing.processor import detect as detect_imessage_imazing
+# Import all processor classes
+from processors.google_photos.processor import GooglePhotosProcessor
+from processors.google_chat.processor import GoogleChatProcessor
+from processors.google_voice.processor import GoogleVoiceProcessor
+from processors.snapchat_memories.processor import SnapchatMemoriesProcessor
+from processors.snapchat_messages.processor import SnapchatMessagesProcessor
+from processors.instagram_messages.processor import InstagramMessagesProcessor
+from processors.instagram_public_media.processor import InstagramPublicMediaProcessor
+from processors.instaloader.processor import InstaloaderProcessor
+from processors.discord.processor import DiscordProcessor
+from processors.imessage.processor import IMessageProcessor
+from processors.imessage_imazing.processor import ImazingProcessor
+
+
+# Use static detect methods from processor classes
+def detect_google_photos(path):
+    return GooglePhotosProcessor.detect(path)
+
+
+def detect_google_chat(path):
+    return GoogleChatProcessor.detect(path)
+
+
+def detect_google_voice(path):
+    return GoogleVoiceProcessor.detect(path)
+
+
+def detect_snapchat_memories(path):
+    return SnapchatMemoriesProcessor.detect(path)
+
+
+def detect_snapchat_messages(path):
+    return SnapchatMessagesProcessor.detect(path)
+
+
+def detect_instagram_messages(path):
+    return InstagramMessagesProcessor.detect(path)
+
+
+def detect_instagram_public(path):
+    return InstagramPublicMediaProcessor.detect(path)
+
+
+def detect_instaloader(path):
+    return InstaloaderProcessor.detect(path)
+
+
+def detect_discord(path):
+    return DiscordProcessor.detect(path)
+
+
+def detect_imessage(path):
+    return IMessageProcessor.detect(path)
+
+
+def detect_imessage_imazing(path):
+    return ImazingProcessor.detect(path)
 
 
 class TestGooglePhotosDetection:

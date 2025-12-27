@@ -57,80 +57,47 @@ log = get_processor_logger(__name__)
 # ============================================================================
 
 
-def detect(input_path: Path) -> bool:
-    """Check if this processor can handle the input directory
+def _check_memories_structure(base_path: Path) -> bool:
+    """Check if a path contains valid Snapchat Memories structure."""
+    media_dir = base_path / "media"
+    overlays_dir = base_path / "overlays"
+    metadata_file = base_path / "metadata.json"
 
-    Detection criteria for Snapchat Memories:
-    - Directory contains 'media/' subdirectory
-    - Directory contains 'overlays/' subdirectory
-    - Directory contains 'metadata.json' file
-    - metadata.json contains array of memory objects with required fields
-    - Consolidated: Directory contains 'memories/' subdirectory with above structures
-
-    Args:
-        input_path: Path to the input directory
-
-    Returns:
-        True if this is a Snapchat Memories export, False otherwise
-    """
-    try:
-        # Helper function to check if a path contains valid memories structure
-        def check_memories_structure(base_path: Path) -> bool:
-            media_dir = base_path / "media"
-            overlays_dir = base_path / "overlays"
-            metadata_file = base_path / "metadata.json"
-
-            # Check if required directories and file exist
-            if not media_dir.exists() or not media_dir.is_dir():
-                return False
-
-            if not overlays_dir.exists() or not overlays_dir.is_dir():
-                return False
-
-            if not metadata_file.exists() or not metadata_file.is_file():
-                return False
-
-            # Validate metadata.json structure
-            try:
-                with open(metadata_file, "r", encoding="utf-8") as f:
-                    metadata = json.load(f)
-
-                # Should be a list/array
-                if not isinstance(metadata, list):
-                    return False
-
-                # Should have at least one memory
-                if len(metadata) == 0:
-                    return False
-
-                # Check first memory has expected fields
-                first_memory = metadata[0]
-                required_fields = ["date", "media_type", "media_filename"]
-
-                for field in required_fields:
-                    if field not in first_memory:
-                        return False
-
-                # This looks like a Snapchat Memories export
-                return True
-
-            except (json.JSONDecodeError, KeyError, IndexError):
-                return False
-
-        # Check for consolidated structure first (memories/ subdirectory)
-        memories_subdir = input_path / "memories"
-        if memories_subdir.exists() and memories_subdir.is_dir():
-            if check_memories_structure(memories_subdir):
-                return True
-
-        # Check for direct structure (old format)
-        if check_memories_structure(input_path):
-            return True
-
+    # Check if required directories and file exist
+    if not media_dir.exists() or not media_dir.is_dir():
         return False
 
-    except Exception as e:
-        log.detection_failed("Snapchat Memories", e)
+    if not overlays_dir.exists() or not overlays_dir.is_dir():
+        return False
+
+    if not metadata_file.exists() or not metadata_file.is_file():
+        return False
+
+    # Validate metadata.json structure
+    try:
+        with open(metadata_file, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+
+        # Should be a list/array
+        if not isinstance(metadata, list):
+            return False
+
+        # Should have at least one memory
+        if len(metadata) == 0:
+            return False
+
+        # Check first memory has expected fields
+        first_memory = metadata[0]
+        required_fields = ["date", "media_type", "media_filename"]
+
+        for field in required_fields:
+            if field not in first_memory:
+                return False
+
+        # This looks like a Snapchat Memories export
+        return True
+
+    except (json.JSONDecodeError, KeyError, IndexError):
         return False
 
 
@@ -139,7 +106,31 @@ class SnapchatMemoriesProcessor(ProcessorBase):
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        return detect(input_path)
+        """Check if this processor can handle the input directory.
+
+        Detection criteria for Snapchat Memories:
+        - Directory contains 'media/' subdirectory
+        - Directory contains 'overlays/' subdirectory
+        - Directory contains 'metadata.json' file
+        - metadata.json contains array of memory objects with required fields
+        - Consolidated: Directory contains 'memories/' subdirectory with above
+        """
+        try:
+            # Check for consolidated structure first (memories/ subdirectory)
+            memories_subdir = input_path / "memories"
+            if memories_subdir.exists() and memories_subdir.is_dir():
+                if _check_memories_structure(memories_subdir):
+                    return True
+
+            # Check for direct structure (old format)
+            if _check_memories_structure(input_path):
+                return True
+
+            return False
+
+        except Exception as e:
+            log.detection_failed("Snapchat Memories", e)
+            return False
 
     @staticmethod
     def get_name() -> str:
@@ -793,20 +784,17 @@ def process_logic(
         f"({len(collected.file_info)} need EXIF processing)"
     )
 
-    # Phase 3: Correct file extensions based on actual content
-    file_paths, file_info = (
-        SnapchatMemoriesProcessor.correct_extensions_and_update_info(
-            collected.file_paths, collected.file_info, path_index=0
+    # Phase 3: Correct file extensions and batch process EXIF metadata
+    logger.info("Batch processing EXIF metadata...")
+    file_paths, file_info, exif_rebuilt_count = (
+        SnapchatMemoriesProcessor.finalize_files(
+            collected.file_paths,
+            collected.file_info,
+            _build_metadata_requests,
+            dedup_manifest,
+            path_index=0,
         )
     )
-
-    # Phase 4: Batch process EXIF operations on non-MKV files
-    exif_rebuilt_count = 0
-    if file_paths:
-        logger.info("Batch processing EXIF metadata...")
-        exif_rebuilt_count = SnapchatMemoriesProcessor.batch_process_exif(
-            file_paths, file_info, _build_metadata_requests, dedup_manifest
-        )
 
     # Handle failures - copy orphaned files and generate report
     failure_tracker.handle_failures(output_base_path)
@@ -827,7 +815,3 @@ def process_logic(
     logger.info("  - Track 0 (default): Video with overlay embedded")
     logger.info("  - Track 1: Original video without overlay")
     logger.info("  Switch tracks in VLC: Video > Video Track > Select track")
-
-
-def get_processor():
-    return SnapchatMemoriesProcessor

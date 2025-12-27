@@ -54,83 +54,79 @@ logger = logging.getLogger(__name__)
 log = get_processor_logger(__name__)
 
 
-def detect(input_path: Path) -> bool:
-    """Check if this is a Snapchat Messages export."""
-    try:
-        # Check for consolidated structure first (messages/ subdirectory)
-        messages_subdir = input_path / "messages"
-        if messages_subdir.exists() and messages_subdir.is_dir():
-            # Check for raw export in messages/ subdirectory
-            json_dir = messages_subdir / "json"
-            if json_dir.exists() and json_dir.is_dir():
-                chat_history = json_dir / "chat_history.json"
-                snap_history = json_dir / "snap_history.json"
-                if chat_history.exists() and snap_history.exists():
-                    return True
-
-            # Check for preprocessed in messages/ subdirectory
-            metadata_file = messages_subdir / "metadata.json"
-            media_dir = messages_subdir / "media"
-            if metadata_file.exists() and media_dir.exists():
-                try:
-                    with open(metadata_file, "r", encoding="utf-8") as f:
-                        metadata = json.load(f)
-                    if isinstance(metadata, dict) and "conversations" in metadata:
-                        export_info = metadata.get("export_info", {})
-                        if (
-                            "export_username" in export_info
-                            or len(metadata.get("conversations", {})) > 0
-                        ):
-                            return True
-                except (json.JSONDecodeError, KeyError):
-                    pass
-
-        # Check for direct structure (old format)
-        # Check for raw export pattern
-        json_dir = input_path / "json"
-        if json_dir.exists() and json_dir.is_dir():
-            chat_history = json_dir / "chat_history.json"
-            snap_history = json_dir / "snap_history.json"
-
-            if chat_history.exists() and snap_history.exists():
-                return True
-
-        # Check for preprocessed pattern
-        metadata_file = input_path / "metadata.json"
-        media_dir = input_path / "media"
-
-        if metadata_file.exists() and media_dir.exists():
-            try:
-                with open(metadata_file, "r", encoding="utf-8") as f:
-                    metadata = json.load(f)
-
-                # Preprocessed Snapchat Messages has 'conversations' key
-                if isinstance(metadata, dict) and "conversations" in metadata:
-                    # Also check it's not Snapchat Memories (which has different structure)
-                    export_info = metadata.get("export_info", {})
-                    # Snapchat Messages should have export_username
-                    if (
-                        "export_username" in export_info
-                        or len(metadata.get("conversations", {})) > 0
-                    ):
-                        return True
-
-            except (json.JSONDecodeError, KeyError):
-                pass
-
-        return False
-
-    except Exception as e:
-        log.detection_failed("Snapchat Messages", e)
-        return False
-
-
 class SnapchatMessagesProcessor(ProcessorBase):
     """Processor for Snapchat Messages exports."""
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        return detect(input_path)
+        """Check if this is a Snapchat Messages export."""
+        try:
+            # Check for consolidated structure first (messages/ subdirectory)
+            messages_subdir = input_path / "messages"
+            if messages_subdir.exists() and messages_subdir.is_dir():
+                # Check for raw export in messages/ subdirectory
+                json_dir = messages_subdir / "json"
+                if json_dir.exists() and json_dir.is_dir():
+                    chat_history = json_dir / "chat_history.json"
+                    snap_history = json_dir / "snap_history.json"
+                    if chat_history.exists() and snap_history.exists():
+                        return True
+
+                # Check for preprocessed in messages/ subdirectory
+                metadata_file = messages_subdir / "metadata.json"
+                media_dir = messages_subdir / "media"
+                if metadata_file.exists() and media_dir.exists():
+                    try:
+                        with open(metadata_file, "r", encoding="utf-8") as f:
+                            metadata = json.load(f)
+                        if isinstance(metadata, dict) and "conversations" in metadata:
+                            export_info = metadata.get("export_info", {})
+                            if (
+                                "export_username" in export_info
+                                or len(metadata.get("conversations", {})) > 0
+                            ):
+                                return True
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
+            # Check for direct structure (old format)
+            # Check for raw export pattern
+            json_dir = input_path / "json"
+            if json_dir.exists() and json_dir.is_dir():
+                chat_history = json_dir / "chat_history.json"
+                snap_history = json_dir / "snap_history.json"
+
+                if chat_history.exists() and snap_history.exists():
+                    return True
+
+            # Check for preprocessed pattern
+            metadata_file = input_path / "metadata.json"
+            media_dir = input_path / "media"
+
+            if metadata_file.exists() and media_dir.exists():
+                try:
+                    with open(metadata_file, "r", encoding="utf-8") as f:
+                        metadata = json.load(f)
+
+                    # Preprocessed Snapchat Messages has 'conversations' key
+                    if isinstance(metadata, dict) and "conversations" in metadata:
+                        # Also check it's not Snapchat Memories
+                        export_info = metadata.get("export_info", {})
+                        # Snapchat Messages should have export_username
+                        if (
+                            "export_username" in export_info
+                            or len(metadata.get("conversations", {})) > 0
+                        ):
+                            return True
+
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            return False
+
+        except Exception as e:
+            log.detection_failed("Snapchat Messages", e)
+            return False
 
     @staticmethod
     def get_name() -> str:
@@ -169,6 +165,11 @@ class SnapchatMessagesProcessor(ProcessorBase):
         if chat_media_dir.exists():
             return True
 
+        # Check for consolidated export structure (messages/chat_media/)
+        consolidated_chat_media = input_path / "messages" / "chat_media"
+        if consolidated_chat_media.exists():
+            return True
+
         return False
 
     @staticmethod
@@ -177,6 +178,19 @@ class SnapchatMessagesProcessor(ProcessorBase):
         input_path = Path(input_dir)
         cache_path = Path(cache_dir)
         workers = kwargs.get("workers")
+
+        # Check for consolidated export structure (messages/chat_media/)
+        # If found, preprocess from the messages/ subdirectory
+        messages_subdir = input_path / "messages"
+        if messages_subdir.exists() and messages_subdir.is_dir():
+            chat_media_check = messages_subdir / "chat_media"
+            json_check = messages_subdir / "json"
+            if chat_media_check.exists() or json_check.exists():
+                logger.info(
+                    "Detected consolidated export structure, preprocessing from: %s",
+                    messages_subdir,
+                )
+                input_path = messages_subdir
 
         logger.info("Preprocessing Snapchat Messages export to: %s", cache_path)
 
@@ -798,16 +812,12 @@ def _process_snapchat_working_directory(
     logger.info(f"Found {len(filename_index)} orphaned media entries by filename")
 
     # Check if this is new format (source_path in messages) or legacy format
-    # Sample a message to check
-    sample_message = None
-    for conv_data in metadata.get("conversations", {}).values():
-        for msg in conv_data.get("messages", []):
-            if msg.get("media_file"):
-                sample_message = msg
-                break
-        if sample_message:
-            break
-    use_legacy_format = sample_message is None or "source_path" not in sample_message
+    use_legacy_format = (
+        SnapchatMessagesProcessor.detect_metadata_format(
+            metadata, source_path_key="source_path"
+        )
+        == "legacy"
+    )
 
     if use_legacy_format:
         media_dir = working_dir / "media"
@@ -991,20 +1001,17 @@ def _process_snapchat_working_directory(
         f"({len(collected.file_info)} need EXIF processing)"
     )
 
-    # Phase 3: Correct file extensions based on actual content
-    file_paths, file_info = (
-        SnapchatMessagesProcessor.correct_extensions_and_update_info(
-            collected.file_paths, collected.file_info, path_index=0
+    # Phase 3: Correct file extensions and batch process EXIF metadata
+    logger.info("Batch processing EXIF metadata...")
+    file_paths, file_info, exif_rebuilt_count = (
+        SnapchatMessagesProcessor.finalize_files(
+            collected.file_paths,
+            collected.file_info,
+            _build_metadata_requests,
+            dedup_manifest,
+            path_index=0,
         )
     )
-
-    # Phase 4: Batch process EXIF operations on non-MKV files
-    exif_rebuilt_count = 0
-    if file_paths:
-        logger.info("Batch processing EXIF metadata...")
-        exif_rebuilt_count = SnapchatMessagesProcessor.batch_process_exif(
-            file_paths, file_info, _build_metadata_requests, dedup_manifest
-        )
 
     # Handle unmatched files - copy to failed-matching directory
     if unmatched_files:
@@ -1069,7 +1076,3 @@ def _process_snapchat_working_directory(
             logger.info(f"Ambiguous cases moved to: {needs_matching_dest.absolute()}")
     except Exception as e:
         logger.warning(f"Failed to move needs_matching directory to output: {e}")
-
-
-def get_processor():
-    return SnapchatMessagesProcessor

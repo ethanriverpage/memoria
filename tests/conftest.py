@@ -66,6 +66,7 @@ def test_exports_dir(tmp_path_factory) -> Path:
 def processor_registry() -> ProcessorRegistry:
     """Create and populate a processor registry with all available processors."""
     from importlib import import_module
+    from processors.base import ProcessorBase
 
     registry = ProcessorRegistry()
     processors_dir = PROJECT_ROOT / "processors"
@@ -76,9 +77,16 @@ def processor_registry() -> ProcessorRegistry:
             module_name = f"processors.{pkg}.processor"
             try:
                 module = import_module(module_name)
-                if hasattr(module, "get_processor"):
-                    processor = module.get_processor()
-                    registry.register(processor)
+                # Find the processor class (subclass of ProcessorBase) in the module
+                for name, obj in vars(module).items():
+                    if (
+                        isinstance(obj, type)
+                        and issubclass(obj, ProcessorBase)
+                        and obj is not ProcessorBase
+                        and not name.startswith("_")
+                    ):
+                        registry.register(obj)
+                        break
             except ImportError:
                 pass  # Skip processors that fail to import
 

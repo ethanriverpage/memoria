@@ -47,73 +47,69 @@ logger = logging.getLogger(__name__)
 log = get_processor_logger(__name__)
 
 
-def detect(input_path: Path) -> bool:
-    """Check if this is an iMazing iMessage export."""
-    try:
-        # Check for Device-Info.txt with iMazing reference
-        device_info = input_path / "Device-Info.txt"
-        if device_info.exists():
-            try:
-                content = device_info.read_text(encoding="utf-8")
-                # iMazing exports typically contain "iMazing" in the content
-                if "iMazing" in content or "DigiDNA" in content:
-                    return True
-            except Exception:
-                pass
-
-        # Check for iMazing-style vCard files (contain iMazing PRODID)
-        vcf_files = list(input_path.glob("Contact - *.vcf"))
-        if vcf_files:
-            try:
-                content = vcf_files[0].read_text(encoding="utf-8")
-                if "iMazing" in content or "DigiDNA" in content:
-                    return True
-            except Exception:
-                pass
-
-        # Check for pattern: Messages CSV + media files with timestamp prefix
-        message_csvs = list(input_path.glob("Messages - *.csv"))
-        if message_csvs:
-            # Check for media files with iMazing timestamp pattern
-            # Pattern: "YYYY-MM-DD HH MM SS - Name - filename.ext"
-            import re
-
-            pattern = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2} \d{2} \d{2} - .+ - .+$")
-
-            for f in input_path.iterdir():
-                if f.is_file() and f.suffix.lower() in ALL_MEDIA_EXTENSIONS:
-                    if pattern.match(f.stem + f.suffix):
-                        return True
-
-        # Check for preprocessed iMazing export (new format without media/ or legacy with media/)
-        metadata_file = input_path / "metadata.json"
-
-        if metadata_file.exists():
-            try:
-                with open(metadata_file, "r", encoding="utf-8") as f:
-                    metadata = json.load(f)
-
-                # iMazing preprocessed exports have export_format: "imazing"
-                if isinstance(metadata, dict) and "conversations" in metadata:
-                    export_info = metadata.get("export_info", {})
-                    if export_info.get("export_format") == "imazing":
-                        return True
-            except (json.JSONDecodeError, KeyError):
-                pass
-
-        return False
-
-    except Exception as e:
-        log.detection_failed("iMazing", e)
-        return False
-
-
 class ImazingProcessor(ProcessorBase):
     """Processor for iMazing-format iMessage exports."""
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        return detect(input_path)
+        """Check if this is an iMazing iMessage export."""
+        try:
+            # Check for Device-Info.txt with iMazing reference
+            device_info = input_path / "Device-Info.txt"
+            if device_info.exists():
+                try:
+                    content = device_info.read_text(encoding="utf-8")
+                    # iMazing exports typically contain "iMazing" in the content
+                    if "iMazing" in content or "DigiDNA" in content:
+                        return True
+                except Exception:
+                    pass
+
+            # Check for iMazing-style vCard files (contain iMazing PRODID)
+            vcf_files = list(input_path.glob("Contact - *.vcf"))
+            if vcf_files:
+                try:
+                    content = vcf_files[0].read_text(encoding="utf-8")
+                    if "iMazing" in content or "DigiDNA" in content:
+                        return True
+                except Exception:
+                    pass
+
+            # Check for pattern: Messages CSV + media files with timestamp prefix
+            message_csvs = list(input_path.glob("Messages - *.csv"))
+            if message_csvs:
+                # Check for media files with iMazing timestamp pattern
+                # Pattern: "YYYY-MM-DD HH MM SS - Name - filename.ext"
+                import re
+
+                pattern = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2} \d{2} \d{2} - .+ - .+$")
+
+                for f in input_path.iterdir():
+                    if f.is_file() and f.suffix.lower() in ALL_MEDIA_EXTENSIONS:
+                        if pattern.match(f.stem + f.suffix):
+                            return True
+
+            # Check for preprocessed iMazing export
+            metadata_file = input_path / "metadata.json"
+
+            if metadata_file.exists():
+                try:
+                    with open(metadata_file, "r", encoding="utf-8") as f:
+                        metadata = json.load(f)
+
+                    # iMazing preprocessed exports have export_format: "imazing"
+                    if isinstance(metadata, dict) and "conversations" in metadata:
+                        export_info = metadata.get("export_info", {})
+                        if export_info.get("export_format") == "imazing":
+                            return True
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            return False
+
+        except Exception as e:
+            log.detection_failed("iMazing", e)
+            return False
 
     @staticmethod
     def get_name() -> str:
@@ -740,18 +736,16 @@ def process_logic(
 
         log.copied_files(collected.success_count, collected.failed_count)
 
-        # Phase 2: Correct file extensions based on actual content
-        file_paths, file_info = ImazingProcessor.correct_extensions_and_update_info(
-            collected.file_paths, collected.file_info, path_index=0
+        # Phase 2: Correct file extensions and batch process EXIF metadata
+        log.exif_batch_start()
+        file_paths, file_info, exif_rebuilt_count = ImazingProcessor.finalize_files(
+            collected.file_paths,
+            collected.file_info,
+            _build_metadata_requests,
+            dedup_manifest,
+            path_index=0,
         )
-
-        # Phase 3: Batch EXIF processing
-        exif_rebuilt_count = 0
         if file_paths:
-            log.exif_batch_start()
-            exif_rebuilt_count = ImazingProcessor.batch_process_exif(
-                file_paths, file_info, _build_metadata_requests, dedup_manifest
-            )
             log.exif_written(len(file_info))
 
         # Print summary using shared utility
@@ -785,7 +779,3 @@ def process_logic(
 
     log.using_preprocessed(str(input_path))
     return _process_working_dir(input_path)
-
-
-def get_processor():
-    return ImazingProcessor

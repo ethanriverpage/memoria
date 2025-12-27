@@ -58,65 +58,59 @@ log = get_processor_logger(__name__)
 # ============================================================================
 
 
-def detect(input_path: Path) -> bool:
-    """Check if this processor can handle the input directory.
-
-    Detection criteria for iMessage:
-    - Mac export: chat.db + Attachments/ directory
-    - iPhone export: SMS/sms.db + SMS/Attachments/ directory
-    - Preprocessed: metadata.json with conversations + media/ directory
-
-    Args:
-        input_path: Path to the input directory
-
-    Returns:
-        True if this is an iMessage export, False otherwise
-    """
-    try:
-        # Check for Mac export: chat.db + Attachments/
-        if (input_path / "chat.db").exists() and (input_path / "Attachments").is_dir():
-            return True
-
-        # Check for iPhone export: SMS/sms.db + SMS/Attachments/
-        sms_dir = input_path / "SMS"
-        if sms_dir.exists():
-            if (sms_dir / "sms.db").exists() and (sms_dir / "Attachments").is_dir():
-                return True
-
-        # Check for preprocessed iMessage export (new format without media/ or legacy with media/)
-        metadata_file = input_path / "metadata.json"
-
-        if metadata_file.exists():
-            try:
-                with open(metadata_file, "r", encoding="utf-8") as f:
-                    metadata = json.load(f)
-
-                # iMessage preprocessed exports have conversations and export_paths
-                if isinstance(metadata, dict) and "conversations" in metadata:
-                    export_info = metadata.get("export_info", {})
-                    # Check for iMessage-specific markers
-                    export_paths = export_info.get("export_paths", [])
-                    if export_paths:
-                        # Check if any path looks like an iMessage export
-                        for path in export_paths:
-                            if "messages" in path.lower() or "sms" in path.lower():
-                                return True
-            except (json.JSONDecodeError, KeyError):
-                pass
-
-        return False
-
-    except Exception as e:
-        log.detection_failed("iMessage", e)
-        return False
-
-
 class IMessageProcessor(ProcessorBase):
     """Processor for iMessage exports from Mac and iPhone."""
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        return detect(input_path)
+        """Check if this processor can handle the input directory.
+
+        Detection criteria for iMessage:
+        - Mac export: chat.db + Attachments/ directory
+        - iPhone export: SMS/sms.db + SMS/Attachments/ directory
+        - Preprocessed: metadata.json with conversations + media/ directory
+        """
+        try:
+            # Check for Mac export: chat.db + Attachments/
+            if (input_path / "chat.db").exists() and (
+                input_path / "Attachments"
+            ).is_dir():
+                return True
+
+            # Check for iPhone export: SMS/sms.db + SMS/Attachments/
+            sms_dir = input_path / "SMS"
+            if sms_dir.exists():
+                if (sms_dir / "sms.db").exists() and (
+                    sms_dir / "Attachments"
+                ).is_dir():
+                    return True
+
+            # Check for preprocessed iMessage export
+            metadata_file = input_path / "metadata.json"
+
+            if metadata_file.exists():
+                try:
+                    with open(metadata_file, "r", encoding="utf-8") as f:
+                        metadata = json.load(f)
+
+                    # iMessage preprocessed exports have conversations and export_paths
+                    if isinstance(metadata, dict) and "conversations" in metadata:
+                        export_info = metadata.get("export_info", {})
+                        # Check for iMessage-specific markers
+                        export_paths = export_info.get("export_paths", [])
+                        if export_paths:
+                            # Check if any path looks like an iMessage export
+                            for path in export_paths:
+                                if "messages" in path.lower() or "sms" in path.lower():
+                                    return True
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            return False
+
+        except Exception as e:
+            log.detection_failed("iMessage", e)
+            return False
 
     @staticmethod
     def get_name() -> str:
@@ -969,18 +963,16 @@ def _process_working_directory(
         f"Copied {collected.success_count} files ({collected.failed_count} failed)"
     )
 
-    # Phase 2: Correct file extensions based on actual content
-    file_paths, file_info = IMessageProcessor.correct_extensions_and_update_info(
-        collected.file_paths, collected.file_info, path_index=0
+    # Phase 2: Correct file extensions and batch process EXIF metadata
+    logger.info("Batch processing EXIF metadata...")
+    file_paths, file_info, exif_rebuilt_count = IMessageProcessor.finalize_files(
+        collected.file_paths,
+        collected.file_info,
+        _build_metadata_requests,
+        dedup_manifest,
+        path_index=0,
     )
-
-    # Phase 3: Batch EXIF processing
-    exif_rebuilt_count = 0
     if file_paths:
-        logger.info("Batch processing EXIF metadata...")
-        exif_rebuilt_count = IMessageProcessor.batch_process_exif(
-            file_paths, file_info, _build_metadata_requests, dedup_manifest
-        )
         logger.info(f"EXIF metadata written for {len(file_info)} files")
 
     # Print summary using shared utility
@@ -993,7 +985,3 @@ def _process_working_directory(
     )
 
     return True
-
-
-def get_processor():
-    return IMessageProcessor

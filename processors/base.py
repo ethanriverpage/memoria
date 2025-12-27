@@ -45,6 +45,32 @@ class ProcessingResults:
 class ProcessorBase(ABC):
     """Base class for all media processors."""
 
+    def __init_subclass__(cls, **kwargs):
+        """Validate subclass implementation at class definition time.
+
+        Ensures that processors declaring certain capabilities actually
+        implement the required methods.
+        """
+        super().__init_subclass__(**kwargs)
+        # Skip validation for abstract classes
+        if getattr(cls, "__abstractmethods__", None):
+            return
+        # Validate dedup capability
+        if cls.supports_dedup() and cls.build_catalog is ProcessorBase.build_catalog:
+            raise TypeError(
+                f"{cls.__name__} declares supports_dedup=True "
+                "but doesn't implement build_catalog()"
+            )
+        # Validate consolidation capability
+        if (
+            cls.supports_consolidation()
+            and cls.process_consolidated is ProcessorBase.process_consolidated
+        ):
+            raise TypeError(
+                f"{cls.__name__} declares supports_consolidation=True "
+                "but doesn't implement process_consolidated()"
+            )
+
     @staticmethod
     @abstractmethod
     def detect(input_path: Path) -> bool:
@@ -126,7 +152,7 @@ class ProcessorBase(ABC):
         input_dir: str,
         output_dir: Optional[str] = None,
         dedup_manifest: Optional[Dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ) -> bool:
         """Process the input directory."""
         pass
@@ -406,6 +432,76 @@ class ProcessorBase(ABC):
         batch_write_metadata_requests(requests, existing_metadata_map, dedup_manifest)
 
         return exif_rebuilt_count
+
+    @classmethod
+    def finalize_files(
+        cls,
+        file_paths: List[str],
+        file_info: List[Tuple],
+        metadata_builder: Callable[[List[Tuple]], List],
+        dedup_manifest: Optional[Dict[str, Any]] = None,
+        path_index: int = 0,
+    ) -> Tuple[List[str], List[Tuple], int]:
+        """Correct extensions and batch process EXIF metadata.
+
+        Combines correct_extensions_and_update_info() and batch_process_exif()
+        into a single call for cleaner processor code.
+
+        Args:
+            file_paths: List of file path strings.
+            file_info: List of tuples containing file metadata.
+            metadata_builder: Callable that takes file_info and returns
+                a list of MetadataWriteRequest objects.
+            dedup_manifest: Optional deduplication manifest for merging.
+            path_index: Index of the path element in each file_info tuple.
+
+        Returns:
+            Tuple of (updated_file_paths, updated_file_info, exif_rebuilt_count).
+        """
+        file_paths, file_info = cls.correct_extensions_and_update_info(
+            file_paths, file_info, path_index=path_index
+        )
+        exif_rebuilt_count = 0
+        if file_paths:
+            exif_rebuilt_count = cls.batch_process_exif(
+                file_paths, file_info, metadata_builder, dedup_manifest
+            )
+        return file_paths, file_info, exif_rebuilt_count
+
+    @staticmethod
+    def detect_metadata_format(
+        metadata: dict,
+        conversations_key: str = "conversations",
+        source_path_key: str = "source_paths",
+    ) -> str:
+        """Detect if metadata uses legacy or new format.
+
+        Checks for presence of source_path fields in messages to determine
+        if metadata is in the new preprocessed format or legacy format.
+
+        Args:
+            metadata: Parsed metadata.json content.
+            conversations_key: Key for conversations in metadata.
+            source_path_key: Key to look for in messages (new format indicator).
+
+        Returns:
+            "legacy" or "new" based on presence of source_path_key in messages.
+        """
+        conversations = metadata.get(conversations_key, {})
+        if isinstance(conversations, dict):
+            conv_items = list(conversations.values())
+        else:
+            conv_items = conversations
+
+        for conv in conv_items:
+            for msg in conv.get("messages", []):
+                # Check if message has media files
+                if msg.get("media_files") or msg.get("media_file"):
+                    # Check for new format indicators
+                    if source_path_key in msg or "source_path" in msg:
+                        return "new"
+                    return "legacy"
+        return "legacy"
 
     @staticmethod
     def build_media_filename_index(

@@ -50,32 +50,28 @@ logger = logging.getLogger(__name__)
 log = get_processor_logger(__name__)
 
 
-def detect(input_path: Path) -> bool:
-    """Check if this is a Google Photos export (has Google Photos/ with albums)."""
-    try:
-        photos_dir = input_path / "Google Photos"
-
-        # Check if Google Photos directory exists
-        if not photos_dir.exists() or not photos_dir.is_dir():
-            return False
-
-        # Check for album folders within Google Photos
-        # Need at least one subdirectory (album)
-        albums = [d for d in photos_dir.iterdir() if d.is_dir()]
-
-        return len(albums) > 0
-
-    except Exception as e:
-        log.detection_failed("Google Photos", e)
-        return False
-
-
 class GooglePhotosProcessor(ProcessorBase):
     """Processor for Google Photos exports."""
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        return detect(input_path)
+        """Check if this is a Google Photos export (has Google Photos/ with albums)."""
+        try:
+            photos_dir = input_path / "Google Photos"
+
+            # Check if Google Photos directory exists
+            if not photos_dir.exists() or not photos_dir.is_dir():
+                return False
+
+            # Check for album folders within Google Photos
+            # Need at least one subdirectory (album)
+            albums = [d for d in photos_dir.iterdir() if d.is_dir()]
+
+            return len(albums) > 0
+
+        except Exception as e:
+            log.detection_failed("Google Photos", e)
+            return False
 
     @staticmethod
     def get_name() -> str:
@@ -676,7 +672,3 @@ def _process_working_directory(
         output_dir=output_dir,
         extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
     )
-
-
-def get_processor():
-    return GooglePhotosProcessor

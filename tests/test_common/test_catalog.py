@@ -554,14 +554,20 @@ class TestMultipleProcessorStreaming:
         # Get all processors that support dedup
         ProcessorRegistry()
 
-        # Import all processor modules to populate registry
-        from processors.google_voice.processor import get_processor as gv
-        from processors.google_chat.processor import get_processor as gc
-        from processors.discord.processor import get_processor as dc
-        from processors.imessage.processor import get_processor as im
-        from processors.instagram_messages.processor import get_processor as igm
+        # Import processor classes
+        from processors.google_voice.processor import GoogleVoiceProcessor
+        from processors.google_chat.processor import GoogleChatProcessor
+        from processors.discord.processor import DiscordProcessor
+        from processors.imessage.processor import IMessageProcessor
+        from processors.instagram_messages.processor import InstagramMessagesProcessor
 
-        processors = [gv(), gc(), dc(), im(), igm()]
+        processors = [
+            GoogleVoiceProcessor,
+            GoogleChatProcessor,
+            DiscordProcessor,
+            IMessageProcessor,
+            InstagramMessagesProcessor,
+        ]
 
         for idx, processor in enumerate(processors):
             if processor.supports_dedup():

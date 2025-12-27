@@ -52,53 +52,44 @@ log = get_processor_logger(__name__)
 # ============================================================================
 
 
-def detect(input_path: Path) -> bool:
-    """Check if this processor can handle the input directory
-
-    Detection criteria for Google Voice:
-    - Directory contains 'Voice/Calls/' subdirectory
-    - Calls directory contains HTML files with pattern: +XXXXXXXXXX - Text - YYYY-MM-DDTHH_MM_SSZ.html
-
-    Args:
-        input_path: Path to the input directory
-
-    Returns:
-        True if this is a Google Voice export, False otherwise
-    """
-    try:
-        voice_dir = input_path / "Voice"
-        calls_dir = voice_dir / "Calls"
-
-        # Check if Voice/Calls structure exists
-        if not voice_dir.exists() or not voice_dir.is_dir():
-            return False
-
-        if not calls_dir.exists() or not calls_dir.is_dir():
-            return False
-
-        # Check for at least one HTML file matching the Voice pattern
-        # Pattern: +XXXXXXXXXX - Text - YYYY-MM-DDTHH_MM_SSZ.html
-        voice_pattern = re.compile(
-            r"^\+\d+ - Text - \d{4}-\d{2}-\d{2}T\d{2}_\d{2}_\d{2}Z\.html$"
-        )
-
-        for file_path in calls_dir.iterdir():
-            if file_path.is_file() and voice_pattern.match(file_path.name):
-                return True
-
-        return False
-
-    except Exception as e:
-        log.detection_failed("Google Voice", e)
-        return False
-
-
 class GoogleVoiceProcessor(ProcessorBase):
     """Processor for Google Voice exports"""
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        return detect(input_path)
+        """Check if this processor can handle the input directory.
+
+        Detection criteria for Google Voice:
+        - Directory contains 'Voice/Calls/' subdirectory
+        - Calls directory contains HTML files with pattern:
+          +XXXXXXXXXX - Text - YYYY-MM-DDTHH_MM_SSZ.html
+        """
+        try:
+            voice_dir = input_path / "Voice"
+            calls_dir = voice_dir / "Calls"
+
+            # Check if Voice/Calls structure exists
+            if not voice_dir.exists() or not voice_dir.is_dir():
+                return False
+
+            if not calls_dir.exists() or not calls_dir.is_dir():
+                return False
+
+            # Check for at least one HTML file matching the Voice pattern
+            # Pattern: +XXXXXXXXXX - Text - YYYY-MM-DDTHH_MM_SSZ.html
+            voice_pattern = re.compile(
+                r"^\+\d+ - Text - \d{4}-\d{2}-\d{2}T\d{2}_\d{2}_\d{2}Z\.html$"
+            )
+
+            for file_path in calls_dir.iterdir():
+                if file_path.is_file() and voice_pattern.match(file_path.name):
+                    return True
+
+            return False
+
+        except Exception as e:
+            log.detection_failed("Google Voice", e)
+            return False
 
     @staticmethod
     def get_name() -> str:
@@ -491,16 +482,8 @@ def process_logic(
         logger.info(f"Found {total_media_files} media files to process")
 
         # Check if this is new format (source_paths in messages) or legacy format
-        sample_message = None
-        for conv in conversations:
-            for msg in conv.get("messages", []):
-                if msg.get("media_files"):
-                    sample_message = msg
-                    break
-            if sample_message:
-                break
         use_legacy_format = (
-            sample_message is None or "source_paths" not in sample_message
+            GoogleVoiceProcessor.detect_metadata_format(metadata_json) == "legacy"
         )
 
         if use_legacy_format:
@@ -679,7 +662,3 @@ def process_logic(
 
     logger.info(f"Processing preprocessed directory: {input_dir}")
     _process_working_directory(input_dir)
-
-
-def get_processor():
-    return GoogleVoiceProcessor

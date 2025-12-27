@@ -16,6 +16,7 @@ from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 from common.dedup.config import DedupConfig, get_dedup_config
 from common.dedup.description import (
@@ -324,9 +325,10 @@ class DeduplicationService:
             unit="group",
         ):
             entry, count, saved = self._build_duplicate_entry(files, "perceptual")
-            # Use best file's content hash as key
+            # Use best file's content hash as key, with UUID fallback to prevent collision
             best = self._select_best_file(files)
-            key = f"perceptual_{best.get('content_hash', group_id)}"
+            content_hash = best.get("content_hash")
+            key = f"perceptual_{content_hash or f'{group_id}_{uuid4().hex[:8]}'}"
             duplicates[key] = entry
             total_duplicates += count
             space_saved += saved
@@ -1086,9 +1088,10 @@ class DeduplicationService:
             unit="group",
         ):
             entry, count, saved = self._build_duplicate_entry(files, "perceptual")
-            # Use best file's content hash as key
+            # Use best file's content hash as key, with UUID fallback to prevent collision
             best = self._select_best_file(files)
-            key = f"perceptual_{best.get('content_hash', group_id)}"
+            content_hash = best.get("content_hash")
+            key = f"perceptual_{content_hash or f'{group_id}_{uuid4().hex[:8]}'}"
             duplicates[key] = entry
             total_duplicates += count
             space_saved += saved

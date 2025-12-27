@@ -55,49 +55,39 @@ log = get_processor_logger(__name__)
 # ============================================================================
 
 
-def detect(input_path: Path) -> bool:
-    """Check if this processor can handle the input directory
-
-    Detection criteria for Instaloader scrape data:
-    - Files directly in root directory
-    - Multiple files matching pattern: YYYY-MM-DD_HH-MM-SS_UTC.*
-    - Typically has .jpg/.mp4 and .txt pairs
-
-    Args:
-        input_path: Path to the input directory
-
-    Returns:
-        True if this is Instaloader scrape data, False otherwise
-    """
-    try:
-        # Pattern for Instaloader files: YYYY-MM-DD_HH-MM-SS_UTC.*
-        instaloader_pattern = re.compile(
-            r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_UTC\.(jpg|jpeg|mp4|txt|json\.xz)$"
-        )
-
-        # Count matching files in root directory
-        matching_files = 0
-
-        for file_path in input_path.iterdir():
-            if file_path.is_file() and instaloader_pattern.match(file_path.name):
-                matching_files += 1
-                # If we find at least 3 matching files, it's probably Instaloader data
-                if matching_files >= 3:
-                    return True
-
-        return False
-
-    except Exception as e:
-        log.detection_failed("Instaloader", e)
-        return False
-
-
 class InstaloaderProcessor(ProcessorBase):
     """Processor for Instaloader scrape data (not official Instagram export)"""
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        return detect(input_path)
+        """Check if this processor can handle the input directory.
+
+        Detection criteria for Instaloader scrape data:
+        - Files directly in root directory
+        - Multiple files matching pattern: YYYY-MM-DD_HH-MM-SS_UTC.*
+        - Typically has .jpg/.mp4 and .txt pairs
+        """
+        try:
+            # Pattern for Instaloader files: YYYY-MM-DD_HH-MM-SS_UTC.*
+            instaloader_pattern = re.compile(
+                r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_UTC\.(jpg|jpeg|mp4|txt|json\.xz)$"
+            )
+
+            # Count matching files in root directory
+            matching_files = 0
+
+            for file_path in input_path.iterdir():
+                if file_path.is_file() and instaloader_pattern.match(file_path.name):
+                    matching_files += 1
+                    # If we find at least 3 matching files, it's probably Instaloader
+                    if matching_files >= 3:
+                        return True
+
+            return False
+
+        except Exception as e:
+            log.detection_failed("Instaloader", e)
+            return False
 
     @staticmethod
     def get_name() -> str:
@@ -618,7 +608,3 @@ def process_logic(
 
     logger.info(f"Processing preprocessed directory: {input_dir}")
     _process_working_directory(input_dir)
-
-
-def get_processor():
-    return InstaloaderProcessor

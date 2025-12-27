@@ -55,57 +55,49 @@ log = get_processor_logger(__name__)
 # ============================================================================
 
 
-def detect(input_path: Path) -> bool:
-    """Check if this processor can handle the input directory
-
-    Detection criteria for Instagram Messages:
-    - Directory contains messages inbox (new or legacy location)
-    - Inbox contains conversation folders with message_N.html files
-
-    Args:
-        input_path: Path to the input directory
-
-    Returns:
-        True if this is an Instagram Messages export, False otherwise
-    """
-    try:
-        # Check both new format and legacy format paths
-        new_format_inbox = input_path / "your_instagram_activity" / "messages" / "inbox"
-        legacy_format_inbox = input_path / "messages" / "inbox"
-
-        inbox_dir = None
-        if new_format_inbox.exists() and new_format_inbox.is_dir():
-            inbox_dir = new_format_inbox
-        elif legacy_format_inbox.exists() and legacy_format_inbox.is_dir():
-            inbox_dir = legacy_format_inbox
-
-        if inbox_dir is None:
-            return False
-
-        # Check for at least one conversation folder with message_N.html files
-        message_pattern = re.compile(r"^message_\d+\.html$")
-
-        for conv_folder in inbox_dir.iterdir():
-            if not conv_folder.is_dir():
-                continue
-
-            for file_path in conv_folder.iterdir():
-                if file_path.is_file() and message_pattern.match(file_path.name):
-                    return True
-
-        return False
-
-    except Exception as e:
-        log.detection_failed("Instagram Messages", e)
-        return False
-
-
 class InstagramMessagesProcessor(ProcessorBase):
     """Processor for Instagram Messages exports"""
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        return detect(input_path)
+        """Check if this processor can handle the input directory.
+
+        Detection criteria for Instagram Messages:
+        - Directory contains messages inbox (new or legacy location)
+        - Inbox contains conversation folders with message_N.html files
+        """
+        try:
+            # Check both new format and legacy format paths
+            new_format_inbox = (
+                input_path / "your_instagram_activity" / "messages" / "inbox"
+            )
+            legacy_format_inbox = input_path / "messages" / "inbox"
+
+            inbox_dir = None
+            if new_format_inbox.exists() and new_format_inbox.is_dir():
+                inbox_dir = new_format_inbox
+            elif legacy_format_inbox.exists() and legacy_format_inbox.is_dir():
+                inbox_dir = legacy_format_inbox
+
+            if inbox_dir is None:
+                return False
+
+            # Check for at least one conversation folder with message_N.html files
+            message_pattern = re.compile(r"^message_\d+\.html$")
+
+            for conv_folder in inbox_dir.iterdir():
+                if not conv_folder.is_dir():
+                    continue
+
+                for file_path in conv_folder.iterdir():
+                    if file_path.is_file() and message_pattern.match(file_path.name):
+                        return True
+
+            return False
+
+        except Exception as e:
+            log.detection_failed("Instagram Messages", e)
+            return False
 
     @staticmethod
     def get_name() -> str:
@@ -136,13 +128,17 @@ class InstagramMessagesProcessor(ProcessorBase):
 
         # Check for raw export structure
         input_path = Path(input_dir)
-        # New location: messages/inbox/
-        inbox_dir = input_path / "messages" / "inbox"
-        if inbox_dir.exists():
+        # Current location: your_instagram_activity/messages/inbox/
+        new_inbox = input_path / "your_instagram_activity" / "messages" / "inbox"
+        if new_inbox.exists():
             return True
-        # Legacy location: inbox/
-        legacy_inbox = input_path / "inbox"
+        # Legacy location: messages/inbox/
+        legacy_inbox = input_path / "messages" / "inbox"
         if legacy_inbox.exists():
+            return True
+        # Oldest location: inbox/
+        oldest_inbox = input_path / "inbox"
+        if oldest_inbox.exists():
             return True
 
         return False
@@ -349,9 +345,7 @@ def build_filename_index(metadata: dict) -> Dict[str, dict]:
         Dict mapping media_file -> {message, conversation_title}
     """
 
-    def _instagram_messages_context_builder(
-        conversation: dict, message: dict
-    ) -> dict:
+    def _instagram_messages_context_builder(conversation: dict, message: dict) -> dict:
         """Build Instagram Messages context with conversation title."""
         return {
             "message": message,
@@ -541,15 +535,9 @@ def _process_working_directory(
     logger.info(f"Found {total_media_files} media files to process")
 
     # Check if this is new format (source_paths in messages) or legacy format
-    sample_message = None
-    for conv in conversations:
-        for msg in conv.get("messages", []):
-            if msg.get("media_files"):
-                sample_message = msg
-                break
-        if sample_message:
-            break
-    use_legacy_format = sample_message is None or "source_paths" not in sample_message
+    use_legacy_format = (
+        InstagramMessagesProcessor.detect_metadata_format(metadata_json) == "legacy"
+    )
 
     if use_legacy_format:
         media_dir = os.path.join(working_dir, "media")
@@ -703,7 +691,3 @@ def _process_working_directory(
         output_dir=output_dir,
         extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
     )
-
-
-def get_processor():
-    return InstagramMessagesProcessor

@@ -53,59 +53,49 @@ log = get_processor_logger(__name__)
 # ============================================================================
 
 
-def detect(input_path: Path) -> bool:
-    """Check if this processor can handle the input directory
-
-    Detection criteria for Google Chat:
-    - Directory contains 'Google Chat/Groups/' subdirectory
-    - Directory contains 'Google Chat/Users/' subdirectory
-    - At least one Group folder with group_info.json and messages.json
-
-    Args:
-        input_path: Path to the input directory
-
-    Returns:
-        True if this is a Google Chat export, False otherwise
-    """
-    try:
-        chat_dir = input_path / "Google Chat"
-        groups_dir = chat_dir / "Groups"
-        users_dir = chat_dir / "Users"
-
-        # Check if Google Chat structure exists
-        if not chat_dir.exists() or not chat_dir.is_dir():
-            return False
-
-        if not groups_dir.exists() or not groups_dir.is_dir():
-            return False
-
-        if not users_dir.exists() or not users_dir.is_dir():
-            return False
-
-        # Check for at least one valid group with required files
-        for group_folder in groups_dir.iterdir():
-            if not group_folder.is_dir():
-                continue
-
-            group_info = group_folder / "group_info.json"
-            messages = group_folder / "messages.json"
-
-            if group_info.exists() and messages.exists():
-                return True
-
-        return False
-
-    except Exception as e:
-        log.detection_failed("Google Chat", e)
-        return False
-
-
 class GoogleChatProcessor(ProcessorBase):
     """Processor for Google Chat exports"""
 
     @staticmethod
     def detect(input_path: Path) -> bool:
-        return detect(input_path)
+        """Check if this processor can handle the input directory.
+
+        Detection criteria for Google Chat:
+        - Directory contains 'Google Chat/Groups/' subdirectory
+        - Directory contains 'Google Chat/Users/' subdirectory
+        - At least one Group folder with group_info.json and messages.json
+        """
+        try:
+            chat_dir = input_path / "Google Chat"
+            groups_dir = chat_dir / "Groups"
+            users_dir = chat_dir / "Users"
+
+            # Check if Google Chat structure exists
+            if not chat_dir.exists() or not chat_dir.is_dir():
+                return False
+
+            if not groups_dir.exists() or not groups_dir.is_dir():
+                return False
+
+            if not users_dir.exists() or not users_dir.is_dir():
+                return False
+
+            # Check for at least one valid group with required files
+            for group_folder in groups_dir.iterdir():
+                if not group_folder.is_dir():
+                    continue
+
+                group_info = group_folder / "group_info.json"
+                messages = group_folder / "messages.json"
+
+                if group_info.exists() and messages.exists():
+                    return True
+
+            return False
+
+        except Exception as e:
+            log.detection_failed("Google Chat", e)
+            return False
 
     @staticmethod
     def get_name() -> str:
@@ -526,16 +516,10 @@ def _process_working_directory(
     logger.info(f"Found {len(conversations)} conversations")
     logger.info(f"Found {total_media_files} media files to process")
 
-    # Check if this is new format (source_paths in messages) or legacy format (media/ directory)
-    sample_message = None
-    for conv in conversations:
-        for msg in conv.get("messages", []):
-            if msg.get("media_files"):
-                sample_message = msg
-                break
-        if sample_message:
-            break
-    use_legacy_format = sample_message is None or "source_paths" not in sample_message
+    # Check if this is new format (source_paths in messages) or legacy format
+    use_legacy_format = (
+        GoogleChatProcessor.detect_metadata_format(metadata_json) == "legacy"
+    )
 
     if use_legacy_format:
         media_dir = os.path.join(working_dir, "media")
@@ -687,7 +671,3 @@ def _process_working_directory(
         output_dir=output_dir,
         extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
     )
-
-
-def get_processor():
-    return GoogleChatProcessor

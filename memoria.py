@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 logger = logging.getLogger(__name__)
 
 from processors.registry import ProcessorRegistry  # noqa: E402
+from processors.base import ProcessorBase  # noqa: E402
 from common.output.logging import (  # noqa: E402
     setup_logging,
     add_export_log_handler,
@@ -163,12 +164,22 @@ def load_all_processors(registry: ProcessorRegistry, quiet: bool = False) -> Non
         module_name = f"processors.{pkg}.processor"
         try:
             module = import_module(module_name)
-            if hasattr(module, "get_processor"):
-                processor = module.get_processor()
-                registry.register(processor)
+            # Find the processor class (subclass of ProcessorBase) in the module
+            processor_class = None
+            for name, obj in vars(module).items():
+                if (
+                    isinstance(obj, type)
+                    and issubclass(obj, ProcessorBase)
+                    and obj is not ProcessorBase
+                    and not name.startswith("_")
+                ):
+                    processor_class = obj
+                    break
+            if processor_class:
+                registry.register(processor_class)
                 processors_loaded.append(pkg)
             else:
-                processors_failed.append((pkg, "No get_processor() function found"))
+                processors_failed.append((pkg, "No ProcessorBase subclass found"))
         except ImportError as e:
             processors_failed.append((pkg, f"Import error: {e}"))
         except Exception as e:
@@ -414,9 +425,9 @@ def run_phased_dedup_processing(
                             workers=args.workers,
                         )
                         if working_dir:
-                            preprocessed_dirs[
-                                (export_dir, processor_name)
-                            ] = Path(working_dir)
+                            preprocessed_dirs[(export_dir, processor_name)] = Path(
+                                working_dir
+                            )
                             preprocess_count += 1
                         else:
                             logger.warning(
@@ -606,9 +617,17 @@ def run_phased_dedup_processing(
         matching_processors = registry.detect_all(export_dir)
 
         for processor in matching_processors:
-            logger.info("  Running: %s", processor.get_name())
+            processor_name = processor.get_name()
+            logger.info("  Running: %s", processor_name)
             try:
+                # Look up preprocessed directory, fall back to original
+                working_dir = preprocessed_dirs.get(
+                    (export_dir, processor_name),
+                    export_dir,
+                )
+
                 # Determine output directory using Platform/User structure
+                # Note: Uses original export_dir for username extraction
                 if args.output:
                     output_dir = build_processor_output_path(
                         processor.get_output_info(),
@@ -625,7 +644,7 @@ def run_phased_dedup_processing(
                 }
 
                 success = processor.process(
-                    str(export_dir), output_dir, dedup_manifest=manifest, **kwargs
+                    str(working_dir), output_dir, dedup_manifest=manifest, **kwargs
                 )
 
                 if success:
@@ -638,7 +657,9 @@ def run_phased_dedup_processing(
                     if output_dir:
                         output_info = processor.get_output_info()
                         if output_info.service:
-                            effective_output = str(Path(output_dir) / output_info.service)
+                            effective_output = str(
+                                Path(output_dir) / output_info.service
+                            )
                         else:
                             effective_output = output_dir
 
@@ -1265,9 +1286,7 @@ def _scan_platform_username_service_structure(
 
                 elif item_name in intermediate_folders:
                     # Intermediate folder (e.g., public-media) - scan inside
-                    nested_targets = _add_service_targets(
-                        item, platform_name, username
-                    )
+                    nested_targets = _add_service_targets(item, platform_name, username)
                     if nested_targets:
                         targets.extend(nested_targets)
                         found_services = True
@@ -1456,7 +1475,9 @@ def upload_only_mode(
                     recursive=True,
                 )
                 if rc == 0:
-                    logger.info("  %s: completed (%d files)", album_name, len(files_to_upload))
+                    logger.info(
+                        "  %s: completed (%d files)", album_name, len(files_to_upload)
+                    )
                 else:
                     logger.warning(
                         "  %s: completed with issues (rc=%d, %d files)",
@@ -1875,12 +1896,14 @@ Examples:
             "Cross-processor deduplication enabled (CROSS_PROCESSOR_DEDUP=true)"
         )
 
-        success_count, failed_count, results, upload_targets = run_phased_dedup_processing(
-            dirs_to_process,
-            registry,
-            args,
-            temp_dir,
-            log_file,
+        success_count, failed_count, results, upload_targets = (
+            run_phased_dedup_processing(
+                dirs_to_process,
+                registry,
+                args,
+                temp_dir,
+                log_file,
+            )
         )
 
         # Handle uploads if enabled
@@ -1912,7 +1935,9 @@ Examples:
                             rc,
                         )
                 except Exception as e:
-                    logger.error("  Upload failed for %s -> %s: %s", proc_name, album_name, e)
+                    logger.error(
+                        "  Upload failed for %s -> %s: %s", proc_name, album_name, e
+                    )
         elif immich_enabled and args.output:
             logger.info("No upload targets found.")
 

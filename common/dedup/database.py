@@ -1208,3 +1208,27 @@ class HashDatabase:
             Binary string representation.
         """
         return bin(int(hex_string, 16))[2:].zfill(len(hex_string) * 4)
+
+    # =========================================================================
+    # Context Manager Protocol
+    # =========================================================================
+
+    def __enter__(self) -> "HashDatabase":
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Exit context manager.
+
+        Currently a no-op since connections are created per-operation.
+        This enables future connection reuse optimization (see refactor #4).
+        """
+        pass
+
+    def close(self) -> None:
+        """Close the database.
+
+        Currently a no-op since connections are created per-operation.
+        This enables future connection reuse optimization (see refactor #4).
+        """
+        pass

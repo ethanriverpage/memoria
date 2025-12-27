@@ -246,38 +246,37 @@ class TestImazingOrphanDetection:
 class TestImazingDetection:
     """Tests for iMazing export detection."""
 
+    @staticmethod
+    def _detect(path):
+        """Wrapper to call static detect method."""
+        from processors.imessage_imazing.processor import ImazingProcessor
+
+        return ImazingProcessor.detect(path)
+
     def test_detects_device_info_txt(self, imazing_export_dir):
         """Should detect iMazing export by Device-Info.txt content."""
-        from processors.imessage_imazing.processor import detect
-
         # Create Device-Info.txt with iMazing reference
         device_info = imazing_export_dir / "Device-Info.txt"
         device_info.write_text("Exported by iMazing 2.17.0\nDevice: iPhone")
 
-        assert detect(imazing_export_dir) is True
+        assert self._detect(imazing_export_dir) is True
 
     def test_detects_digidna_reference(self, imazing_export_dir):
         """Should detect iMazing export by DigiDNA reference."""
-        from processors.imessage_imazing.processor import detect
-
         device_info = imazing_export_dir / "Device-Info.txt"
         device_info.write_text("Exported by DigiDNA iMazing")
 
-        assert detect(imazing_export_dir) is True
+        assert self._detect(imazing_export_dir) is True
 
     def test_detects_vcf_with_imazing(self, imazing_export_dir):
         """Should detect iMazing export by vCard PRODID."""
-        from processors.imessage_imazing.processor import detect
-
         vcf_file = imazing_export_dir / "Contact - John Doe.vcf"
         vcf_file.write_text("BEGIN:VCARD\nPRODID:iMazing\nEND:VCARD")
 
-        assert detect(imazing_export_dir) is True
+        assert self._detect(imazing_export_dir) is True
 
     def test_detects_by_filename_pattern(self, imazing_export_dir):
         """Should detect iMazing export by filename pattern."""
-        from processors.imessage_imazing.processor import detect
-
         # Create Messages CSV
         csv_path = imazing_export_dir / "Messages - John Doe.csv"
         csv_path.write_text("header\n")
@@ -290,12 +289,10 @@ class TestImazingDetection:
             "photo.jpg",
         )
 
-        assert detect(imazing_export_dir) is True
+        assert self._detect(imazing_export_dir) is True
 
     def test_detects_preprocessed_export(self, imazing_export_dir):
         """Should detect preprocessed iMazing export."""
-        from processors.imessage_imazing.processor import detect
-
         # Create preprocessed structure
         media_dir = imazing_export_dir / "media"
         media_dir.mkdir()
@@ -306,23 +303,19 @@ class TestImazingDetection:
         }
         (imazing_export_dir / "metadata.json").write_text(json.dumps(metadata))
 
-        assert detect(imazing_export_dir) is True
+        assert self._detect(imazing_export_dir) is True
 
     def test_rejects_empty_directory(self, imazing_export_dir):
         """Should reject empty directory."""
-        from processors.imessage_imazing.processor import detect
-
-        assert detect(imazing_export_dir) is False
+        assert self._detect(imazing_export_dir) is False
 
     def test_rejects_non_imazing_export(self, imazing_export_dir):
         """Should reject directory without iMazing markers."""
-        from processors.imessage_imazing.processor import detect
-
         # Create some random files
         (imazing_export_dir / "random.txt").write_text("random content")
         write_media_file(imazing_export_dir / "photo.jpg", "jpeg")
 
-        assert detect(imazing_export_dir) is False
+        assert self._detect(imazing_export_dir) is False
 
 
 class TestImazingPreprocessed:
