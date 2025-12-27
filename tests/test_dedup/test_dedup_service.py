@@ -269,6 +269,169 @@ class TestDeduplicationService:
         assert len(dup["merged_metadata"]["provenance"]) == 2
 
 
+class TestBuildDuplicateEntry:
+    """Tests for _build_duplicate_entry correctness."""
+
+    def test_secondary_excludes_best_not_primary(self, service):
+        """Test that secondary excludes best_quality file, not primary.
+
+        Bug regression test: When primary (earliest timestamp) differs from
+        best (highest quality), the secondary list should exclude best_quality
+        since that's the file being kept. Previously, it incorrectly excluded
+        primary, causing best_quality to appear in secondary.
+        """
+        # Scenario: 3 files with different sizes and timestamps
+        # - File A: smallest (500KB), oldest (Jan 2020) -> primary by timestamp
+        # - File B: largest (2MB), newest (Dec 2024) -> best by quality
+        # - File C: medium (1MB), middle (Jun 2022) -> neither
+        files = [
+            {
+                "source_path": "/old_small.jpg",
+                "file_size": 500000,
+                "content_hash": "same_hash",
+                "timestamp": "2020-01-01T10:00:00Z",
+                "_processor": "iMessage",
+                "metadata": {},
+            },
+            {
+                "source_path": "/new_large.jpg",
+                "file_size": 2000000,
+                "content_hash": "same_hash",
+                "timestamp": "2024-12-01T10:00:00Z",
+                "_processor": "Google Photos",
+                "metadata": {},
+            },
+            {
+                "source_path": "/middle_medium.jpg",
+                "file_size": 1000000,
+                "content_hash": "same_hash",
+                "timestamp": "2022-06-15T10:00:00Z",
+                "_processor": "Instagram",
+                "metadata": {},
+            },
+        ]
+
+        entry, dup_count, space_saved = service._build_duplicate_entry(
+            files, "exact", "same_hash"
+        )
+
+        # Verify primary is the oldest file
+        assert entry["primary"]["source_path"] == "/old_small.jpg"
+        assert entry["primary"]["processor"] == "iMessage"
+
+        # Verify best_quality is the largest file
+        assert entry["best_quality"]["source_path"] == "/new_large.jpg"
+        assert entry["best_quality"]["processor"] == "Google Photos"
+
+        # Key assertion: secondary should NOT contain best_quality
+        secondary_paths = [s["source_path"] for s in entry["secondary"]]
+        assert "/new_large.jpg" not in secondary_paths, (
+            "best_quality file incorrectly appears in secondary list"
+        )
+
+        # Secondary should contain primary and middle (both are not best)
+        assert "/old_small.jpg" in secondary_paths
+        assert "/middle_medium.jpg" in secondary_paths
+
+        # Duplicate count should be 2 (the two secondary files)
+        assert dup_count == 2
+
+        # For exact duplicates, space_saved = best_file_size * duplicate_count
+        # This is because exact duplicates are identical, so all have same size
+        expected_saved = 2000000 * 2  # best_quality size * dup_count
+        assert space_saved == expected_saved
+
+    def test_secondary_when_primary_equals_best(self, service):
+        """Test secondary list when primary and best_quality are same file."""
+        # When primary = best, secondary should contain all other files
+        files = [
+            {
+                "source_path": "/best_and_oldest.jpg",
+                "file_size": 2000000,  # Largest
+                "content_hash": "same_hash",
+                "timestamp": "2020-01-01T10:00:00Z",  # Oldest
+                "_processor": "Google Photos",
+                "metadata": {},
+            },
+            {
+                "source_path": "/smaller_newer.jpg",
+                "file_size": 500000,
+                "content_hash": "same_hash",
+                "timestamp": "2024-12-01T10:00:00Z",
+                "_processor": "iMessage",
+                "metadata": {},
+            },
+        ]
+
+        entry, dup_count, space_saved = service._build_duplicate_entry(
+            files, "exact", "same_hash"
+        )
+
+        # Primary and best should be the same
+        assert entry["primary"]["source_path"] == "/best_and_oldest.jpg"
+        assert entry["best_quality"]["source_path"] == "/best_and_oldest.jpg"
+
+        # Secondary should only contain the other file
+        secondary_paths = [s["source_path"] for s in entry["secondary"]]
+        assert secondary_paths == ["/smaller_newer.jpg"]
+        assert dup_count == 1
+
+    def test_perceptual_space_saved_sums_secondary_sizes(self, service):
+        """Test that perceptual duplicates sum actual secondary file sizes.
+
+        For perceptual duplicates, files have different sizes (re-encoded),
+        so space_saved should be the sum of actual secondary file sizes,
+        not a multiplication like exact duplicates.
+        """
+        # Scenario: 3 perceptually similar files with different sizes
+        files = [
+            {
+                "source_path": "/original.jpg",
+                "file_size": 2000000,  # 2MB - largest (best)
+                "content_hash": "hash_a",  # Different hashes (perceptual match)
+                "timestamp": "2024-01-01T10:00:00Z",
+                "_processor": "Google Photos",
+                "metadata": {},
+            },
+            {
+                "source_path": "/reencoded_1.jpg",
+                "file_size": 800000,  # 800KB - re-encoded version
+                "content_hash": "hash_b",
+                "timestamp": "2020-01-01T10:00:00Z",  # Oldest = primary
+                "_processor": "iMessage",
+                "metadata": {},
+            },
+            {
+                "source_path": "/reencoded_2.jpg",
+                "file_size": 600000,  # 600KB - another re-encoded version
+                "content_hash": "hash_c",
+                "timestamp": "2022-06-15T10:00:00Z",
+                "_processor": "Instagram",
+                "metadata": {},
+            },
+        ]
+
+        entry, dup_count, space_saved = service._build_duplicate_entry(
+            files, "perceptual"  # No content_hash for perceptual
+        )
+
+        # Best should be largest file
+        assert entry["best_quality"]["source_path"] == "/original.jpg"
+
+        # Primary should be oldest file
+        assert entry["primary"]["source_path"] == "/reencoded_1.jpg"
+
+        # Secondary should NOT contain best_quality
+        secondary_paths = [s["source_path"] for s in entry["secondary"]]
+        assert "/original.jpg" not in secondary_paths
+        assert "/reencoded_1.jpg" in secondary_paths
+        assert "/reencoded_2.jpg" in secondary_paths
+
+        # For perceptual duplicates, space_saved = sum of secondary file sizes
+        expected_saved = 800000 + 600000  # Not best_quality's size
+        assert space_saved == expected_saved
+
+
 class TestAnalyzeFromDb:
     """Tests for analyze_from_db() streaming analysis method."""
 

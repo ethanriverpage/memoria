@@ -386,8 +386,11 @@ class DeduplicationService:
         primary_hash = content_hash if content_hash else primary.get("content_hash")
         best_hash = content_hash if content_hash else best.get("content_hash")
 
+        # Exclude best_quality from secondary list since that's the file being kept.
+        # Note: We filter by best (not primary) because best_quality determines
+        # which file is outputted, while primary is only used for timestamp attribution.
         secondary_files = [
-            f for f in files if f.get("source_path") != primary.get("source_path")
+            f for f in files if f.get("source_path") != best.get("source_path")
         ]
 
         entry = {
