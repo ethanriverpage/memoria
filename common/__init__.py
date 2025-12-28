@@ -26,7 +26,6 @@ from .detection import detect_from_dirname
 from .utils import (
     sanitize_filename,
     default_worker_count,
-    is_preprocessed_directory,
     update_file_timestamps,
     get_media_type,
     is_supported_media,
@@ -83,7 +82,6 @@ __all__ = [
     "detect_from_dirname",
     "sanitize_filename",
     "default_worker_count",
-    "is_preprocessed_directory",
     "update_file_timestamps",
     "get_media_type",
     "is_supported_media",

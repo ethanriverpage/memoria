@@ -695,6 +695,16 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
         """Return the content key for Instagram Messages metadata."""
         return "conversations"
 
+    @staticmethod
+    def get_platform() -> str:
+        """Return the platform identifier for Instagram Messages."""
+        return "Instagram"
+
+    @staticmethod
+    def get_service() -> str:
+        """Return the service identifier for Instagram Messages."""
+        return "messages"
+
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
         stats = {

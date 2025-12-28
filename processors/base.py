@@ -3,6 +3,7 @@
 
 import json
 import logging
+import os
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -23,13 +24,37 @@ from common.dependency_checker import (
 )
 from common.metadata.schema import validate_metadata
 from common.output.paths import OutputInfo
+from common.output.progress import PHASE_PROCESS
+from common.processing import (
+    process_batches_parallel as _process_batches_parallel,
+    process_items_parallel as _process_items_parallel,
+)
 from common.validation.invariants import (
-    InvariantViolation,
     require_non_unknown_username,
 )
 from common.files.utils import short_path
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class MediaCopyTask:
+    """A single media copy task for multiprocessing workers.
+
+    This task format is processor-agnostic and supports the common 3-phase pipeline:
+    1) Copy source file to destination
+    2) Correct file extension based on magic bytes
+    3) Update filesystem timestamps
+
+    The worker returns (success, output_path, file_info_tuple) where file_info_tuple
+    is (output_path, *info_rest). The exact contents of info_rest are processor-specific.
+    """
+
+    source_path: str
+    dest_path: str
+    info_rest: Tuple[Any, ...]
+    timestamp_str: Optional[str] = None
+    timestamp_format: Optional[str] = None
 
 
 @dataclass
@@ -414,6 +439,55 @@ class ProcessorBase(ABC):
     # =========================================================================
 
     @classmethod
+    def process_items_parallel(
+        cls,
+        tasks: List[Any],
+        worker_fn: Callable[[Any], Any],
+        num_workers: int,
+        *,
+        phase: str = PHASE_PROCESS,
+        description: str = "Processing",
+        initializer: Optional[Callable[..., None]] = None,
+        initargs: tuple[Any, ...] = (),
+    ) -> List[Any]:
+        """Process tasks with a multiprocessing pool and shared progress handling.
+
+        This is the standardized multiprocess mapping primitive for processors.
+        It supports a pool initializer (e.g., worker logging setup) and also
+        runs sequentially when num_workers <= 1.
+        """
+        return _process_items_parallel(
+            tasks=tasks,
+            worker_fn=worker_fn,
+            num_workers=num_workers,
+            phase=phase,
+            description=description,
+            initializer=initializer,
+            initargs=initargs,
+        )
+
+    @classmethod
+    def process_batches_parallel(
+        cls,
+        tasks: List[Any],
+        worker_fn: Callable[[List[Any]], List[Any]],
+        num_workers: int,
+        *,
+        batch_size: int = 100,
+        phase: str = PHASE_PROCESS,
+        description: str = "Processing",
+    ) -> List[Any]:
+        """Process tasks in batches with shared multiprocessing + progress handling."""
+        return _process_batches_parallel(
+            tasks=tasks,
+            worker_fn=worker_fn,
+            num_workers=num_workers,
+            batch_size=batch_size,
+            phase=phase,
+            description=description,
+        )
+
+    @classmethod
     def get_processor(cls):
         """Return processor class for auto-discovery.
 
@@ -465,6 +539,98 @@ class ProcessorBase(ABC):
             )
 
         return metadata
+
+    @classmethod
+    def is_preprocessed_export_dir(
+        cls,
+        input_dir: str | Path,
+        *,
+        media_files_key: str = "media_files",
+        container_key: Optional[str] = None,
+        metadata_validator: Optional[Callable[[Dict[str, Any]], bool]] = None,
+    ) -> bool:
+        """Return True if input_dir is a valid preprocessed export directory.
+
+        This is the single, canonical "already preprocessed?" check for processors.
+        A preprocessed directory must contain a `metadata.json` that conforms to the
+        standardized metadata schema and matches the expected content key.
+        """
+        input_path = Path(input_dir)
+        metadata_path = input_path / "metadata.json"
+        if not metadata_path.exists():
+            return False
+
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+        except Exception:
+            return False
+
+        try:
+            validate_metadata(metadata, require_source_paths=True)
+        except Exception:
+            return False
+
+        if metadata_validator is not None and not metadata_validator(metadata):
+            return False
+
+        expected_key = container_key or media_files_key
+        return expected_key in metadata
+
+    @staticmethod
+    def is_preprocessed_for_platform(
+        input_path: Path,
+        platform: str,
+        service: Optional[str] = None,
+    ) -> bool:
+        """Check if directory is preprocessed for a specific platform/service.
+
+        This provides unambiguous detection of preprocessed directories by checking
+        the platform and service markers in export_info. Use this in detect() methods
+        instead of checking for generic keys like 'conversations'.
+
+        Args:
+            input_path: Path to directory to check.
+            platform: Expected platform identifier (e.g., "Snapchat", "Discord").
+            service: Expected service identifier (e.g., "messages", "memories").
+                     If None, matches any service (including None).
+
+        Returns:
+            True if directory is preprocessed for the specified platform/service.
+
+        Example:
+            # In SnapchatMessagesProcessor.detect():
+            if ProcessorBase.is_preprocessed_for_platform(
+                input_path, platform="Snapchat", service="messages"
+            ):
+                return True
+        """
+        metadata_path = input_path / "metadata.json"
+        if not metadata_path.exists():
+            return False
+
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+        except Exception:
+            return False
+
+        # Validate schema
+        try:
+            validate_metadata(metadata, require_source_paths=True)
+        except Exception:
+            return False
+
+        # Check platform/service markers
+        export_info = metadata.get("export_info", {})
+        if export_info.get("platform") != platform:
+            return False
+
+        # If service is specified, check it matches
+        if service is not None and export_info.get("service") != service:
+            return False
+
+        return True
 
     @staticmethod
     def validate_working_directory(
@@ -1058,3 +1224,63 @@ class ProcessorBase(ABC):
         # Flatten batch results and delegate to standard collector
         flattened = [result for batch in batch_results for result in batch]
         return ProcessorBase.collect_processing_results(flattened, info_extractor)
+
+    # =========================================================================
+    # Shared worker functions (multiprocessing-safe)
+    # =========================================================================
+
+    @staticmethod
+    def process_media_copy_batch(batch_tasks: List[MediaCopyTask]) -> List[Tuple]:
+        """Copy files, correct extensions, update timestamps (multiprocessing worker).
+
+        Consolidates the previously duplicated `process_media_batch()` helpers
+        across multiple processors.
+        """
+        from common.files.utils import batch_correct_extensions, copy_file
+        from common.utils import update_file_timestamps
+
+        results: List[Tuple] = []
+        file_paths: List[str] = []
+        file_info: List[Tuple] = []
+        timestamp_meta: List[Tuple[Optional[str], Optional[str]]] = []
+
+        # Phase 1: Copy all files
+        for task in batch_tasks:
+            src = task.source_path
+            dst = task.dest_path
+
+            if not os.path.exists(src):
+                logger.warning("Media file not found: %s", short_path(src))
+                results.append((False, None, None))
+                continue
+
+            try:
+                copy_file(src, dst)
+                file_paths.append(dst)
+                file_info.append((dst, *task.info_rest))
+                timestamp_meta.append((task.timestamp_str, task.timestamp_format))
+            except Exception as e:  # noqa: BLE001
+                logger.error("Failed to copy %s: %s", short_path(src), e)
+                results.append((False, None, None))
+
+        if not file_paths:
+            return results if results else [(False, None, None)] * len(batch_tasks)
+
+        # Phase 2: Correct file extensions based on actual content
+        corrections = batch_correct_extensions([Path(p) for p in file_paths])
+        if corrections:
+            file_paths = [corrections.get(p, p) for p in file_paths]
+            file_info = [(corrections.get(t[0], t[0]), *t[1:]) for t in file_info]
+
+        # Phase 3: Update timestamps and compile results
+        for idx, info in enumerate(file_info):
+            output_path = info[0]
+            timestamp_str, timestamp_format = timestamp_meta[idx]
+            if timestamp_str:
+                if timestamp_format:
+                    update_file_timestamps(output_path, timestamp_str, timestamp_format)
+                else:
+                    update_file_timestamps(output_path, timestamp_str)
+            results.append((True, output_path, info))
+
+        return results

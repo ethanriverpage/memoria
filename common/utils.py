@@ -6,7 +6,6 @@ Common utility functions for media processors
 import logging
 import os
 import re
-from pathlib import Path
 from datetime import datetime
 from typing import Optional, Set
 
@@ -76,33 +75,47 @@ def get_gps_format(file_path) -> str:
     return "absolute" if media_type == "image" else "signed"
 
 
-# Unicode quote characters to normalize to ASCII equivalents
-_QUOTE_REPLACEMENTS = {
+# Unicode characters to normalize to ASCII equivalents
+_TEXT_REPLACEMENTS = {
+    # Quotation marks
     "\u2018": "'",  # LEFT SINGLE QUOTATION MARK
     "\u2019": "'",  # RIGHT SINGLE QUOTATION MARK
+    "\u201a": "'",  # SINGLE LOW-9 QUOTATION MARK
+    "\u201b": "'",  # SINGLE HIGH-REVERSED-9 QUOTATION MARK
     "\u201c": '"',  # LEFT DOUBLE QUOTATION MARK
     "\u201d": '"',  # RIGHT DOUBLE QUOTATION MARK
+    "\u201e": '"',  # DOUBLE LOW-9 QUOTATION MARK
+    "\u201f": '"',  # DOUBLE HIGH-REVERSED-9 QUOTATION MARK
     "\u2032": "'",  # PRIME (single)
     "\u2033": '"',  # DOUBLE PRIME
+    # Dashes
+    "\u2013": "--",  # EN DASH
+    "\u2014": "--",  # EM DASH
+    # Whitespace
+    "\u2028": " ",  # LINE SEPARATOR
+    "\u2029": " ",  # PARAGRAPH SEPARATOR
+    # Emoji modifiers
+    "\ufe0f": "",  # VARIATION SELECTOR-16 (emoji modifier)
 }
 
 
 def normalize_text(text: str) -> str:
     """Normalize Unicode characters in text to ASCII equivalents.
 
-    Replaces common "smart" or "curly" quotes with standard ASCII quotes.
-    This ensures consistent text storage and display across systems.
+    Replaces common "smart" or "curly" quotes, dashes, and special whitespace
+    with standard ASCII equivalents. Also removes emoji modifiers for
+    consistent text storage and display across systems.
 
     Args:
         text: The input text to normalize.
 
     Returns:
-        Text with Unicode quotes replaced by ASCII equivalents.
+        Text with Unicode characters replaced by ASCII equivalents.
     """
     if not text:
         return text
 
-    for unicode_char, ascii_char in _QUOTE_REPLACEMENTS.items():
+    for unicode_char, ascii_char in _TEXT_REPLACEMENTS.items():
         text = text.replace(unicode_char, ascii_char)
 
     return text
@@ -227,23 +240,6 @@ def parse_bool_env(value: Optional[str], default: bool = False) -> bool:
 def should_cleanup_temp() -> bool:
     """Return False if DISABLE_TEMP_CLEANUP is set, True otherwise."""
     return not parse_bool_env(os.getenv("DISABLE_TEMP_CLEANUP", ""))
-
-
-# ============================================================================
-# Directory and File Utilities
-# ============================================================================
-
-
-def is_preprocessed_directory(input_dir: str) -> bool:
-    """Return True if directory contains metadata.json.
-
-    The metadata.json file is the canonical indicator of preprocessing.
-    Preprocessed directories contain only metadata.json with source_path
-    entries pointing to original media files (no media/ directory).
-    """
-    input_path = Path(input_dir)
-    metadata_file = input_path / "metadata.json"
-    return metadata_file.exists()
 
 
 def update_file_timestamps(

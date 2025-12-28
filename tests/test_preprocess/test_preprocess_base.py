@@ -63,6 +63,14 @@ class ConcretePreprocessor(PreprocessorBase):
     def get_content_key(self) -> str:
         return "media_files"
 
+    @staticmethod
+    def get_platform() -> str:
+        return "TestPlatform"
+
+    @staticmethod
+    def get_service() -> str:
+        return "test-service"
+
 
 class TestPreprocessorBaseInit:
     """Tests for PreprocessorBase initialization."""

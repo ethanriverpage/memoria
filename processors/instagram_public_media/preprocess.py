@@ -637,6 +637,16 @@ class InstagramPreprocessor(PreprocessorBase):
         """Return the content key for Instagram Public Media metadata."""
         return "media"
 
+    @staticmethod
+    def get_platform() -> str:
+        """Return the platform identifier for Instagram Public Media."""
+        return "Instagram"
+
+    @staticmethod
+    def get_service() -> str:
+        """Return the service identifier for Instagram Public Media."""
+        return "public-media"
+
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
         stats = {

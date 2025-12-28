@@ -10,7 +10,6 @@ into standardized metadata.json format with source_path entries.
 
 import json
 import logging
-import multiprocessing
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -36,7 +35,6 @@ from common.media.overlay import (
     OverlayProcessingError,
 )
 from common.processing import print_processing_summary
-from common.output.progress import PHASE_PROCESS, progress_bar
 from common.detection import detect_from_dirname
 from common.utils import (
     default_worker_count,
@@ -134,20 +132,11 @@ class SnapchatMemoriesProcessor(ProcessorBase):
             if _check_memories_structure(input_path):
                 return True
 
-            # Also detect preprocessed format (metadata.json with media_files key)
-            metadata_file = input_path / "metadata.json"
-            if metadata_file.exists():
-                try:
-                    with open(metadata_file, "r", encoding="utf-8") as f:
-                        metadata = json.load(f)
-                    if isinstance(metadata, dict) and "media_files" in metadata:
-                        # Check export_info for Snapchat indicator
-                        export_info = metadata.get("export_info", {})
-                        export_path = export_info.get("export_path", "")
-                        if "snapchat" in export_path.lower():
-                            return True
-                except (json.JSONDecodeError, KeyError):
-                    pass
+            # Also detect preprocessed format using platform/service markers
+            if ProcessorBase.is_preprocessed_for_platform(
+                input_path, platform="Snapchat", service="memories"
+            ):
+                return True
 
             return False
 
@@ -187,16 +176,13 @@ class SnapchatMemoriesProcessor(ProcessorBase):
         but this is NOT the same as our preprocessed format (dict with
         media_files containing source_path entries).
 
-        Uses check_preprocessed_source_path to correctly distinguish between
+        Uses strict metadata schema validation to correctly distinguish between
         raw and preprocessed formats.
         """
         input_path = Path(input_dir)
 
-        # Check if already preprocessed (has metadata.json with source_path entries)
-        media_files = ProcessorBase.check_preprocessed_source_path(
-            input_path, media_files_key="media_files"
-        )
-        if media_files is not None:
+        # Check if already preprocessed (validated metadata schema)
+        if SnapchatMemoriesProcessor.is_preprocessed_export_dir(input_path):
             return False
 
         # Check for raw export structure (supports both direct and consolidated)
@@ -789,15 +775,12 @@ def _process_preprocessed(
     # Phase 1: Create all files with overlays in parallel
     log.processing_start(str(output_dir))
 
-    with multiprocessing.Pool(processes=num_workers) as pool:
-        results = list(
-            progress_bar(
-                pool.imap(_create_memory_file, processing_tasks),
-                PHASE_PROCESS,
-                "Creating files",
-                total=len(processing_tasks),
-            )
-        )
+    results = SnapchatMemoriesProcessor.process_items_parallel(
+        tasks=processing_tasks,
+        worker_fn=_create_memory_file,
+        num_workers=num_workers,
+        description="Creating files",
+    )
 
     # Phase 2: Collect non-MKV files for batch EXIF processing
     def extract_non_mkv_info(r):
@@ -845,12 +828,22 @@ def _process_preprocessed(
 
     # Phase 3: Correct file extensions and batch process EXIF metadata
     logger.info("Batch processing EXIF metadata...")
+
+    # Build metadata lookup for failure tracking
+    file_info_map = {info[0]: info for info in collected.file_info}
+
+    def metadata_for_file(file_path: str) -> Optional[dict]:
+        info = file_info_map.get(file_path)
+        return info[1] if info else None  # info[1] is media_data
+
     _, _, exif_rebuilt_count = SnapchatMemoriesProcessor.finalize_files(
         collected.file_paths,
         collected.file_info,
         _build_metadata_requests,
         dedup_manifest,
         path_index=0,
+        failure_tracker=failure_tracker,
+        metadata_for_file=metadata_for_file,
     )
 
     # Handle failures

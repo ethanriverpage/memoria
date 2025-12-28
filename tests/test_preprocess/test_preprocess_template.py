@@ -62,6 +62,14 @@ class ValidPreprocessor(PreprocessorBase):
     def get_content_key(self) -> str:
         return "media_files"
 
+    @staticmethod
+    def get_platform() -> str:
+        return "TestPlatform"
+
+    @staticmethod
+    def get_service() -> str:
+        return "test-service"
+
 
 @pytest.fixture
 def preprocessor(tmp_path):
@@ -124,6 +132,14 @@ class TestTemplateEnforcement:
                 def print_statistics(self):
                     pass
 
+                @staticmethod
+                def get_platform():
+                    return "Test"
+
+                @staticmethod
+                def get_service():
+                    return None
+
     def test_invalid_content_key_raises_error_at_instantiation(self, tmp_path):
         """Preprocessor with invalid get_content_key() return value should fail."""
 
@@ -142,6 +158,14 @@ class TestTemplateEnforcement:
 
             def get_content_key(self):
                 return "invalid_key"  # Not in CONTENT_KEYS
+
+            @staticmethod
+            def get_platform():
+                return "Test"
+
+            @staticmethod
+            def get_service():
+                return None
 
         export_dir = tmp_path / "export"
         output_dir = tmp_path / "output"
@@ -171,6 +195,14 @@ class TestTemplateEnforcement:
 
                 def get_content_key(self):
                     return "media_files"
+
+                @staticmethod
+                def get_platform():
+                    return "Test"
+
+                @staticmethod
+                def get_service():
+                    return None
 
     def test_direct_context_merger_assignment_raises_error(self, preprocessor):
         """Direct assignment to _context_merger should raise TypeError."""

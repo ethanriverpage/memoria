@@ -3,7 +3,6 @@
 import json
 import logging
 import re
-from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -37,12 +36,10 @@ from common.media.overlay import (
 from common.processing import (
     print_processing_summary,
 )
-from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import (
     default_worker_count,
     FilenameGenerator,
     get_media_type,
-    is_preprocessed_directory,
     update_file_timestamps,
 )
 from common.output.logging import get_processor_logger
@@ -75,20 +72,10 @@ class SnapchatMessagesProcessor(ProcessorBase):
                         return True
 
                 # Check for preprocessed in messages/ subdirectory
-                metadata_file = messages_subdir / "metadata.json"
-                if metadata_file.exists():
-                    try:
-                        with open(metadata_file, "r", encoding="utf-8") as f:
-                            metadata = json.load(f)
-                        if isinstance(metadata, dict) and "conversations" in metadata:
-                            export_info = metadata.get("export_info", {})
-                            if (
-                                "export_username" in export_info
-                                or len(metadata.get("conversations", {})) > 0
-                            ):
-                                return True
-                    except (json.JSONDecodeError, KeyError):
-                        pass
+                if ProcessorBase.is_preprocessed_for_platform(
+                    messages_subdir, platform="Snapchat", service="messages"
+                ):
+                    return True
 
             # Check for direct structure (old format)
             # Check for raw export pattern
@@ -100,27 +87,11 @@ class SnapchatMessagesProcessor(ProcessorBase):
                 if chat_history.exists() and snap_history.exists():
                     return True
 
-            # Check for preprocessed pattern
-            metadata_file = input_path / "metadata.json"
-
-            if metadata_file.exists():
-                try:
-                    with open(metadata_file, "r", encoding="utf-8") as f:
-                        metadata = json.load(f)
-
-                    # Preprocessed Snapchat Messages has 'conversations' key
-                    if isinstance(metadata, dict) and "conversations" in metadata:
-                        # Also check it's not Snapchat Memories
-                        export_info = metadata.get("export_info", {})
-                        # Snapchat Messages should have export_username
-                        if (
-                            "export_username" in export_info
-                            or len(metadata.get("conversations", {})) > 0
-                        ):
-                            return True
-
-                except (json.JSONDecodeError, KeyError):
-                    pass
+            # Check for preprocessed pattern using platform/service markers
+            if ProcessorBase.is_preprocessed_for_platform(
+                input_path, platform="Snapchat", service="messages"
+            ):
+                return True
 
             return False
 
@@ -156,19 +127,33 @@ class SnapchatMessagesProcessor(ProcessorBase):
     def needs_preprocessing(input_dir: str) -> bool:
         """Check if Snapchat Messages export needs preprocessing."""
         # Check if already preprocessed
-        if is_preprocessed_directory(input_dir):
+        if SnapchatMessagesProcessor.is_preprocessed_export_dir(
+            Path(input_dir), container_key="conversations"
+        ):
             return False
 
         input_path = Path(input_dir)
-        # Check for raw export structure (chat_media/ directory)
-        chat_media_dir = input_path / "chat_media"
-        if chat_media_dir.exists():
+
+        # Check for raw export structure - must match detect() criteria
+        # Raw exports have json/chat_history.json + json/snap_history.json
+        def _has_raw_json_structure(base_path: Path) -> bool:
+            json_dir = base_path / "json"
+            if json_dir.exists() and json_dir.is_dir():
+                chat_history = json_dir / "chat_history.json"
+                snap_history = json_dir / "snap_history.json"
+                if chat_history.exists() and snap_history.exists():
+                    return True
+            return False
+
+        # Check direct structure
+        if _has_raw_json_structure(input_path):
             return True
 
-        # Check for consolidated export structure (messages/chat_media/)
-        consolidated_chat_media = input_path / "messages" / "chat_media"
-        if consolidated_chat_media.exists():
-            return True
+        # Check consolidated structure (messages/ subdirectory)
+        messages_subdir = input_path / "messages"
+        if messages_subdir.exists() and messages_subdir.is_dir():
+            if _has_raw_json_structure(messages_subdir):
+                return True
 
         return False
 
@@ -724,11 +709,14 @@ def process_logic(
     output_dir="processed_messages",
     workers=None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
-):
+) -> bool:
     """Core processing logic for Snapchat Messages exports.
 
     Expects input_dir to be preprocessed (via memoria.py preprocessing phase
     or by calling SnapchatMessagesProcessor.preprocess() directly).
+
+    Returns:
+        True if processing succeeded, False otherwise.
     """
     log_filename = None
 
@@ -736,18 +724,20 @@ def process_logic(
     input_dir = Path(input_dir)
     if not input_dir.exists():
         logger.error("Input directory not found: %s", short_path(input_dir))
-        return
+        return False
 
     # Check for required tools
     if not SnapchatMessagesProcessor.check_dependencies():
-        return
+        return False
 
     logger.info("Snapchat Messages Processor")
 
     output_dir = Path(output_dir)
 
     # Require preprocessed input
-    if not is_preprocessed_directory(str(input_dir)):
+    if not SnapchatMessagesProcessor.is_preprocessed_export_dir(
+        input_dir, container_key="conversations"
+    ):
         logger.error(
             "Input directory is not preprocessed: %s. "
             "Call preprocess() first or run via memoria.py.",
@@ -756,7 +746,7 @@ def process_logic(
         return False
 
     logger.info("Processing preprocessed directory: %s", short_path(input_dir))
-    _process_snapchat_working_directory(
+    return _process_snapchat_working_directory(
         input_dir, output_dir, workers, log_filename, dedup_manifest
     )
 
@@ -767,8 +757,12 @@ def _process_snapchat_working_directory(
     workers,
     log_filename,
     dedup_manifest: Optional[Dict[str, Any]] = None,
-):
-    """Process a working directory (preprocessed Snapchat Messages export)."""
+) -> bool:
+    """Process a working directory (preprocessed Snapchat Messages export).
+
+    Returns:
+        True if processing succeeded, False otherwise.
+    """
     # Ensure working_dir is a Path
     working_dir = Path(working_dir)
 
@@ -778,7 +772,7 @@ def _process_snapchat_working_directory(
     # Check for metadata file (should exist after preprocessing or if already preprocessed)
     if not metadata_file.exists():
         logger.error("Metadata file not found: %s", short_path(metadata_file))
-        return
+        return False
 
     # Load metadata
     logger.info("Loading metadata from %s...", short_path(metadata_file))
@@ -982,34 +976,22 @@ def _process_snapchat_working_directory(
             )
         )
 
-    # Process files in parallel
-    # Phase 1: Create all files with overlays in parallel
-    if num_workers > 1:
-        # Specify app modules for DEBUG level in workers
-        worker_app_modules = [
-            __name__,
-            "common.media.overlay",
-            "common.media.encoder",
-            "processors.snapchat_messages.preprocess",
-        ]
-        with Pool(
-            processes=num_workers,
-            initializer=init_worker_logging,
-            initargs=(log_filename, worker_app_modules),
-        ) as pool:
-            results = list(
-                progress_bar(
-                    pool.imap(_create_file_worker, process_args),
-                    PHASE_PROCESS,
-                    "Creating files",
-                    total=len(process_args),
-                )
-            )
-    else:
-        # Single-threaded for debugging
-        results = []
-        for args_tuple in progress_bar(process_args, PHASE_PROCESS, "Creating files"):
-            results.append(_create_file_worker(args_tuple))
+    # Process files in parallel (supports worker logging initializer)
+    # Specify app modules for DEBUG level in workers
+    worker_app_modules = [
+        __name__,
+        "common.media.overlay",
+        "common.media.encoder",
+        "processors.snapchat_messages.preprocess",
+    ]
+    results = SnapchatMessagesProcessor.process_items_parallel(
+        tasks=process_args,
+        worker_fn=_create_file_worker,
+        num_workers=num_workers,
+        description="Creating files",
+        initializer=init_worker_logging,
+        initargs=(log_filename, worker_app_modules),
+    )
 
     # Phase 2: Collect non-MKV files for batch EXIF processing
     # Result tuple: (success, output_path, is_mkv, message, exp_username, content_hash, original_filename)
@@ -1038,14 +1020,22 @@ def _process_snapchat_working_directory(
 
     # Phase 3: Correct file extensions and batch process EXIF metadata
     logger.info("Batch processing EXIF metadata...")
-    file_paths, file_info, exif_rebuilt_count = (
-        SnapchatMessagesProcessor.finalize_files(
-            collected.file_paths,
-            collected.file_info,
-            _build_metadata_requests,
-            dedup_manifest,
-            path_index=0,
-        )
+
+    # Build metadata lookup for failure tracking
+    file_info_map = {info[0]: info for info in collected.file_info}
+
+    def metadata_for_file(file_path: str) -> Optional[dict]:
+        info = file_info_map.get(file_path)
+        return info[1] if info else None  # info[1] is message
+
+    _, _, exif_rebuilt_count = SnapchatMessagesProcessor.finalize_files(
+        collected.file_paths,
+        collected.file_info,
+        _build_metadata_requests,
+        dedup_manifest,
+        path_index=0,
+        failure_tracker=failure_tracker,
+        metadata_for_file=metadata_for_file,
     )
 
     # Handle unmatched files via FailureTracker
@@ -1104,3 +1094,5 @@ def _process_snapchat_working_directory(
             )
     except Exception as e:
         logger.warning("Failed to materialize ambiguous cases: %s", e)
+
+    return True

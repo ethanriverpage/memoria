@@ -4,7 +4,6 @@
 import json
 import logging
 from datetime import datetime
-from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -28,7 +27,6 @@ from common.media.exiftool import (
 )
 from common.output.logging import get_processor_logger
 from common.processing import print_processing_summary
-from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import (
     ALL_MEDIA_EXTENSIONS,
     default_worker_count,
@@ -87,21 +85,21 @@ class ImazingProcessor(ProcessorBase):
                         if pattern.match(f.stem + f.suffix):
                             return True
 
-            # Check for preprocessed iMazing export
-            metadata_file = input_path / "metadata.json"
-
-            if metadata_file.exists():
-                try:
-                    with open(metadata_file, "r", encoding="utf-8") as f:
-                        metadata = json.load(f)
-
-                    # iMazing preprocessed exports have export_format: "imazing"
-                    if isinstance(metadata, dict) and "conversations" in metadata:
+            # Check for preprocessed iMazing export using platform/service markers
+            # Note: iMazing uses platform="iMessage" but has export_format="imazing"
+            if ProcessorBase.is_preprocessed_for_platform(
+                input_path, platform="iMessage", service=None
+            ):
+                metadata_file = input_path / "metadata.json"
+                if metadata_file.exists():
+                    try:
+                        with open(metadata_file, "r", encoding="utf-8") as f:
+                            metadata = json.load(f)
                         export_info = metadata.get("export_info", {})
                         if export_info.get("export_format") == "imazing":
                             return True
-                except (json.JSONDecodeError, KeyError):
-                    pass
+                    except Exception:
+                        pass
 
             return False
 
@@ -138,9 +136,13 @@ class ImazingProcessor(ProcessorBase):
         """Check if iMazing export needs preprocessing."""
         input_path = Path(input_dir)
 
-        # Check if already preprocessed (has metadata.json)
-        metadata_file = input_path / "metadata.json"
-        if metadata_file.exists():
+        # Check if already preprocessed (validated metadata schema)
+        if ImazingProcessor.is_preprocessed_export_dir(
+            input_path,
+            container_key="conversations",
+            metadata_validator=lambda m: m.get("export_info", {}).get("export_format")
+            == "imazing",
+        ):
             return False
 
         # Check for raw export structure (Device-Info.txt)
@@ -435,29 +437,6 @@ def _build_metadata_requests(
     return requests
 
 
-def is_preprocessed(input_path: Path) -> bool:
-    metadata_file = input_path / "metadata.json"
-
-    if not metadata_file.exists():
-        return False
-
-    # Verify it's an iMazing preprocessed export
-    try:
-        with open(metadata_file, "r", encoding="utf-8") as f:
-            metadata = json.load(f)
-
-        # Basic structure checks
-        if "conversations" not in metadata or "export_info" not in metadata:
-            return False
-        if metadata.get("export_info", {}).get("export_format") != "imazing":
-            return False
-
-        # Preprocessed format requires file_hashes (source_path-based)
-        return "file_hashes" in metadata
-    except (json.JSONDecodeError, KeyError):
-        return False
-
-
 def build_filename_index(metadata: dict) -> dict:
     """Build index mapping media filename to message metadata."""
     return ProcessorBase.build_media_filename_index(
@@ -558,216 +537,13 @@ def process_logic(
     messages_output_dir = output_path / "messages"
     messages_output_dir.mkdir(parents=True, exist_ok=True)
 
-    def _process_working_dir(working_dir: Path) -> bool:
-        # Load metadata
-        metadata_file = working_dir / "metadata.json"
-
-        if not metadata_file.exists():
-            log.file_not_found(str(metadata_file), "Metadata file")
-            return False
-
-        log.loading_metadata(short_path(metadata_file))
-        metadata = ImazingProcessor.load_metadata(
-            metadata_file,
-            validate=True,
-            require_source_paths=True,
-            processor_name="iMessage iMazing",
-        )
-
-        export_info = metadata.get("export_info", {})
-        export_username = export_info.get("export_username")
-        log.export_username(export_username)
-
-        # Initialize failure tracker for this export
-        failure_tracker = FailureTracker(
-            processor_name="iMazing",
-            export_directory=str(working_dir),
-        )
-
-        # Build filename index
-        filename_index = build_filename_index(metadata)
-        log.found_items(len(filename_index), "media files to process")
-
-        # Filter out secondary files based on dedup manifest (using hash-based lookup)
-        # Use cached file_hashes from preprocessing when available to avoid re-hashing
-        file_hashes = metadata.get("file_hashes", {})
-        skipped_secondary_files = []
-        skipped_dedup = 0
-
-        # Match files to messages and pre-generate filenames
-        log.generating_filenames()
-        filename_gen = FilenameGenerator(
-            "imessage",
-            export_username,
-            timestamp_format="%Y-%m-%d %H:%M:%S UTC",
-        )
-        matched_files = []
-        missing_source_path = 0
-        missing_path_examples: list[str] = []
-        missing_file_count = 0
-        missing_file_examples: list[str] = []
-
-        # Read source_path from metadata
-        for media_filename, message in filename_index.items():
-            # Get source path from source_paths dict (keyed by filename)
-            source_paths = message.get("source_paths", {})
-            source_path_str = source_paths.get(media_filename)
-            if not source_path_str:
-                missing_source_path += 1
-                if len(missing_path_examples) < 5:
-                    missing_path_examples.append(media_filename)
-                continue
-
-            source_path = Path(source_path_str)
-            if not source_path.exists():
-                missing_file_count += 1
-                if len(missing_file_examples) < 5:
-                    missing_file_examples.append(short_path(source_path))
-                continue
-
-            # Dedup filtering
-            content_hash = file_hashes.get(media_filename)
-            if ImazingProcessor.should_skip_for_dedup(
-                dedup_manifest, content_hash, "iMessage iMazing", source_path_str
-            ):
-                skipped_secondary_files.append(str(source_path))
-                skipped_dedup += 1
-                continue
-
-            file_ext = source_path.suffix.lower()
-            timestamp = _extract_message_timestamp(message)
-            canonical_ts = get_canonical_timestamp(
-                dedup_manifest, content_hash, timestamp
-            )
-            message["canonical_timestamp"] = canonical_ts
-            output_filename = filename_gen.generate(canonical_ts, file_ext)
-            matched_files.append((source_path, message, output_filename, content_hash))
-
-        if skipped_dedup > 0:
-            log.skipped_secondary(skipped_dedup)
-        if missing_source_path > 0:
-            log.logger.info(
-                "Missing source_path for %d files (e.g. %s)",
-                missing_source_path,
-                ", ".join(missing_path_examples),
-            )
-        if missing_file_count > 0:
-            log.logger.info(
-                "Source file not found for %d files (e.g. %s)",
-                missing_file_count,
-                ", ".join(missing_file_examples),
-            )
-
-        log.matched_files(len(matched_files))
-
-        # Check for no media files (export-level soft-fail)
-        if not matched_files:
-            log.logger.warning("No media files found to process.")
-            failure_tracker.add_export_failure(
-                reason="no_media_files",
-                error_details="No media files found in export to process",
-            )
-            failure_tracker.handle_failures(output_dir)
-            return False
-
-        # Process files
-        log.processing_start(str(messages_output_dir))
-
-        num_workers = workers if workers is not None else default_worker_count()
-        log.using_workers(num_workers)
-
-        # Prepare arguments (include content_hash and original_filename for EXIF)
-        process_args = [
-            (
-                media_file,
-                message,
-                export_username,
-                messages_output_dir,
-                output_filename,
-                content_hash,
-                media_file.name,  # original_filename
-            )
-            for media_file, message, output_filename, content_hash in matched_files
-        ]
-
-        # Phase 1: Copy and rename files
-        results = []
-        if num_workers > 1:
-            with Pool(processes=num_workers) as pool:
-                results = list(
-                    progress_bar(
-                        pool.imap(_process_file_worker, process_args),
-                        PHASE_PROCESS,
-                        "Copying files",
-                        total=len(process_args),
-                    )
-                )
-        else:
-            for args in progress_bar(process_args, PHASE_PROCESS, "Copying files"):
-                results.append(_process_file_worker(args))
-
-        # Collect successful files for EXIF processing
-        # Result tuple: (success, output_path, message, exp_username, content_hash, original_filename)
-        def extract_info(r):
-            return (
-                r[1],
-                r[2],
-                r[3],
-                r[4],
-                r[5],
-            )  # (output_path, message, exp_username, hash, original_filename)
-
-        collected = ImazingProcessor.collect_processing_results(results, extract_info)
-
-        log.copied_files(collected.success_count, collected.failed_count)
-
-        # Phase 2: Correct file extensions and batch process EXIF metadata
-        log.exif_batch_start()
-
-        # Build metadata lookup for failure tracking
-        file_info_map = {info[0]: info for info in collected.file_info}
-
-        def metadata_for_file(file_path: str) -> Optional[dict]:
-            info = file_info_map.get(file_path)
-            return info[1] if info else None  # info[1] is message
-
-        file_paths, file_info, exif_rebuilt_count = ImazingProcessor.finalize_files(
-            collected.file_paths,
-            collected.file_info,
-            _build_metadata_requests,
-            dedup_manifest,
-            path_index=0,
-            failure_tracker=failure_tracker,
-            metadata_for_file=metadata_for_file,
-        )
-        if file_paths:
-            log.exif_written(len(file_info))
-
-        # Handle failures - move failed outputs and generate report
-        failure_tracker.handle_failures(output_dir)
-
-        # Print summary using shared utility
-        print_processing_summary(
-            success=collected.success_count,
-            failed=collected.failed_count,
-            total=collected.success_count + collected.failed_count,
-            output_dir=str(messages_output_dir),
-            extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
-        )
-
-        # Save dedup references for skipped secondary files
-        if dedup_manifest and skipped_secondary_files:
-            save_dedup_metadata(
-                manifest=dedup_manifest,
-                skipped_files=skipped_secondary_files,
-                processor_name="iMessage-iMazing",
-                output_dir=messages_output_dir,
-            )
-
-        return True
-
     # Require preprocessed input
-    if not is_preprocessed(input_path):
+    if not ImazingProcessor.is_preprocessed_export_dir(
+        input_path,
+        container_key="conversations",
+        metadata_validator=lambda m: m.get("export_info", {}).get("export_format")
+        == "imazing",
+    ):
         log.logger.error(
             "Input directory is not preprocessed: %s. "
             "Call preprocess() first or run via memoria.py.",
@@ -776,4 +552,215 @@ def process_logic(
         return False
 
     log.using_preprocessed(str(input_path))
-    return _process_working_dir(input_path)
+    return _process_working_directory(
+        working_dir=input_path,
+        messages_output_dir=messages_output_dir,
+        output_path=output_path,
+        workers=workers,
+        dedup_manifest=dedup_manifest,
+    )
+
+
+def _process_working_directory(
+    working_dir: Path,
+    messages_output_dir: Path,
+    output_path: Path,
+    workers: Optional[int],
+    dedup_manifest: Optional[Dict[str, Any]] = None,
+) -> bool:
+    # Load metadata
+    metadata_file = working_dir / "metadata.json"
+
+    if not metadata_file.exists():
+        log.file_not_found(str(metadata_file), "Metadata file")
+        return False
+
+    log.loading_metadata(short_path(metadata_file))
+    metadata = ImazingProcessor.load_metadata(
+        metadata_file,
+        validate=True,
+        require_source_paths=True,
+        processor_name="iMessage iMazing",
+    )
+
+    export_info = metadata.get("export_info", {})
+    export_username = export_info.get("export_username")
+    log.export_username(export_username)
+
+    # Initialize failure tracker for this export
+    failure_tracker = FailureTracker(
+        processor_name="iMazing",
+        export_directory=str(working_dir),
+    )
+
+    # Build filename index
+    filename_index = build_filename_index(metadata)
+    log.found_items(len(filename_index), "media files to process")
+
+    # Filter out secondary files based on dedup manifest (using hash-based lookup)
+    # Use cached file_hashes from preprocessing when available to avoid re-hashing
+    file_hashes = metadata.get("file_hashes", {})
+    skipped_secondary_files = []
+    skipped_dedup = 0
+
+    # Match files to messages and pre-generate filenames
+    log.generating_filenames()
+    filename_gen = FilenameGenerator(
+        "imessage",
+        export_username,
+        timestamp_format="%Y-%m-%d %H:%M:%S UTC",
+    )
+    matched_files = []
+    missing_source_path = 0
+    missing_path_examples: list[str] = []
+    missing_file_count = 0
+    missing_file_examples: list[str] = []
+
+    # Read source_path from metadata
+    for media_filename, message in filename_index.items():
+        # Get source path from source_paths dict (keyed by filename)
+        source_paths = message.get("source_paths", {})
+        source_path_str = source_paths.get(media_filename)
+        if not source_path_str:
+            missing_source_path += 1
+            if len(missing_path_examples) < 5:
+                missing_path_examples.append(media_filename)
+            continue
+
+        source_path = Path(source_path_str)
+        if not source_path.exists():
+            missing_file_count += 1
+            if len(missing_file_examples) < 5:
+                missing_file_examples.append(short_path(source_path))
+            continue
+
+        # Dedup filtering
+        content_hash = file_hashes.get(media_filename)
+        if ImazingProcessor.should_skip_for_dedup(
+            dedup_manifest, content_hash, "iMessage iMazing", source_path_str
+        ):
+            skipped_secondary_files.append(str(source_path))
+            skipped_dedup += 1
+            continue
+
+        file_ext = source_path.suffix.lower()
+        timestamp = _extract_message_timestamp(message)
+        canonical_ts = get_canonical_timestamp(dedup_manifest, content_hash, timestamp)
+        message["canonical_timestamp"] = canonical_ts
+        output_filename = filename_gen.generate(canonical_ts, file_ext)
+        matched_files.append((source_path, message, output_filename, content_hash))
+
+    if skipped_dedup > 0:
+        log.skipped_secondary(skipped_dedup)
+    if missing_source_path > 0:
+        log.logger.info(
+            "Missing source_path for %d files (e.g. %s)",
+            missing_source_path,
+            ", ".join(missing_path_examples),
+        )
+    if missing_file_count > 0:
+        log.logger.info(
+            "Source file not found for %d files (e.g. %s)",
+            missing_file_count,
+            ", ".join(missing_file_examples),
+        )
+
+    log.matched_files(len(matched_files))
+
+    # Check for no media files (export-level soft-fail)
+    if not matched_files:
+        log.logger.warning("No media files found to process.")
+        failure_tracker.add_export_failure(
+            reason="no_media_files",
+            error_details="No media files found in export to process",
+        )
+        failure_tracker.handle_failures(output_path)
+        return False
+
+    # Process files
+    log.processing_start(str(messages_output_dir))
+
+    num_workers = workers if workers is not None else default_worker_count()
+    log.using_workers(num_workers)
+
+    # Prepare arguments (include content_hash and original_filename for EXIF)
+    process_args = [
+        (
+            media_file,
+            message,
+            export_username,
+            messages_output_dir,
+            output_filename,
+            content_hash,
+            media_file.name,  # original_filename
+        )
+        for media_file, message, output_filename, content_hash in matched_files
+    ]
+
+    # Phase 1: Copy and rename files
+    results = ImazingProcessor.process_items_parallel(
+        tasks=process_args,
+        worker_fn=_process_file_worker,
+        num_workers=num_workers,
+        description="Copying files",
+    )
+
+    # Collect successful files for EXIF processing
+    # Result tuple: (success, output_path, message, exp_username, content_hash, original_filename)
+    def extract_info(r):
+        return (
+            r[1],
+            r[2],
+            r[3],
+            r[4],
+            r[5],
+        )  # (output_path, message, exp_username, hash, original_filename)
+
+    collected = ImazingProcessor.collect_processing_results(results, extract_info)
+
+    log.copied_files(collected.success_count, collected.failed_count)
+
+    # Phase 2: Correct file extensions and batch process EXIF metadata
+    log.exif_batch_start()
+
+    # Build metadata lookup for failure tracking
+    file_info_map = {info[0]: info for info in collected.file_info}
+
+    def metadata_for_file(file_path: str) -> Optional[dict]:
+        info = file_info_map.get(file_path)
+        return info[1] if info else None  # info[1] is message
+
+    file_paths, file_info, exif_rebuilt_count = ImazingProcessor.finalize_files(
+        collected.file_paths,
+        collected.file_info,
+        _build_metadata_requests,
+        dedup_manifest,
+        path_index=0,
+        failure_tracker=failure_tracker,
+        metadata_for_file=metadata_for_file,
+    )
+    if file_paths:
+        log.exif_written(len(file_info))
+
+    # Handle failures - move failed outputs and generate report
+    failure_tracker.handle_failures(output_path)
+
+    # Print summary using shared utility
+    print_processing_summary(
+        success=collected.success_count,
+        failed=collected.failed_count,
+        total=collected.success_count + collected.failed_count,
+        output_dir=str(messages_output_dir),
+        extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
+    )
+
+    # Save dedup references for skipped secondary files
+    if dedup_manifest and skipped_secondary_files:
+        save_dedup_metadata(
+            manifest=dedup_manifest,
+            skipped_files=skipped_secondary_files,
+            processor_name="iMessage-iMazing",
+            output_dir=messages_output_dir,
+        )
+
+    return True

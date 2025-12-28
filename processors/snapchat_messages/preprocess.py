@@ -805,6 +805,16 @@ class SnapchatPreprocessor(PreprocessorBase):
         """Return the content key for Snapchat Messages metadata."""
         return "conversations"
 
+    @staticmethod
+    def get_platform() -> str:
+        """Return the platform identifier for Snapchat Messages."""
+        return "Snapchat"
+
+    @staticmethod
+    def get_service() -> str:
+        """Return the service identifier for Snapchat Messages."""
+        return "messages"
+
     def build_metadata_from_results(self, chat_history: Dict) -> Dict:
         """Build metadata from hash_with_dedup results."""
         # Get merged contexts from base class

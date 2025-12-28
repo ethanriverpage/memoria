@@ -21,7 +21,7 @@ from common.dedup.description import (
     PLATFORM_GOOGLE,
     SERVICE_CHAT,
 )
-from common.files.utils import batch_correct_extensions, copy_file, short_path
+from common.files.utils import short_path
 from common.media.exiftool import (
     DescriptionWriteSpec,
     MetadataWriteRequest,
@@ -36,11 +36,9 @@ from common.processing import (
 from common.utils import (
     default_worker_count,
     FilenameGenerator,
-    is_preprocessed_directory,
-    update_file_timestamps,
 )
 from common.output.paths import OutputInfo
-from processors.base import ProcessorBase
+from processors.base import MediaCopyTask, ProcessorBase
 from processors.google_chat.preprocess import GoogleChatPreprocessor
 
 # Standard logger for worker processes and exception logging
@@ -123,8 +121,10 @@ class GoogleChatProcessor(ProcessorBase):
         """Check if Google Chat export needs preprocessing."""
         input_path = Path(input_dir)
 
-        # Check if already preprocessed (has metadata.json)
-        if is_preprocessed_directory(input_dir):
+        # Check if already preprocessed (validated metadata schema)
+        if GoogleChatProcessor.is_preprocessed_export_dir(
+            input_path, container_key="conversations"
+        ):
             return False
 
         # Check for raw export structure (Google Chat/Groups/ or Users/)
@@ -297,116 +297,12 @@ def _build_metadata_requests(
     return requests
 
 
-def process_media_batch(batch_args):
-    """Process a batch of media files (worker function for multiprocessing)
-
-    Copies files, corrects extensions, and updates timestamps.
-    EXIF validation/rebuild and metadata writing happen in the main process.
-
-    Args:
-        batch_args: List of tuples, each containing (media_file, message_data,
-                    conversation_name, output_filename, media_dir, output_dir,
-                    export_username, content_hash, original_filename)
-
-    Returns:
-        List of (success, output_path, file_info_tuple) tuples where file_info_tuple is
-        (output_path, message_data, conversation_name, export_username, content_hash,
-        original_filename) or None on failure
-    """
-    results = []
-
-    # Phase 1: Copy all files
-    file_paths = []
-    file_info = []
-
-    for args_tuple in batch_args:
-        (
-            media_file,
-            message_data,
-            conversation_name,
-            output_filename,
-            media_dir,
-            output_dir,
-            export_username,
-            content_hash,
-            original_filename,
-        ) = args_tuple
-
-        media_path = os.path.join(media_dir, media_file)
-        output_path = os.path.join(output_dir, output_filename)
-
-        if not os.path.exists(media_path):
-            logger.warning("Media file not found: %s", short_path(media_path))
-            results.append((False, None, None))
-            continue
-
-        try:
-            copy_file(media_path, output_path)
-            file_paths.append(output_path)
-            file_info.append(
-                (
-                    output_path,
-                    message_data,
-                    conversation_name,
-                    export_username,
-                    content_hash,
-                    original_filename,
-                )
-            )
-        except Exception as e:
-            logger.error("Failed to copy %s: %s", media_file, e)
-            results.append((False, None, None))
-
-    if not file_paths:
-        return results if results else [(False, None, None)] * len(batch_args)
-
-    # Phase 2: Correct file extensions based on actual content
-    corrections = batch_correct_extensions([Path(p) for p in file_paths])
-    if corrections:
-        # Update file_paths and file_info with corrected paths
-        file_paths = [corrections.get(p, p) for p in file_paths]
-        file_info = [
-            (corrections.get(fp, fp), md, cn, eu, ch, of)
-            for fp, md, cn, eu, ch, of in file_info
-        ]
-
-    # Phase 3: Update timestamps and compile results
-    for (
-        output_path,
-        message_data,
-        conversation_name,
-        export_username,
-        content_hash,
-        original_filename,
-    ) in file_info:
-        # Google Chat uses format: "2016-08-23 16:27:32"
-        timestamp_str = message_data.get("timestamp")
-        if timestamp_str:
-            update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
-        results.append(
-            (
-                True,
-                output_path,
-                (
-                    output_path,
-                    message_data,
-                    conversation_name,
-                    export_username,
-                    content_hash,
-                    original_filename,
-                ),
-            )
-        )
-
-    return results
-
-
 def process_logic(
     input_dir,
     output_dir="final_googlechat",
     workers=None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
-):
+) -> bool:
     """Core processing logic for Google Chat exports.
 
     Expects input_dir to be preprocessed (via memoria.py preprocessing phase
@@ -417,15 +313,20 @@ def process_logic(
         output_dir: Output directory for processed files
         workers: Number of parallel workers (None = auto-detect)
         dedup_manifest: Optional deduplication manifest for filtering secondary files
+
+    Returns:
+        True if processing succeeded, False otherwise.
     """
     # Check for exiftool
     if not GoogleChatProcessor.check_dependencies():
-        return
+        return False
 
     log.processor_start("Google Chat Messages Media Processor")
 
     # Require preprocessed input
-    if not is_preprocessed_directory(input_dir):
+    if not GoogleChatProcessor.is_preprocessed_export_dir(
+        input_dir, container_key="conversations"
+    ):
         logger.error(
             "Input directory is not preprocessed: %s. "
             "Call preprocess() first or run via memoria.py.",
@@ -434,7 +335,7 @@ def process_logic(
         return False
 
     logger.info("Processing preprocessed directory: %s", short_path(input_dir))
-    _process_working_directory(input_dir, output_dir, workers, dedup_manifest)
+    return _process_working_directory(input_dir, output_dir, workers, dedup_manifest)
 
 
 def _process_working_directory(
@@ -442,7 +343,7 @@ def _process_working_directory(
     output_dir,
     workers,
     dedup_manifest: Optional[Dict[str, Any]] = None,
-):
+) -> bool:
     """Process a working directory (preprocessed export)
 
     Args:
@@ -450,6 +351,9 @@ def _process_working_directory(
         output_dir: Output directory for processed files
         workers: Number of parallel workers
         dedup_manifest: Optional deduplication manifest for filtering secondary files
+
+    Returns:
+        True if processing succeeded, False otherwise.
     """
     # Configuration
     metadata_file = os.path.join(working_dir, "metadata.json")
@@ -457,7 +361,7 @@ def _process_working_directory(
     # Check for metadata file (should exist after preprocessing or if already preprocessed)
     if not os.path.exists(metadata_file):
         logger.error("Metadata file not found: %s", short_path(metadata_file))
-        return
+        return False
 
     # Load metadata
     log.loading_metadata(short_path(metadata_file))
@@ -541,7 +445,6 @@ def _process_working_directory(
                         missing_examples.append(media_file)
                     continue
 
-                source_file_path = os.path.dirname(full_source_path)
                 source_file_name = os.path.basename(full_source_path)
 
                 if GoogleChatProcessor.should_skip_for_dedup(
@@ -566,18 +469,20 @@ def _process_working_directory(
                 # Get original filename for XMP:PreservedFileName embedding
                 original_filename = source_file_name
 
-                # Create task tuple for worker (include content_hash and original_filename)
+                # Create task for shared worker (include content_hash and original_filename)
                 processing_tasks.append(
-                    (
-                        source_file_name,
-                        message,
-                        conversation_name,
-                        output_filename,
-                        source_file_path,
-                        output_dir,
-                        export_username,
-                        content_hash,
-                        original_filename,
+                    MediaCopyTask(
+                        source_path=full_source_path,
+                        dest_path=os.path.join(output_dir, output_filename),
+                        info_rest=(
+                            message,
+                            conversation_name,
+                            export_username,
+                            content_hash,
+                            original_filename,
+                        ),
+                        timestamp_str=message.get("timestamp"),
+                        timestamp_format="%Y-%m-%d %H:%M:%S",
                     )
                 )
 
@@ -596,7 +501,7 @@ def _process_working_directory(
     # Use shared batch processing utility (copy files only)
     results = process_batches_parallel(
         tasks=processing_tasks,
-        worker_fn=process_media_batch,
+        worker_fn=ProcessorBase.process_media_copy_batch,
         num_workers=num_workers,
         batch_size=100,
         description="Copying files",
@@ -607,7 +512,7 @@ def _process_working_directory(
 
     log.copied_files(collected.success_count, collected.failed_count)
 
-    # Consolidated EXIF processing with failure tracking
+    # Correct file extensions and batch process EXIF metadata
     exif_rebuilt_count = 0
     if collected.file_paths:
         log.exif_batch_start()
@@ -619,30 +524,15 @@ def _process_working_directory(
             info = file_info_map.get(file_path)
             return info[1] if info else None  # info[1] is message
 
-        exif_rebuilt_count, write_outcome, missing_files = (
-            GoogleChatProcessor.batch_process_exif(
-                collected.file_paths,
-                collected.file_info,
-                _build_metadata_requests,
-                dedup_manifest,
-            )
+        _, _, exif_rebuilt_count = GoogleChatProcessor.finalize_files(
+            collected.file_paths,
+            collected.file_info,
+            _build_metadata_requests,
+            dedup_manifest,
+            path_index=0,
+            failure_tracker=failure_tracker,
+            metadata_for_file=metadata_for_file,
         )
-
-        # Track EXIF failures
-        for missing_path in missing_files:
-            failure_tracker.add_processing_failure(
-                media_path=Path(missing_path),
-                metadata=metadata_for_file(missing_path),
-                reason="exif_target_missing",
-                error_details=f"Output file missing at EXIF write time: {missing_path}",
-            )
-        for failure in write_outcome.failures:
-            failure_tracker.add_processing_failure(
-                media_path=Path(failure.file_path),
-                metadata=metadata_for_file(failure.file_path),
-                reason=failure.reason_code,
-                error_details=failure.stderr_excerpt or "",
-            )
 
         log.exif_written(len(collected.file_info))
 
@@ -666,3 +556,5 @@ def _process_working_directory(
         output_dir=output_dir,
         extra_stats={"EXIF structures rebuilt": exif_rebuilt_count},
     )
+
+    return True

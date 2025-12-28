@@ -295,13 +295,21 @@ class TestImazingDetection:
 
     def test_detects_preprocessed_export(self, imazing_export_dir):
         """Should detect preprocessed iMazing export."""
-        # Create preprocessed structure
+        # Create preprocessed structure with required schema fields
         media_dir = imazing_export_dir / "media"
         media_dir.mkdir()
 
         metadata = {
-            "export_info": {"export_format": "imazing"},
+            "export_info": {
+                "export_path": str(imazing_export_dir),
+                "export_username": "testuser",
+                "processed_date": "2021-01-01T00:00:00",
+                "platform": "iMessage",
+                "service": None,
+                "export_format": "imazing",
+            },
             "conversations": {},
+            "file_hashes": {},
         }
         (imazing_export_dir / "metadata.json").write_text(json.dumps(metadata))
 
@@ -323,51 +331,75 @@ class TestImazingDetection:
 class TestImazingPreprocessed:
     """Tests for preprocessed iMazing export handling."""
 
+    def _is_preprocessed_imazing(self, path):
+        """Check if path is a preprocessed iMazing export."""
+        from processors.imessage_imazing.processor import ImazingProcessor
+
+        return ImazingProcessor.is_preprocessed_export_dir(
+            path,
+            container_key="conversations",
+            metadata_validator=lambda m: m.get("export_info", {}).get("export_format")
+            == "imazing",
+        )
+
     def test_is_preprocessed_true(self, imazing_export_dir):
         """Should identify preprocessed export correctly."""
-        from processors.imessage_imazing.processor import is_preprocessed
-
         metadata = {
-            "export_info": {"export_format": "imazing"},
+            "export_info": {
+                "export_path": str(imazing_export_dir),
+                "export_username": "testuser",
+                "processed_date": "2021-01-01T00:00:00",
+                "platform": "iMessage",
+                "service": None,
+                "export_format": "imazing",
+            },
             "conversations": {},
             "file_hashes": {},  # Required for hash-only preprocessing
         }
         (imazing_export_dir / "metadata.json").write_text(json.dumps(metadata))
 
-        assert is_preprocessed(imazing_export_dir) is True
+        assert self._is_preprocessed_imazing(imazing_export_dir) is True
 
     def test_is_preprocessed_false_missing_file_hashes(self, imazing_export_dir):
         """Should reject if file_hashes is missing."""
-        from processors.imessage_imazing.processor import is_preprocessed
-
         metadata = {
-            "export_info": {"export_format": "imazing"},
+            "export_info": {
+                "export_path": str(imazing_export_dir),
+                "export_username": "testuser",
+                "processed_date": "2021-01-01T00:00:00",
+                "export_format": "imazing",
+            },
             "conversations": {},
         }
         (imazing_export_dir / "metadata.json").write_text(json.dumps(metadata))
 
-        assert is_preprocessed(imazing_export_dir) is False
+        # Schema validation will fail without file_hashes
+        assert self._is_preprocessed_imazing(imazing_export_dir) is False
 
     def test_is_preprocessed_false_missing_metadata(self, imazing_export_dir):
         """Should reject if metadata.json is missing."""
-        from processors.imessage_imazing.processor import is_preprocessed
-
-        assert is_preprocessed(imazing_export_dir) is False
+        assert self._is_preprocessed_imazing(imazing_export_dir) is False
 
     def test_is_preprocessed_false_wrong_format(self, imazing_export_dir):
         """Should reject if export_format is not 'imazing'."""
-        from processors.imessage_imazing.processor import is_preprocessed
-
         media_dir = imazing_export_dir / "media"
         media_dir.mkdir()
 
         metadata = {
-            "export_info": {"export_format": "other"},
+            "export_info": {
+                "export_path": str(imazing_export_dir),
+                "export_username": "testuser",
+                "processed_date": "2021-01-01T00:00:00",
+                "platform": "iMessage",
+                "service": None,
+                "export_format": "other",
+            },
             "conversations": {},
+            "file_hashes": {},
         }
         (imazing_export_dir / "metadata.json").write_text(json.dumps(metadata))
 
-        assert is_preprocessed(imazing_export_dir) is False
+        assert self._is_preprocessed_imazing(imazing_export_dir) is False
 
 
 class TestImazingDescriptionBuilder:

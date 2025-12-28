@@ -260,31 +260,12 @@ Or, in some scrapes, JSON metadata may be compressed:
 ```
 instaloader-username/
 ├── 2023-01-15_10-30-45_UTC.jpg
-├── 2023-01-15_10-30-45_UTC.json.xz    # Compressed JSON metadata
+├── 2023-01-15_10-30-45_UTC.json.xz    # Compressed JSON metadata (automatically handled)
 ├── 2023-01-15_10-30-45_UTC.txt
 └── ...
 ```
 
-### Important: Extracting Compressed JSON Files
-
-If your Instaloader data contains `.json.xz` files, you must extract them before processing:
-
-**Linux/macOS:**
-
-```bash
-cd instaloader-username
-xz -d *.json.xz
-```
-
-**Windows:**
-Download and install 7-Zip, then:
-
-```powershell
-cd instaloader-username
-7z e *.json.xz
-```
-
-This limitation will be addressed in a future update to automatically extract compressed files during preprocessing.
+Both `.json` and `.json.xz` files are automatically processed during preprocessing.
 
 ### What Gets Processed
 
@@ -293,7 +274,7 @@ This limitation will be addressed in a future update to automatically extract co
   - Post caption
   - Post date
   - Location
-- Metadata from paired `.json` files (if available) including:
+- Metadata from paired `.json` or `.json.xz` files (if available) including:
   - More detailed caption information
   - Precise timestamp
   - Media type

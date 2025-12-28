@@ -6,7 +6,6 @@ It handles renaming Instagram media files, embedding metadata, and updating file
 """
 
 import logging
-import multiprocessing
 import os
 import re
 from pathlib import Path
@@ -25,26 +24,21 @@ from common.dedup.description import (
     SERVICE_POSTS,
     SERVICE_REELS,
 )
-from common.files.utils import batch_correct_extensions, copy_file, short_path
+from common.files.utils import short_path
 from common.media.exiftool import (
     DescriptionWriteSpec,
     MetadataWriteRequest,
     PREAMBLE_WITH_IGNORE_ERRORS,
     build_datetime_tags,
 )
-from common.processing import (
-    print_processing_summary,
-)
-from common.output.progress import PHASE_PROCESS, progress_bar
+from common.processing import print_processing_summary
 from common.detection import detect_from_dirname
 from common.utils import (
     FilenameGenerator,
-    is_preprocessed_directory,
-    update_file_timestamps,
 )
 from common.output.logging import get_processor_logger
 from common.output.paths import OutputInfo
-from processors.base import ProcessorBase
+from processors.base import MediaCopyTask, ProcessorBase
 from processors.instagram_public_media.preprocess import InstagramPreprocessor
 
 # Standard logger for worker processes and exception logging
@@ -140,7 +134,9 @@ class InstagramPublicMediaProcessor(ProcessorBase):
     def needs_preprocessing(input_dir: str) -> bool:
         """Check if Instagram Public Media export needs preprocessing."""
         # Check if already preprocessed
-        if is_preprocessed_directory(input_dir):
+        if InstagramPublicMediaProcessor.is_preprocessed_export_dir(
+            Path(input_dir), media_files_key="media"
+        ):
             return False
 
         input_path = Path(input_dir)
@@ -327,100 +323,12 @@ def _build_metadata_requests(
     return requests
 
 
-def process_media_batch(batch_args):
-    """Process a batch of media files (worker function for multiprocessing)
-
-    Copies files, corrects extensions, and updates timestamps.
-    EXIF validation/rebuild and metadata writing happen in the main process.
-
-    Args:
-        batch_args: List of tuples, each containing (media_file, post_data,
-                    output_filename, media_dir, output_dir, export_username,
-                    media_type, content_hash, original_filename)
-
-    Returns:
-        List of (success, output_path, file_info_tuple) tuples where file_info_tuple is
-        (output_path, post_data, export_username, media_type, content_hash, original_filename)
-        or None on failure
-    """
-    results = []
-
-    # Phase 1: Copy all files
-    file_paths = []
-    file_info = []
-
-    for args_tuple in batch_args:
-        (
-            media_file,
-            post_data,
-            output_filename,
-            media_dir,
-            output_dir,
-            export_username,
-            media_type,
-            content_hash,
-            original_filename,
-        ) = args_tuple
-
-        media_path = os.path.join(media_dir, media_file)
-        media_type_dir = os.path.join(output_dir, media_type)
-        output_path = os.path.join(media_type_dir, output_filename)
-
-        if not os.path.exists(media_path):
-            logger.warning("Media file not found: %s", short_path(media_path))
-            results.append((False, None, None))
-            continue
-
-        try:
-            copy_file(media_path, output_path)
-            file_paths.append(output_path)
-            file_info.append(
-                (output_path, post_data, export_username, media_type, content_hash, original_filename)
-            )
-        except Exception as e:
-            logger.error("Failed to copy %s: %s", media_file, e)
-            results.append((False, None, None))
-
-    if not file_paths:
-        return results if results else [(False, None, None)] * len(batch_args)
-
-    # Phase 2: Correct file extensions based on actual content
-    corrections = batch_correct_extensions([Path(p) for p in file_paths])
-    if corrections:
-        # Update file_paths and file_info with corrected paths
-        file_paths = [corrections.get(p, p) for p in file_paths]
-        file_info = [
-            (corrections.get(fp, fp), pd, eu, mt, ch, of)
-            for fp, pd, eu, mt, ch, of in file_info
-        ]
-
-    # Phase 3: Update timestamps and compile results
-    for (
-        output_path,
-        post_data,
-        export_username,
-        media_type,
-        content_hash,
-        original_filename,
-    ) in file_info:
-        update_file_timestamps(output_path, post_data.get("timestamp"))
-        results.append(
-            (
-                True,
-                output_path,
-                (output_path, post_data, export_username, media_type, content_hash, original_filename),
-            )
-        )
-
-    return results
-
-
 def process_logic(
     input_dir,
     output_dir="final_media",
     workers=None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
-):
+) -> bool:
     """Core processing logic for Instagram Public Media exports.
 
     Expects input_dir to be preprocessed (via memoria.py preprocessing phase
@@ -431,15 +339,20 @@ def process_logic(
         output_dir: Output directory for processed files
         workers: Number of parallel workers (None = auto-detect)
         dedup_manifest: Optional deduplication manifest for filtering secondary files
+
+    Returns:
+        True if processing succeeded, False otherwise.
     """
     # Check for exiftool
     if not InstagramPublicMediaProcessor.check_dependencies():
-        return
+        return False
 
     log.processor_start("Instagram Media Processor")
 
     # Require preprocessed input
-    if not is_preprocessed_directory(input_dir):
+    if not InstagramPublicMediaProcessor.is_preprocessed_export_dir(
+        input_dir, media_files_key="media"
+    ):
         logger.error(
             "Input directory is not preprocessed: %s. "
             "Call preprocess() first or run via memoria.py.",
@@ -448,7 +361,7 @@ def process_logic(
         return False
 
     logger.info("Processing preprocessed directory: %s", short_path(input_dir))
-    _process_working_directory(input_dir, output_dir, workers, dedup_manifest)
+    return _process_working_directory(input_dir, output_dir, workers, dedup_manifest)
 
 
 def _process_working_directory(
@@ -456,7 +369,7 @@ def _process_working_directory(
     output_dir,
     workers,
     dedup_manifest: Optional[Dict[str, Any]] = None,
-):
+) -> bool:
     """Process a working directory (preprocessed export)
 
     Args:
@@ -464,6 +377,9 @@ def _process_working_directory(
         output_dir: Output directory for processed files
         workers: Number of parallel workers
         dedup_manifest: Optional deduplication manifest for filtering secondary files
+
+    Returns:
+        True if processing succeeded, False otherwise.
     """
     # Configuration
     metadata_file = os.path.join(working_dir, "metadata.json")
@@ -471,7 +387,7 @@ def _process_working_directory(
     # Check for metadata file (should exist after preprocessing or if already preprocessed)
     if not os.path.exists(metadata_file):
         logger.error("Metadata file not found: %s", short_path(metadata_file))
-        return
+        return False
 
     # Load metadata
     logger.info("Loading metadata from %s...", short_path(metadata_file))
@@ -568,18 +484,19 @@ def _process_working_directory(
             # Get original filename for XMP:PreservedFileName embedding
             original_filename = source_file_name
 
-            # Create task tuple for worker (include content_hash and original_filename)
+            # Create task for shared worker (include content_hash and original_filename)
             processing_tasks.append(
-                (
-                    source_file_name,
-                    post,
-                    output_filename,
-                    source_file_path,
-                    output_dir,
-                    export_username,
-                    media_type,
-                    content_hash,
-                    original_filename,
+                MediaCopyTask(
+                    source_path=full_source_path,
+                    dest_path=os.path.join(output_dir, media_type, output_filename),
+                    info_rest=(
+                        post,
+                        export_username,
+                        media_type,
+                        content_hash,
+                        original_filename,
+                    ),
+                    timestamp_str=post.get("timestamp"),
                 )
             )
 
@@ -610,31 +527,21 @@ def _process_working_directory(
         failure_tracker.handle_failures(Path(output_dir))
         return False
 
-    # Group tasks into batches of 100 files each
-    batch_size = 100
-    batched_tasks = []
-    for i in range(0, len(processing_tasks), batch_size):
-        batched_tasks.append(processing_tasks[i : i + batch_size])
-
-    # Process batches in parallel (copy files only)
-    with multiprocessing.Pool(processes=num_workers) as pool:
-        batch_results = list(
-            progress_bar(
-                pool.imap(process_media_batch, batched_tasks),
-                PHASE_PROCESS,
-                "Copying files",
-                total=len(batched_tasks),
-            )
-        )
-
-    # Flatten results and collect successful files for EXIF processing
-    collected = InstagramPublicMediaProcessor.collect_batch_processing_results(
-        batch_results
+    # Use shared batch processing utility (copy files only)
+    results = process_batches_parallel(
+        tasks=processing_tasks,
+        worker_fn=ProcessorBase.process_media_copy_batch,
+        num_workers=num_workers,
+        batch_size=100,
+        description="Copying files",
     )
+
+    # Collect successful files for EXIF processing
+    collected = InstagramPublicMediaProcessor.collect_processing_results(results)
 
     log.copied_files(collected.success_count, collected.failed_count)
 
-    # Consolidated EXIF processing
+    # Correct file extensions and batch process EXIF metadata
     exif_rebuilt_count = 0
     if collected.file_paths:
         log.exif_batch_start()
@@ -646,30 +553,15 @@ def _process_working_directory(
             info = file_info_map.get(file_path)
             return info[1] if info else None  # info[1] is post_data
 
-        exif_rebuilt_count, write_outcome, missing_files = (
-            InstagramPublicMediaProcessor.batch_process_exif(
-                collected.file_paths,
-                collected.file_info,
-                _build_metadata_requests,
-                dedup_manifest,
-            )
+        _, _, exif_rebuilt_count = InstagramPublicMediaProcessor.finalize_files(
+            collected.file_paths,
+            collected.file_info,
+            _build_metadata_requests,
+            dedup_manifest,
+            path_index=0,
+            failure_tracker=failure_tracker,
+            metadata_for_file=metadata_for_file,
         )
-
-        # Track EXIF failures
-        for missing_path in missing_files:
-            failure_tracker.add_processing_failure(
-                media_path=Path(missing_path),
-                metadata=metadata_for_file(missing_path),
-                reason="exif_target_missing",
-                error_details=f"Output file missing at EXIF write time: {missing_path}",
-            )
-        for failure in write_outcome.failures:
-            failure_tracker.add_processing_failure(
-                media_path=Path(failure.file_path),
-                metadata=metadata_for_file(failure.file_path),
-                reason=failure.reason_code,
-                error_details=failure.stderr_excerpt or "",
-            )
 
         log.exif_written(len(collected.file_info))
 
@@ -696,3 +588,5 @@ def _process_working_directory(
             "Media type subfolders": len(media_types_set),
         },
     )
+
+    return True

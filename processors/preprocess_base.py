@@ -199,6 +199,8 @@ class PreprocessorBase(ABC):
             "process_export",
             "print_statistics",
             "get_content_key",
+            "get_platform",
+            "get_service",
         }
     )
 
@@ -995,6 +997,34 @@ class PreprocessorBase(ABC):
             Content key string (one of CONTENT_KEYS)
         """
 
+    @staticmethod
+    @abstractmethod
+    def get_platform() -> str:
+        """Return the platform identifier for this preprocessor.
+
+        This is used to disambiguate preprocessed directories from different
+        platforms that may share similar structures (e.g., 'conversations' key).
+
+        Examples: "Snapchat", "Discord", "iMessage", "Google", "Instagram"
+
+        Returns:
+            Platform identifier string
+        """
+
+    @staticmethod
+    @abstractmethod
+    def get_service() -> Optional[str]:
+        """Return the service identifier for this preprocessor.
+
+        For platforms with multiple services (e.g., Snapchat Memories vs Messages),
+        this distinguishes between them. For single-service platforms, return None.
+
+        Examples: "messages", "memories", "photos", "chat", None
+
+        Returns:
+            Service identifier string, or None for single-service platforms
+        """
+
     def add_unmatched_media(
         self,
         filename: str,
@@ -1050,6 +1080,9 @@ class PreprocessorBase(ABC):
         Uses the cached detection result from ensure_detection_result().
         If detection hasn't been performed yet, this will trigger it.
 
+        Includes platform and service fields for unambiguous processor detection
+        of preprocessed directories.
+
         Args:
             extra_fields: Processor-specific fields to add
 
@@ -1067,6 +1100,9 @@ class PreprocessorBase(ABC):
             "export_username": detection_result.username,
             "username_source": detection_result.source,
             "processed_date": datetime.now().isoformat(),
+            # Platform/service markers for unambiguous detection
+            "platform": self.get_platform(),
+            "service": self.get_service(),
         }
 
         if extra_fields:

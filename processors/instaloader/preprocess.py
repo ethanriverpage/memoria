@@ -14,6 +14,7 @@ Note: This is NOT an official Instagram export format - it handles scrape data f
 
 import json
 import logging
+import lzma
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -24,7 +25,7 @@ from common.processing import print_preprocessing_stats, process_parallel_thread
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
 from common.files.scanner import iter_files
 from common.output.logging import get_processor_logger
-from common.utils import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+from common.utils import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, normalize_text
 from processors.preprocess_base import CopyTask, PreprocessorBase
 
 # Standard logger for worker processes and exception logging
@@ -69,38 +70,6 @@ class InstaloaderPreprocessor(PreprocessorBase):
             }
         )
 
-    def normalize_text(self, text: str) -> str:
-        """
-        Normalize Unicode characters in text to ASCII equivalents
-        Replaces smart quotes and other Unicode punctuation with standard ASCII
-        """
-        if not text:
-            return text
-
-        # Replace Unicode apostrophes and quotes with ASCII equivalents
-        replacements = {
-            "\u2018": "'",  # Left single quotation mark
-            "\u2019": "'",  # Right single quotation mark (curly apostrophe)
-            "\u201a": "'",  # Single low-9 quotation mark
-            "\u201b": "'",  # Single high-reversed-9 quotation mark
-            "\u201c": '"',  # Left double quotation mark
-            "\u201d": '"',  # Right double quotation mark
-            "\u201e": '"',  # Double low-9 quotation mark
-            "\u201f": '"',  # Double high-reversed-9 quotation mark
-            "\u2032": "'",  # Prime
-            "\u2033": '"',  # Double prime
-            "\u2013": "--",  # En dash
-            "\u2014": "--",  # Em dash
-            "\u2028": " ",  # Line Separator
-            "\u2029": " ",  # Paragraph Separator
-            "\ufe0f": "",  # Variation Selector-16 (emoji modifier)
-        }
-
-        for unicode_char, ascii_char in replacements.items():
-            text = text.replace(unicode_char, ascii_char)
-
-        return text
-
     def validate_export(self) -> bool:
         """Validate that export directory exists and contains media files."""
         if not self.require_exists(self.export_path, label="Export path"):
@@ -138,7 +107,6 @@ class InstaloaderPreprocessor(PreprocessorBase):
         Returns:
             DetectionResult with username and source
         """
-        import lzma
 
         def detect_from_json_metadata(path: Path) -> Optional[str]:
             """Extract username from Instaloader JSON metadata."""
@@ -274,12 +242,19 @@ class InstaloaderPreprocessor(PreprocessorBase):
                     }
                 catalog[base_name]["txt"] = file_path
 
-            # Handle .json files (skip _comments.json)
-            elif suffix == ".json":
-                if filename.endswith("_comments.json"):
+            # Handle .json and .json.xz files (skip _comments.json)
+            elif suffix == ".json" or (
+                suffix == ".xz" and filename.endswith(".json.xz")
+            ):
+                if "_comments.json" in filename:
                     continue  # Skip comments metadata
 
-                base_name = file_path.stem
+                # For .json.xz, we need to strip both suffixes to get base_name
+                if suffix == ".xz":
+                    base_name = Path(file_path.stem).stem  # Remove .xz then .json
+                else:
+                    base_name = file_path.stem
+
                 if base_name not in catalog:
                     catalog[base_name] = {
                         "media_files": [],
@@ -300,8 +275,13 @@ class InstaloaderPreprocessor(PreprocessorBase):
                 metadata_content = {}
                 if entry["json"]:
                     try:
-                        with open(entry["json"], "r", encoding="utf-8") as f:
-                            metadata_content = json.load(f)
+                        json_path = entry["json"]
+                        if json_path.suffix == ".xz":
+                            with lzma.open(json_path, "rt", encoding="utf-8") as f:
+                                metadata_content = json.load(f)
+                        else:
+                            with open(json_path, "r", encoding="utf-8") as f:
+                                metadata_content = json.load(f)
                     except Exception:
                         metadata_content = {"base_name": base_name}
 
@@ -333,7 +313,7 @@ class InstaloaderPreprocessor(PreprocessorBase):
         try:
             with open(txt_path, "r", encoding="utf-8") as f:
                 caption = f.read().strip()
-            return self.normalize_text(caption)
+            return normalize_text(caption)
         except Exception as e:
             self.log_message(
                 "TXT_READ_ERROR",
@@ -344,7 +324,7 @@ class InstaloaderPreprocessor(PreprocessorBase):
 
     def extract_metadata_from_json(self, json_path: Path) -> Dict:
         """
-        Extract metadata from .json file
+        Extract metadata from .json or .json.xz file
         Returns dict with: caption, timestamp, timestamp_raw, media_type
         """
         metadata = {
@@ -355,8 +335,13 @@ class InstaloaderPreprocessor(PreprocessorBase):
         }
 
         try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            # Handle compressed .json.xz files
+            if json_path.suffix == ".xz":
+                with lzma.open(json_path, "rt", encoding="utf-8") as f:
+                    data = json.load(f)
+            else:
+                with open(json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
 
             # Extract data from nested structure
             node = data.get("node", {})
@@ -365,7 +350,7 @@ class InstaloaderPreprocessor(PreprocessorBase):
             caption_edges = node.get("edge_media_to_caption", {}).get("edges", [])
             if caption_edges and len(caption_edges) > 0:
                 caption_text = caption_edges[0].get("node", {}).get("text", "")
-                metadata["caption"] = self.normalize_text(caption_text)
+                metadata["caption"] = normalize_text(caption_text)
 
             # Extract timestamp
             timestamp_raw = node.get("taken_at_timestamp")
@@ -586,6 +571,16 @@ class InstaloaderPreprocessor(PreprocessorBase):
     def get_content_key(self) -> str:
         """Return the content key for Instaloader metadata."""
         return "media"
+
+    @staticmethod
+    def get_platform() -> str:
+        """Return the platform identifier for Instaloader."""
+        return "Instagram"
+
+    @staticmethod
+    def get_service() -> str:
+        """Return the service identifier for Instaloader."""
+        return "posts"
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""

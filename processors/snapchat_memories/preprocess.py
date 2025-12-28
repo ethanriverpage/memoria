@@ -11,7 +11,6 @@ Preprocesses Snapchat Memories exports with hash-only deduplication:
 
 import json
 import logging
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -164,6 +163,8 @@ class SnapchatMemoriesPreprocessor(PreprocessorBase):
 
         # From directory name using regex
         # Pattern: snapchat-{username}-YYYY-MM-DD or snapchat-{username}-YYYYMMDD
+        import re
+
         dir_name = self.export_path.name
         match = re.match(r"snapchat-(.+?)-\d{4}-?\d{2}-?\d{2}", dir_name)
         if match:
@@ -174,6 +175,16 @@ class SnapchatMemoriesPreprocessor(PreprocessorBase):
     def get_content_key(self) -> str:
         """Return the content key for Snapchat Memories metadata."""
         return "media_files"
+
+    @staticmethod
+    def get_platform() -> str:
+        """Return the platform identifier for Snapchat Memories."""
+        return "Snapchat"
+
+    @staticmethod
+    def get_service() -> str:
+        """Return the service identifier for Snapchat Memories."""
+        return "memories"
 
     def load_raw_metadata(self) -> Optional[List[Dict[str, Any]]]:
         """Load and parse Snapchat's raw metadata.json (list format).

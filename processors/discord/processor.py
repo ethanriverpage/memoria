@@ -9,7 +9,6 @@ and metadata embedding for media files.
 import json
 import logging
 import re
-from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -32,12 +31,10 @@ from common.media.exiftool import (
 )
 from common.output.logging import get_processor_logger
 from common.processing import print_processing_summary
-from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import (
     default_worker_count,
     FilenameGenerator,
     get_media_type,
-    is_preprocessed_directory,
     update_file_timestamps,
 )
 from common.files.utils import short_path
@@ -72,35 +69,11 @@ class DiscordProcessor(ProcessorBase):
                     if channel_folders:
                         return True
 
-            # Check for preprocessed Discord export
-            metadata_file = input_path / "metadata.json"
-
-            if metadata_file.exists():
-                try:
-                    with open(metadata_file, "r", encoding="utf-8") as f:
-                        metadata = json.load(f)
-
-                    # Discord preprocessed format has conversations dict
-                    if isinstance(metadata, dict) and "conversations" in metadata:
-                        export_info = metadata.get("export_info", {})
-                        # Check for Discord-specific indicators
-                        if (
-                            "downloads_successful" in export_info
-                            or "downloads_failed" in export_info
-                        ):
-                            return True
-                        # Check for Discord-style conversation structure
-                        conversations = metadata.get("conversations", {})
-                        if conversations:
-                            # Check first conversation for Discord-specific fields
-                            first_conv = next(iter(conversations.values()), {})
-                            if "guild_name" in first_conv or "original_urls" in str(
-                                first_conv
-                            ):
-                                return True
-
-                except (json.JSONDecodeError, KeyError):
-                    pass
+            # Check for preprocessed Discord export using platform/service markers
+            if ProcessorBase.is_preprocessed_for_platform(
+                input_path, platform="Discord", service=None
+            ):
+                return True
 
             return False
 
@@ -133,8 +106,10 @@ class DiscordProcessor(ProcessorBase):
         """Check if Discord export needs preprocessing."""
         input_path = Path(input_dir)
 
-        # Check if already preprocessed (has metadata.json)
-        if is_preprocessed_directory(input_dir):
+        # Check if already preprocessed (validated metadata schema)
+        if DiscordProcessor.is_preprocessed_export_dir(
+            input_path, container_key="conversations"
+        ):
             return False
 
         # Check for raw export structure (Messages/ directory)
@@ -402,37 +377,42 @@ def process_logic(
     output_dir: str = "processed_discord",
     workers: Optional[int] = None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
-):
+) -> bool:
     """Core processing logic for Discord exports.
 
     Expects input_dir to be preprocessed (via memoria.py preprocessing phase
     or by calling DiscordProcessor.preprocess() directly).
+
+    Returns:
+        True if processing succeeded, False otherwise.
     """
     # Validate input directory exists
     input_path = Path(input_dir)
     if not input_path.exists():
         log.file_not_found(str(input_path), "Input directory")
-        return
+        return False
 
     # Check for required tools
     if not DiscordProcessor.check_dependencies():
-        return
+        return False
 
     log.processor_start("Discord Processor")
 
     output_path = Path(output_dir)
 
     # Require preprocessed input
-    if not is_preprocessed_directory(str(input_path)):
+    if not DiscordProcessor.is_preprocessed_export_dir(
+        input_path, container_key="conversations"
+    ):
         log.logger.error(
             "Input directory is not preprocessed: %s. "
             "Call preprocess() first or run via memoria.py.",
             input_path,
         )
-        return
+        return False
 
     log.already_preprocessed(str(input_path))
-    _process_working_directory(input_path, output_path, workers, dedup_manifest)
+    return _process_working_directory(input_path, output_path, workers, dedup_manifest)
 
 
 def _process_working_directory(
@@ -440,15 +420,19 @@ def _process_working_directory(
     output_dir: Path,
     workers: Optional[int],
     dedup_manifest: Optional[Dict[str, Any]] = None,
-):
-    """Process a working directory (preprocessed export)."""
+) -> bool:
+    """Process a working directory (preprocessed export).
+
+    Returns:
+        True if processing succeeded, False otherwise.
+    """
     # Configuration
     metadata_file = working_dir / "metadata.json"
 
     # Check for metadata file
     if not metadata_file.exists():
         log.file_not_found(str(metadata_file), "Metadata file")
-        return
+        return False
 
     # Load metadata
     log.loading_metadata(str(metadata_file))
@@ -589,22 +573,13 @@ def _process_working_directory(
             )
         )
 
-    # Process files in parallel
-    if num_workers > 1:
-        with Pool(processes=num_workers) as pool:
-            results = list(
-                progress_bar(
-                    pool.imap(_process_file_worker, process_args),
-                    PHASE_PROCESS,
-                    "Processing files",
-                    total=len(process_args),
-                )
-            )
-    else:
-        # Single-threaded for debugging
-        results = []
-        for args_tuple in progress_bar(process_args, PHASE_PROCESS, "Processing files"):
-            results.append(_process_file_worker(args_tuple))
+    # Process files (multiprocess or sequential depending on worker count)
+    results = DiscordProcessor.process_items_parallel(
+        tasks=process_args,
+        worker_fn=_process_file_worker,
+        num_workers=num_workers,
+        description="Processing files",
+    )
 
     # Collect results for EXIF processing
     # Result tuple: (success, output_path, message_info, exp_username, content_hash, original_filename)
@@ -679,3 +654,5 @@ def _process_working_directory(
         log.logger.info(
             "Unmatched files were tracked via FailureTracker (see issues/failure-report.json)."
         )
+
+    return True

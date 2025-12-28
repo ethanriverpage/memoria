@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, Generator, List, Optional, TypeVar
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, TypeVar
 
 from common.output.console import console, is_subprocess
 from common.output.progress import (
@@ -131,16 +131,27 @@ def process_batches_parallel(
     for i in range(0, len(tasks), batch_size):
         batched_tasks.append(tasks[i : i + batch_size])
 
-    # Process batches in parallel
-    with multiprocessing.Pool(processes=num_workers) as pool:
-        batch_results = list(
-            progress_bar(
-                pool.imap(worker_fn, batched_tasks),
+    # Process batches in parallel (or sequentially when num_workers <= 1)
+    if num_workers <= 1:
+        batch_results = [
+            worker_fn(batch)
+            for batch in progress_bar(
+                batched_tasks,
                 phase,
                 description,
                 total=len(batched_tasks),
             )
-        )
+        ]
+    else:
+        with multiprocessing.Pool(processes=num_workers) as pool:
+            batch_results = list(
+                progress_bar(
+                    pool.imap(worker_fn, batched_tasks),
+                    phase,
+                    description,
+                    total=len(batched_tasks),
+                )
+            )
 
     # Flatten results
     results = []
@@ -148,6 +159,42 @@ def process_batches_parallel(
         results.extend(batch_result)
 
     return results
+
+
+def process_items_parallel(
+    tasks: List[T],
+    worker_fn: Callable[[T], R],
+    num_workers: int,
+    phase: str = PHASE_PROCESS,
+    description: str = "Processing",
+    initializer: Optional[Callable[..., None]] = None,
+    initargs: Tuple[Any, ...] = (),
+) -> List[R]:
+    """Process tasks in parallel using a multiprocessing pool with progress bar.
+
+    Unlike process_batches_parallel(), this maps a worker function over individual
+    tasks (no batching), and supports an optional pool initializer for worker
+    process setup (e.g., logging configuration).
+    """
+    if not tasks:
+        return []
+
+    if num_workers <= 1:
+        return [worker_fn(task) for task in progress_bar(tasks, phase, description)]
+
+    with multiprocessing.Pool(
+        processes=num_workers,
+        initializer=initializer,
+        initargs=initargs,
+    ) as pool:
+        return list(
+            progress_bar(
+                pool.imap(worker_fn, tasks),
+                phase,
+                description,
+                total=len(tasks),
+            )
+        )
 
 
 def process_parallel_threaded(

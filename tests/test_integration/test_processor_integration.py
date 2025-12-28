@@ -244,7 +244,8 @@ class TestSnapchatMemoriesProcessing:
         """Should process a basic Snapchat Memories export."""
         from processors.snapchat_memories.processor import SnapchatMemoriesProcessor
 
-        export_dir = tmp_path / "export"
+        # Use directory name that matches expected pattern for username detection
+        export_dir = tmp_path / "snapchat-testuser-2021-01-01"
         cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
@@ -278,7 +279,8 @@ class TestSnapchatMemoriesProcessing:
         """Should process memories with overlays."""
         from processors.snapchat_memories.processor import SnapchatMemoriesProcessor
 
-        export_dir = tmp_path / "export"
+        # Use directory name that matches expected pattern for username detection
+        export_dir = tmp_path / "snapchat-testuser-2021-01-01"
         cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 

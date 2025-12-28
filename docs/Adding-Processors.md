@@ -97,7 +97,7 @@ Preprocessing is optional, but strongly recommended when:
 
 #### Preprocessed directory format (canonical)
 
-Memoria treats a directory as "preprocessed" if it contains `metadata.json` (see `common.utils.is_preprocessed_directory`).
+Memoria treats a directory as "preprocessed" if it contains a valid `metadata.json` that conforms to our standardized metadata schema (see `ProcessorBase.is_preprocessed_export_dir()`).
 
 Preprocessing is **hash-only**: it writes only `metadata.json` (no `media/` directory). Processors copy directly from `source_path` in the metadata to final output during processing.
 
@@ -185,7 +185,7 @@ See `processors/discord/preprocess.py` or `processors/instagram_messages/preproc
 If you want Memoria to run preprocessing automatically, implement these optional hooks on your `ProcessorBase` subclass:
 
 - **`needs_preprocessing(input_dir: str) -> bool`**:
-  - Return `False` when `metadata.json` exists (`is_preprocessed_directory(input_dir)`).
+  - Return `False` when the input is already preprocessed (use `YourProcessor.is_preprocessed_export_dir(...)` with the appropriate content key).
   - Return `True` when raw export structures are detected.
 - **`preprocess(input_dir: str, cache_dir: str, **kwargs) -> Optional[str]`**:
   - Create your preprocessor and call `run()`.

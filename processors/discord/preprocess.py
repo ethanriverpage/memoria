@@ -792,6 +792,16 @@ class DiscordPreprocessor(PreprocessorBase):
         """Return the content key for Discord metadata."""
         return "conversations"
 
+    @staticmethod
+    def get_platform() -> str:
+        """Return the platform identifier for Discord."""
+        return "Discord"
+
+    @staticmethod
+    def get_service() -> None:
+        """Return the service identifier for Discord (single-service platform)."""
+        return None
+
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
         stats = {

@@ -921,6 +921,16 @@ class GoogleChatPreprocessor(PreprocessorBase):
         """Return the content key for Google Chat metadata."""
         return "conversations"
 
+    @staticmethod
+    def get_platform() -> str:
+        """Return the platform identifier for Google Chat."""
+        return "Google"
+
+    @staticmethod
+    def get_service() -> str:
+        """Return the service identifier for Google Chat."""
+        return "chat"
+
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
         stats = {

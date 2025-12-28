@@ -133,7 +133,11 @@ class TestDiscordPreprocessedDetection:
 
         metadata = {
             "export_info": {
+                "export_path": str(temp_export_dir),
                 "export_username": "testuser",
+                "processed_date": "2021-01-01T00:00:00",
+                "platform": "Discord",
+                "service": None,
                 "downloads_successful": 5,
                 "downloads_failed": 0,
             },
@@ -144,6 +148,7 @@ class TestDiscordPreprocessedDetection:
                     "messages": [],
                 }
             },
+            "file_hashes": {},
         }
         (temp_export_dir / "metadata.json").write_text(json.dumps(metadata))
 

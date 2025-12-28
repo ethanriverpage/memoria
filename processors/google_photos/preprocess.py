@@ -1155,6 +1155,16 @@ class GooglePhotosPreprocessor(PreprocessorBase):
         """Return the content key for Google Photos metadata."""
         return "media_files"
 
+    @staticmethod
+    def get_platform() -> str:
+        """Return the platform identifier for Google Photos."""
+        return "Google"
+
+    @staticmethod
+    def get_service() -> str:
+        """Return the service identifier for Google Photos."""
+        return "photos"
+
     def _build_media_files_from_contexts(self) -> List[Dict]:
         """Build file-centric media_files list from merged contexts.
 

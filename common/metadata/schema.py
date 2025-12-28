@@ -63,6 +63,8 @@ class ExportInfo(TypedDict, total=False):
         export_path: Path to the original export directory
         export_username: Username/identifier from the export
         processed_date: ISO format timestamp of when preprocessing ran
+        platform: Platform identifier for unambiguous detection (e.g., "Snapchat")
+        service: Service identifier within platform (e.g., "messages"), or None
 
     Optional fields:
         export_name: Name of the export directory
@@ -77,6 +79,8 @@ class ExportInfo(TypedDict, total=False):
     export_path: str
     export_username: str
     processed_date: str
+    platform: str
+    service: str  # Can be None in actual JSON
 
     # Standard optional
     export_name: str

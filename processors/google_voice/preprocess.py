@@ -825,6 +825,16 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         """Return the content key for Google Voice metadata."""
         return "conversations"
 
+    @staticmethod
+    def get_platform() -> str:
+        """Return the platform identifier for Google Voice."""
+        return "Google"
+
+    @staticmethod
+    def get_service() -> str:
+        """Return the service identifier for Google Voice."""
+        return "voice"
+
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
         stats = {

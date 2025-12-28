@@ -8,7 +8,6 @@ It supports cross-export consolidation for deduplication across multiple devices
 
 import json
 import logging
-from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -33,7 +32,6 @@ from common.media.exiftool import (
 from common.processing import (
     print_processing_summary,
 )
-from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import (
     default_worker_count,
     FilenameGenerator,
@@ -81,26 +79,23 @@ class IMessageProcessor(ProcessorBase):
                 if (sms_dir / "sms.db").exists() and (sms_dir / "Attachments").is_dir():
                     return True
 
-            # Check for preprocessed iMessage export
-            metadata_file = input_path / "metadata.json"
-
-            if metadata_file.exists():
-                try:
-                    with open(metadata_file, "r", encoding="utf-8") as f:
-                        metadata = json.load(f)
-
-                    # iMessage preprocessed exports have conversations and export_paths
-                    if isinstance(metadata, dict) and "conversations" in metadata:
+            # Check for preprocessed iMessage export using platform/service markers
+            if ProcessorBase.is_preprocessed_for_platform(
+                input_path, platform="iMessage", service=None
+            ):
+                # Also verify it's NOT the iMazing format (that has its own processor)
+                metadata_file = input_path / "metadata.json"
+                if metadata_file.exists():
+                    try:
+                        with open(metadata_file, "r", encoding="utf-8") as f:
+                            metadata = json.load(f)
                         export_info = metadata.get("export_info", {})
-                        # Check for iMessage-specific markers
-                        export_paths = export_info.get("export_paths", [])
-                        if export_paths:
-                            # Check if any path looks like an iMessage export
-                            for path in export_paths:
-                                if "messages" in path.lower() or "sms" in path.lower():
-                                    return True
-                except (json.JSONDecodeError, KeyError):
-                    pass
+                        # iMazing exports have export_format: "imazing"
+                        if export_info.get("export_format") == "imazing":
+                            return False
+                    except Exception:
+                        pass
+                return True
 
             return False
 
@@ -143,9 +138,10 @@ class IMessageProcessor(ProcessorBase):
         """Check if iMessage export needs preprocessing."""
         input_path = Path(input_dir)
 
-        # Check if already preprocessed (has metadata.json)
-        metadata_file = input_path / "metadata.json"
-        if metadata_file.exists():
+        # Check if already preprocessed (validated metadata schema)
+        if IMessageProcessor.is_preprocessed_export_dir(
+            input_path, container_key="conversations"
+        ):
             return False
 
         # Check for raw export structure (chat.db or SMS/sms.db)
@@ -517,35 +513,6 @@ def _build_metadata_requests(
     return requests
 
 
-def is_preprocessed(input_path: Path) -> bool:
-    """Check if input directory is already preprocessed.
-
-    Args:
-        input_path: Path to input directory
-
-    Returns:
-        True if already preprocessed, False if raw export
-    """
-    metadata_file = input_path / "metadata.json"
-
-    if not metadata_file.exists():
-        return False
-
-    # Verify it's an iMessage preprocessed export
-    try:
-        with open(metadata_file, "r", encoding="utf-8") as f:
-            metadata = json.load(f)
-
-        # Basic structure checks
-        if "conversations" not in metadata or "export_info" not in metadata:
-            return False
-
-        # Preprocessed format requires file_hashes (source_path-based)
-        return "file_hashes" in metadata
-    except (json.JSONDecodeError, KeyError):
-        return False
-
-
 def build_filename_index(metadata: dict) -> dict:
     """Build index mapping media_file to message metadata.
 
@@ -682,7 +649,9 @@ def process_logic(
 
     working_dir = input_paths[0]
 
-    if not is_preprocessed(working_dir):
+    if not IMessageProcessor.is_preprocessed_export_dir(
+        working_dir, container_key="conversations"
+    ):
         logger.error(
             "Input directory is not preprocessed: %s. "
             "Call preprocess() first or run via memoria.py.",
@@ -852,20 +821,12 @@ def _process_working_directory(
     ]
 
     # Phase 1: Copy and rename files
-    results = []
-    if num_workers > 1:
-        with Pool(processes=num_workers) as pool:
-            results = list(
-                progress_bar(
-                    pool.imap(_process_file_worker, process_args),
-                    PHASE_PROCESS,
-                    "Copying files",
-                    total=len(process_args),
-                )
-            )
-    else:
-        for args in progress_bar(process_args, PHASE_PROCESS, "Copying files"):
-            results.append(_process_file_worker(args))
+    results = IMessageProcessor.process_items_parallel(
+        tasks=process_args,
+        worker_fn=_process_file_worker,
+        num_workers=num_workers,
+        description="Copying files",
+    )
 
     # Collect successful files for EXIF processing
     # Result tuple: (success, output_path, message, exp_username, content_hash, original_filename)

@@ -399,8 +399,11 @@ def create_snapchat_messages_export(
 
         metadata = {
             "export_info": {
+                "export_path": str(base_path),
                 "export_username": username,
-                "export_date": "2021-01-15",
+                "processed_date": "2021-01-15T00:00:00",
+                "platform": "Snapchat",
+                "service": "messages",
             },
             "conversations": conversations,
             "unmatched_media": [],

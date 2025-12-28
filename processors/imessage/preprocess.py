@@ -964,6 +964,16 @@ class IMessagePreprocessor(PreprocessorBase):
         """Return the content key for iMessage metadata."""
         return "conversations"
 
+    @staticmethod
+    def get_platform() -> str:
+        """Return the platform identifier for iMessage."""
+        return "iMessage"
+
+    @staticmethod
+    def get_service() -> None:
+        """Return the service identifier for iMessage (single-service platform)."""
+        return None
+
     def process_export(self) -> bool:
         """Platform-specific preprocessing logic.
 

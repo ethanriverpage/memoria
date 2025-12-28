@@ -499,6 +499,14 @@ class TestPreprocessorBaseMetadataMethods:
             def get_content_key(self):
                 return "media_files"
 
+            @staticmethod
+            def get_platform():
+                return "Test"
+
+            @staticmethod
+            def get_service():
+                return None
+
         # Create a mock preprocessor
         preprocessor = MockPreprocessor(
             processor_name="Test",
@@ -536,6 +544,14 @@ class TestPreprocessorBaseMetadataMethods:
 
             def get_content_key(self):
                 return "media_files"
+
+            @staticmethod
+            def get_platform():
+                return "Test"
+
+            @staticmethod
+            def get_service():
+                return None
 
         preprocessor = MockPreprocessor(
             processor_name="Test",
