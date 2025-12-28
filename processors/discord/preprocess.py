@@ -14,7 +14,6 @@ import logging
 import re
 import shutil
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -24,9 +23,10 @@ from urllib.parse import urlparse, unquote
 import requests
 
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
+from common.files.scanner import iter_subdirs
 from common.output.logging import get_processor_logger
-from common.processing import print_preprocessing_stats
-from common.output.progress import PHASE_PREPROCESS, futures_progress
+from common.processing import print_preprocessing_stats, process_parallel_threaded
+from common.output.progress import PHASE_PREPROCESS
 from processors.preprocess_base import PreprocessorBase
 
 # Standard logger for worker processes and exception logging
@@ -588,14 +588,22 @@ class DiscordPreprocessor(PreprocessorBase):
 
         Returns:
             List of channel directory paths
+
+        Uses shared iter_subdirs utility for consistent directory scanning.
         """
         channels = []
 
-        for item in sorted(self.messages_dir.iterdir()):
-            if item.is_dir() and item.name.startswith("c"):
-                # Validate channel has messages.json
-                if (item / "messages.json").exists():
-                    channels.append(item)
+        # Filter for directories starting with 'c' (channel folders)
+        for channel_dir in iter_subdirs(
+            self.messages_dir,
+            banned_filter=self.banned_filter,
+            skip_hidden=True,
+            sorted_=True,
+            filter_fn=lambda d: d.name.startswith("c"),
+        ):
+            # Validate channel has messages.json
+            if (channel_dir / "messages.json").exists():
+                channels.append(channel_dir)
 
         return channels
 
@@ -611,8 +619,9 @@ class DiscordPreprocessor(PreprocessorBase):
             Tuple of (conversations dict, list of download task tuples)
         """
         # Use cached detection result from the run() pipeline
+        # Note: detection.username is guaranteed non-None by invariant enforcement in run()
         detection = self.ensure_detection_result()
-        self.export_username = detection.username or "unknown"
+        self.export_username = detection.username
 
         # Build just the conversations structure - export_info is handled by save_metadata
         conversations: Dict[str, Any] = {}
@@ -714,34 +723,27 @@ class DiscordPreprocessor(PreprocessorBase):
 
         log.downloading(len(download_tasks), "attachments")
 
-        # Map to track downloaded files per message
+        # Download attachments in parallel
+        results = process_parallel_threaded(
+            tasks=download_tasks,
+            worker_fn=self._download_single_attachment,
+            workers=self.workers,
+            phase=PHASE_PREPROCESS,
+            description="Downloading attachments",
+        )
+
+        # Build message_files dict from successful results
         # Each value is a dict with 'filenames' (list) and 'source_paths' (dict)
         message_files: Dict[Tuple[str, int], Dict[str, Any]] = {}
-
-        with ThreadPoolExecutor(max_workers=self.workers) as executor:
-            # Submit all download tasks
-            future_to_task = {
-                executor.submit(self._download_single_attachment, task): task
-                for task in download_tasks
-            }
-
-            # Collect results with progress bar
-            for future in futures_progress(
-                future_to_task,
-                PHASE_PREPROCESS,
-                "Downloading attachments",
-                unit="file",
-            ):
-                result = future.result()
-
-                if result.get("success"):
-                    key = (result["channel_id"], result["message_id"])
-                    if key not in message_files:
-                        message_files[key] = {"filenames": [], "source_paths": {}}
-                    message_files[key]["filenames"].append(result["filename"])
-                    message_files[key]["source_paths"][result["filename"]] = result[
-                        "source_path"
-                    ]
+        for result in results:
+            if result.get("success"):
+                key = (result["channel_id"], result["message_id"])
+                if key not in message_files:
+                    message_files[key] = {"filenames": [], "source_paths": {}}
+                message_files[key]["filenames"].append(result["filename"])
+                message_files[key]["source_paths"][result["filename"]] = result[
+                    "source_path"
+                ]
 
         return message_files
 

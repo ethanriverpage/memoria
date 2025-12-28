@@ -285,6 +285,7 @@ class TestShouldIncludeFile:
             test_file.name,
             extensions={".jpg", ".png"},
             banned_filter=banned_filter,
+            skip_hidden=True,
             skip_overlays=True,
             skip_thumbnails=True,
         )
@@ -303,6 +304,7 @@ class TestShouldIncludeFile:
             test_file.name,
             extensions={".jpg", ".png"},
             banned_filter=banned_filter,
+            skip_hidden=True,
             skip_overlays=True,
             skip_thumbnails=True,
         )
@@ -321,6 +323,7 @@ class TestShouldIncludeFile:
             test_file.name,
             extensions={".png"},
             banned_filter=banned_filter,
+            skip_hidden=True,
             skip_overlays=True,
             skip_thumbnails=True,
         )
@@ -339,6 +342,7 @@ class TestShouldIncludeFile:
             test_file.name,
             extensions={".png"},
             banned_filter=banned_filter,
+            skip_hidden=True,
             skip_overlays=False,
             skip_thumbnails=True,
         )
@@ -357,6 +361,7 @@ class TestShouldIncludeFile:
             test_file.name,
             extensions={".jpg"},
             banned_filter=banned_filter,
+            skip_hidden=True,
             skip_overlays=True,
             skip_thumbnails=True,
         )
@@ -375,6 +380,7 @@ class TestShouldIncludeFile:
             test_file.name,
             extensions={".DS_Store"},  # Even with extension match
             banned_filter=banned_filter,
+            skip_hidden=True,
             skip_overlays=True,
             skip_thumbnails=True,
         )
@@ -465,4 +471,3 @@ class TestEdgeCases:
 
         assert len(files) == 1
         assert files[0].suffix.lower() == ".webp"
-

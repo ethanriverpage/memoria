@@ -9,6 +9,7 @@ Focuses on:
 from typing import List, Tuple
 from unittest.mock import MagicMock, patch
 
+from common.media.exiftool import BatchReadResult, BatchWriteOutcome
 from processors.base import ProcessorBase
 
 
@@ -24,9 +25,11 @@ class TestBatchProcessExif:
         ]
 
         mock_validate = MagicMock(return_value=set())  # No corrupted files
-        mock_read_metadata = MagicMock(return_value={})
+        mock_read_metadata = MagicMock(
+            return_value=BatchReadResult(metadata_map={}, missing_files=[])
+        )
         mock_rebuild = MagicMock()
-        mock_write = MagicMock()
+        mock_write = MagicMock(return_value=BatchWriteOutcome())
         mock_request_builder = MagicMock(return_value=[])
 
         with patch("common.media.exiftool.batch_validate_exif", mock_validate), patch(
@@ -43,8 +46,9 @@ class TestBatchProcessExif:
         mock_read_metadata.assert_called_once_with(file_paths)
         # No corruption, so rebuild should not be called
         mock_rebuild.assert_not_called()
-        # Result should be 0 (no rebuilt files)
-        assert result == 0
+        # Result should be tuple with 0 rebuilt files
+        exif_rebuilt_count, write_outcome, missing_files = result
+        assert exif_rebuilt_count == 0
 
     def test_corrupted_files_trigger_rebuild_and_reread(self) -> None:
         """Verify corrupted files are rebuilt and their metadata is re-read."""
@@ -66,9 +70,14 @@ class TestBatchProcessExif:
         }
 
         mock_validate = MagicMock(return_value=corrupted)
-        mock_read_metadata = MagicMock(side_effect=[initial_metadata, rebuilt_metadata])
+        mock_read_metadata = MagicMock(
+            side_effect=[
+                BatchReadResult(metadata_map=initial_metadata, missing_files=[]),
+                BatchReadResult(metadata_map=rebuilt_metadata, missing_files=[]),
+            ]
+        )
         mock_rebuild = MagicMock()
-        mock_write = MagicMock()
+        mock_write = MagicMock(return_value=BatchWriteOutcome())
         mock_request_builder = MagicMock(return_value=[])
 
         with patch("common.media.exiftool.batch_validate_exif", mock_validate), patch(
@@ -91,8 +100,9 @@ class TestBatchProcessExif:
         # Rebuild called with corrupted files
         mock_rebuild.assert_called_once_with(list(corrupted))
 
-        # Result should be 1 (one rebuilt file)
-        assert result == 1
+        # Result should be tuple with 1 rebuilt file
+        exif_rebuilt_count, write_outcome, missing_files = result
+        assert exif_rebuilt_count == 1
 
     def test_metadata_map_updated_with_rebuilt_data(self) -> None:
         """Verify the final metadata map contains updated data for rebuilt files."""
@@ -111,9 +121,13 @@ class TestBatchProcessExif:
         }
 
         mock_validate = MagicMock(return_value=corrupted)
-        mock_read_metadata = MagicMock(side_effect=[initial_metadata, rebuilt_metadata])
+        mock_read_metadata = MagicMock(
+            side_effect=[
+                BatchReadResult(metadata_map=initial_metadata, missing_files=[]),
+                BatchReadResult(metadata_map=rebuilt_metadata, missing_files=[]),
+            ]
+        )
         mock_rebuild = MagicMock()
-        mock_write = MagicMock()
         mock_request_builder = MagicMock(return_value=[])
 
         # Capture the metadata map passed to write
@@ -122,8 +136,9 @@ class TestBatchProcessExif:
         def capture_write(requests, metadata_map, dedup_manifest=None):
             nonlocal captured_metadata_map
             captured_metadata_map = metadata_map
+            return BatchWriteOutcome()
 
-        mock_write.side_effect = capture_write
+        mock_write = MagicMock(side_effect=capture_write)
 
         with patch("common.media.exiftool.batch_validate_exif", mock_validate), patch(
             "common.media.exiftool.batch_read_existing_metadata", mock_read_metadata
@@ -152,7 +167,8 @@ class TestBatchProcessExif:
         ):
             result = ProcessorBase.batch_process_exif([], [], mock_request_builder)
 
-        assert result == 0
+        exif_rebuilt_count, write_outcome, missing_files = result
+        assert exif_rebuilt_count == 0
         mock_validate.assert_not_called()
         mock_read_metadata.assert_not_called()
 
@@ -176,9 +192,11 @@ class TestBatchProcessExif:
         }
 
         mock_validate = MagicMock(return_value=corrupted)
-        mock_read_metadata = MagicMock(return_value={})
+        mock_read_metadata = MagicMock(
+            return_value=BatchReadResult(metadata_map={}, missing_files=[])
+        )
         mock_rebuild = MagicMock()
-        mock_write = MagicMock()
+        mock_write = MagicMock(return_value=BatchWriteOutcome())
         mock_request_builder = MagicMock(return_value=[])
 
         with patch("common.media.exiftool.batch_validate_exif", mock_validate), patch(
@@ -191,7 +209,8 @@ class TestBatchProcessExif:
             )
 
         # All 3 files were rebuilt
-        assert result == 3
+        exif_rebuilt_count, write_outcome, missing_files = result
+        assert exif_rebuilt_count == 3
         mock_rebuild.assert_called_once()
         # Metadata was read twice (initial + re-read for corrupted)
         assert mock_read_metadata.call_count == 2

@@ -96,26 +96,15 @@ class TestIsPreprocessingCacheValid:
         """Test that directory without metadata.json returns False."""
         cache_path = tmp_path / "cache"
         cache_path.mkdir()
-        (cache_path / "media").mkdir()
         # No metadata.json
 
         assert is_preprocessing_cache_valid(cache_path) is False
 
-    def test_returns_false_without_media_dir(self, tmp_path):
-        """Test that directory without media/ returns False."""
+    def test_returns_true_with_metadata(self, tmp_path):
+        """Test that directory with metadata.json returns True."""
         cache_path = tmp_path / "cache"
         cache_path.mkdir()
         (cache_path / "metadata.json").touch()
-        # No media directory
-
-        assert is_preprocessing_cache_valid(cache_path) is False
-
-    def test_returns_true_with_both(self, tmp_path):
-        """Test that directory with both metadata.json and media/ returns True."""
-        cache_path = tmp_path / "cache"
-        cache_path.mkdir()
-        (cache_path / "metadata.json").touch()
-        (cache_path / "media").mkdir()
 
         assert is_preprocessing_cache_valid(cache_path) is True
 

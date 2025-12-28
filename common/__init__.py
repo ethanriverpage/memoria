@@ -18,16 +18,12 @@ from .files.filter import BannedFilesFilter
 from .files.scanner import collect_media_files, iter_media_files
 from .files.utils import short_path, get_export_name
 
-# Re-export ProcessorBase and ProcessorRegistry from processors package for convenience
-try:
-    from processors.base import ProcessorBase  # type: ignore
-    from processors.registry import ProcessorRegistry  # type: ignore
-except Exception:
-    pass
+
+# Username detection (from detection module)
+from .detection import detect_from_dirname
 
 # Utility functions (kept in common root)
 from .utils import (
-    extract_username_from_export_dir,
     sanitize_filename,
     default_worker_count,
     is_preprocessed_directory,
@@ -46,7 +42,7 @@ from .utils import (
 )
 
 # Logging configuration (from output subpackage)
-from .output.logging import setup_logging, get_logger
+from .output.logging import setup_logging, get_logger, get_processor_logger
 
 # Dependency checking (kept in common root)
 from .dependency_checker import (
@@ -68,7 +64,6 @@ from .processing import (
 from .output.progress import (
     progress_bar,
     futures_progress,
-    chunked_progress,
     PHASE_PREPROCESS,
     PHASE_PROCESS,
     PHASE_EXIF,
@@ -84,11 +79,8 @@ __all__ = [
     "iter_media_files",
     "short_path",
     "get_export_name",
-    # Processors
-    "ProcessorBase",
-    "ProcessorRegistry",
     # Utilities
-    "extract_username_from_export_dir",
+    "detect_from_dirname",
     "sanitize_filename",
     "default_worker_count",
     "is_preprocessed_directory",
@@ -107,6 +99,7 @@ __all__ = [
     # Logging
     "setup_logging",
     "get_logger",
+    "get_processor_logger",
     # Dependencies
     "check_exiftool",
     "check_ffmpeg",
@@ -120,7 +113,6 @@ __all__ = [
     # Progress
     "progress_bar",
     "futures_progress",
-    "chunked_progress",
     "PHASE_PREPROCESS",
     "PHASE_PROCESS",
     "PHASE_EXIF",

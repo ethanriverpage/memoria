@@ -8,7 +8,7 @@ a single export can contain multiple types of data (e.g., Google export with
 Photos + Chat + Voice).
 
 Usage:
-    memoria.py <input_dir> [-o output_dir] [--verbose] [--workers N]
+    memoria.py <input_dir> [-o output_dir] [-v] [--workers N]
     memoria.py --list-processors
 """
 
@@ -44,7 +44,6 @@ from common.dependency_checker import (  # noqa: E402
 )
 from common.upload.targets import build_upload_targets  # noqa: E402
 from common.upload.immich import verify_auth, upload as immich_upload  # noqa: E402
-from common.config.processor import get_effective_output_dir  # noqa: E402
 from common.output.paths import build_processor_output_path  # noqa: E402
 from common.dedup.config import is_dedup_enabled, get_dedup_config  # noqa: E402
 from common.dedup.service import DeduplicationService, save_manifest  # noqa: E402
@@ -219,7 +218,7 @@ def _build_catalog_worker(
     Args:
         export_dir_str: Path to the export directory as a string.
         workers: Number of worker threads for hashing within this process.
-        log_file: Optional path to log file for verbose output.
+        log_file: Optional path to log file for worker output.
         db_path: Optional path to SQLite database for streaming writes.
         run_id: Optional unique identifier for this processing run.
         preprocessed_dirs_json: Optional JSON string mapping
@@ -638,7 +637,6 @@ def run_phased_dedup_processing(
                     output_dir = None
 
                 kwargs = {
-                    "verbose": args.verbose,
                     "workers": args.workers,
                     "temp_dir": temp_dir,
                 }
@@ -747,7 +745,7 @@ def _get_structure_signature(path: Path) -> tuple[str, ...] | None:
 def _process_export_worker(
     export_dir: Path,
     output_base: str | None,
-    verbose: bool,
+    verbosity: int,
     workers: int,
     immich_enabled: bool,
     immich_url: str | None,
@@ -768,7 +766,7 @@ def _process_export_worker(
     Args:
         export_dir: Path to the export directory
         output_base: Base output directory (or None)
-        verbose: Verbose logging flag
+        verbosity: Console/file verbosity level (-v/-vv)
         workers: Number of workers for internal processing
         immich_enabled: Whether Immich uploads are enabled
         immich_url: Immich server URL
@@ -798,25 +796,22 @@ def _process_export_worker(
     load_all_processors(registry)
 
     # Set up per-export logging
-    export_log_handler = add_export_log_handler(export_dir.name, verbose=verbose)
+    export_log_handler = add_export_log_handler(export_dir.name, enabled=verbosity > 0)
 
     try:
         # Create a simple args namespace
         class Args:
             output: Optional[str]
-            verbose: bool
             workers: Optional[int]
             processor: Optional[str]
 
             def __init__(self):
                 self.output = None
-                self.verbose = False
                 self.workers = None
                 self.processor = None
 
         args = Args()
         args.output = output_base
-        args.verbose = verbose
         args.workers = workers
         args.processor = processor_filter
 
@@ -824,13 +819,6 @@ def _process_export_worker(
         if output_base and total_exports > 1:
             export_output_dir = str(Path(output_base) / export_dir.name)
             args.output = export_output_dir
-
-        # Log header for this export
-        if total_exports > 1:
-            mega_separator = "#" * 70
-            logger.info(mega_separator)
-            logger.info("EXPORT %d/%d: %s", export_idx, total_exports, export_dir.name)
-            logger.info(mega_separator)
 
         # Process the export (no detection cache in parallel mode to avoid sharing issues)
         success_count, failed_count, _results, _upload_tasks = process_single_export(
@@ -949,18 +937,13 @@ def process_single_export(
     upload_tasks = []  # Collect upload tasks if queuing
 
     for idx, processor in enumerate(matching_processors, 1):
-        separator = "=" * 70
-        logger.info(separator)
         logger.info(
             "[%d/%d] Running: %s", idx, len(matching_processors), processor.get_name()
         )
-        logger.info(separator)
 
         try:
             # Prepare kwargs for processor
             kwargs = {}
-            if args.verbose:
-                kwargs["verbose"] = True
             if args.workers:
                 kwargs["workers"] = args.workers
 
@@ -1301,9 +1284,7 @@ def _scan_platform_username_service_structure(
 
 
 def upload_only_mode(
-    input_path: Optional[Path],
     upload_path: Path,
-    registry: ProcessorRegistry,
     immich_url: str,
     immich_key: str,
     immich_concurrency: int,
@@ -1311,16 +1292,11 @@ def upload_only_mode(
 ) -> int:
     """Handle upload-only mode: upload existing processed files to Immich.
 
-    Supports two modes:
-    1. If input_path is provided: Uses original export for processor detection
-       and username extraction (legacy mode for backwards compatibility)
-    2. If input_path is None: Scans the Platform/Username/Service directory
-       structure directly (new mode for cross-processor dedup outputs)
+    Scans the Platform/Username/Service directory structure to determine
+    album names for upload.
 
     Args:
-        input_path: Optional original export directory (for legacy mode)
         upload_path: Path to processed output directory to upload
-        registry: ProcessorRegistry instance
         immich_url: Immich server URL
         immich_key: Immich API key
         immich_concurrency: Number of concurrent uploads
@@ -1332,8 +1308,6 @@ def upload_only_mode(
     from datetime import datetime
 
     logger.info("Upload-only mode")
-    if input_path:
-        logger.info("Original export: %s", input_path)
     logger.info("Processed output: %s", upload_path)
 
     # Create logs directory and upload log file
@@ -1346,11 +1320,7 @@ def upload_only_mode(
 
     logger.info("Upload log will be saved to: %s", log_file)
 
-    # Validate paths
-    if input_path and not input_path.exists():
-        logger.error("Original export directory does not exist: %s", input_path)
-        return 1
-
+    # Validate path
     if not upload_path.exists():
         logger.error("Processed output directory does not exist: %s", upload_path)
         return 1
@@ -1362,76 +1332,26 @@ def upload_only_mode(
     else:
         ignore_patterns = ["issues/**", "**/*matching/**"]
 
-    # Build upload targets - either from directory structure or from processor detection
-    if input_path is None:
-        # New mode: scan Platform/Username/Service structure directly
-        logger.info("Scanning directory structure for upload targets...")
-        all_targets = _scan_platform_username_service_structure(upload_path)
+    # Scan Platform/Username/Service structure for upload targets
+    logger.info("Scanning directory structure for upload targets...")
+    all_targets = _scan_platform_username_service_structure(upload_path)
 
-        if not all_targets:
-            logger.error(
-                "No Platform/Username/Service structure found in: %s", upload_path
-            )
-            logger.error(
-                "Expected structure: Platform/username/service (e.g., Google/johndoe/photos)"
-            )
-            return 1
+    if not all_targets:
+        logger.error("No Platform/Username/Service structure found in: %s", upload_path)
+        logger.error(
+            "Expected structure: Platform/username/service (e.g., Google/johndoe/photos)"
+        )
+        return 1
 
-        logger.info("Found %d upload target(s):", len(all_targets))
-        for up_path, album_name in all_targets:
-            logger.info("  - %s -> %s", Path(up_path).name, album_name)
-    else:
-        # Legacy mode: detect processors from original export
-        logger.info("Analyzing original export to detect processor types...")
-        matching_processors = registry.detect_all(input_path)
-
-        if not matching_processors:
-            logger.error(
-                "No processors matched original export directory: %s", input_path
-            )
-            show_supported_formats()
-            return 1
-
-        logger.info("Detected %d processor(s):", len(matching_processors))
-        for processor in matching_processors:
-            logger.info("  - %s", processor.get_name())
-
-        # Map processor names to their expected output subdirectories
-        all_targets = []
-        for processor in matching_processors:
-            pname = processor.get_name()
-
-            # Get effective output directory using centralized config
-            effective_output_str = get_effective_output_dir(pname, str(upload_path))
-
-            if not effective_output_str:
-                logger.warning("Unknown processor '%s', skipping uploads", pname)
-                continue
-
-            effective_output = Path(effective_output_str)
-
-            # Verify the directory exists
-            if not effective_output.exists():
-                logger.warning(
-                    "Expected output directory does not exist: %s", effective_output
-                )
-                continue
-
-            # Build upload targets
-            targets = build_upload_targets(pname, str(input_path), effective_output_str)
-            all_targets.extend(targets)
-
-        if not all_targets:
-            logger.error("No valid output directories found for detected processors")
-            return 1
+    logger.info("Found %d upload target(s):", len(all_targets))
+    for up_path, album_name in all_targets:
+        logger.info("  - %s -> %s", Path(up_path).name, album_name)
 
     # Open log file for writing
     with open(log_file, "w", encoding="utf-8") as log:
         log.write("Upload-Only Mode Log\n")
         log.write(f"{'=' * 70}\n")
         log.write(f"Timestamp: {timestamp}\n")
-        if input_path:
-            log.write(f"Original export: {input_path}\n")
         log.write(f"Processed output: {upload_path}\n")
         log.write(f"Ignore patterns: {', '.join(ignore_patterns)}\n")
         log.write(f"{'=' * 70}\n\n")
@@ -1540,17 +1460,11 @@ Examples:
   # Upload previously processed export (scans Platform/Username/Service structure)
   %(prog)s --upload-only /path/to/processed/output
   
-  # Upload with original export for legacy processor detection
-  %(prog)s /path/to/original/export --upload-only /path/to/processed/output
-  
   # Process multiple exports sequentially
   %(prog)s --originals /path/to/originals_folder -o /path/to/output
   
   # Process multiple exports in parallel (2 at a time)
   %(prog)s --originals /path/to/originals_folder -o /path/to/output --parallel-exports 2
-  
-  # Process with verbose logging and 8 workers
-  %(prog)s /path/to/export --verbose --workers 8
   
   # List all available processors
   %(prog)s --list-processors
@@ -1586,9 +1500,10 @@ Examples:
     parser.add_argument(
         "--verbose",
         "-v",
+        dest="verbosity",
         action="count",
         default=0,
-        help="Enable verbose logging (-v for summaries, -vv for file-level details)",
+        help="Set verbosity (-v for summaries, -vv for file-level details)",
     )
     parser.add_argument(
         "--workers",
@@ -1612,8 +1527,7 @@ Examples:
         "--upload-only",
         metavar="PATH",
         help="Upload-only mode: upload processed output to Immich (skips processing). "
-        "Scans Platform/Username/Service directory structure to determine album names. "
-        "Optionally provide input_dir for legacy processor-based detection.",
+        "Scans Platform/Username/Service directory structure to determine album names.",
     )
     parser.add_argument(
         "--immich-url",
@@ -1654,16 +1568,18 @@ Examples:
                 "--upload-only is not compatible with --originals (process multiple exports separately)"
             )
             return 1
-        # input_dir is now optional for --upload-only
-        # If provided, uses legacy processor detection mode
-        # If not provided, scans Platform/Username/Service structure directly
+        if args.input_dir:
+            parser.error(
+                "--upload-only does not require input_dir; it scans the Platform/Username/Service structure directly"
+            )
+            return 1
 
     # Load .env early (CLI > env > .env precedence is enforced later when reading values)
     load_dotenv_file(args.env_file)
 
     # Configure logging
     log_file = None
-    if args.verbose:
+    if args.verbosity:
         from datetime import datetime
 
         # Create logs directory if it doesn't exist
@@ -1676,7 +1592,7 @@ Examples:
     # Map string log level to logging constant
     file_log_level = logging.DEBUG if args.file_log_level == "debug" else logging.INFO
     setup_logging(
-        verbosity=args.verbose,
+        verbosity=args.verbosity,
         log_file=str(log_file) if log_file else None,
         file_log_level=file_log_level,
     )
@@ -1710,8 +1626,8 @@ Examples:
         console.print(f"Total: {registry.get_processor_count()} processor(s)")
         return 0
 
-    # Require input_dir or --originals if not listing processors
-    if not args.input_dir and not args.originals:
+    # Require input_dir or --originals if not listing processors or uploading
+    if not args.input_dir and not args.originals and not args.upload_only:
         parser.error("either input_dir or --originals is required")
         return 1
 
@@ -1865,17 +1781,13 @@ Examples:
             logger.error("Upload-only mode requires valid Immich configuration")
             return 1
 
-        # input_dir is optional - if provided, uses legacy processor detection
-        input_path = Path(args.input_dir).resolve() if args.input_dir else None
         upload_path = Path(args.upload_only).resolve()
 
-        # Type guard: immich_enabled is True only if these are set (checked at line 1579)
+        # Type guard: immich_enabled is True only if these are set
         assert immich_url is not None and immich_key is not None
 
         return upload_only_mode(
-            input_path,
             upload_path,
-            registry,
             immich_url,
             immich_key,
             immich_concurrency,
@@ -1986,7 +1898,6 @@ Examples:
                 success = processor.process_consolidated(
                     [str(p) for p in paths],
                     consolidated_output,
-                    verbose=args.verbose,
                     workers=args.workers,
                     temp_dir=temp_dir,
                 )
@@ -2057,7 +1968,7 @@ Examples:
                         _process_export_worker,
                         export_dir,
                         output_base_str,
-                        args.verbose,
+                        args.verbosity,
                         args.workers,
                         immich_enabled,
                         immich_url,
@@ -2121,26 +2032,10 @@ Examples:
             for export_idx, export_dir in enumerate(dirs_to_process, 1):
                 # Set up per-export logging
                 export_log_handler = add_export_log_handler(
-                    export_dir.name, verbose=args.verbose
+                    export_dir.name, enabled=args.verbosity > 0
                 )
 
                 try:
-                    if len(dirs_to_process) > 1:
-                        # Multi-export mode: add visual separator and export indicator
-                        mega_separator = "#" * 70
-                        logger.info(mega_separator)
-                        logger.info(
-                            "EXPORT %d/%d: %s",
-                            export_idx,
-                            len(dirs_to_process),
-                            export_dir.name,
-                        )
-                        logger.info(mega_separator)
-
-                        # Note: Output directory is now built per-processor using
-                        # build_processor_output_path() which creates Platform/User paths.
-                        # No need to override args.output here.
-
                     # Process this export
                     try:
                         success_count, failed_count, _results, _upload_tasks = (

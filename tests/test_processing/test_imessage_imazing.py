@@ -150,6 +150,7 @@ class TestImazingOrphanDetection:
         preprocessor = ImazingPreprocessor(
             export_path=imazing_export_dir,
             output_dir=imazing_output_dir,
+            owner_name="testuser",  # Provide username to satisfy invariant
         )
         preprocessor.run()
 
@@ -196,6 +197,7 @@ class TestImazingOrphanDetection:
         preprocessor = ImazingPreprocessor(
             export_path=imazing_export_dir,
             output_dir=imazing_output_dir,
+            owner_name="testuser",  # Provide username to satisfy invariant
         )
         preprocessor.run()
 
@@ -609,3 +611,41 @@ class TestImazingLivePhotos:
         filenames = [Path(e["source_path"]).name for e in entries]
         # The HEIC should be present
         assert any("HEIC" in f or "heic" in f for f in filenames)
+
+
+class TestImazingEmptyExport:
+    """Tests for empty export handling (Policy A: export-level soft-fail)."""
+
+    def test_empty_export_produces_failure_report(
+        self, imazing_export_dir, imazing_output_dir
+    ):
+        """Empty export should produce failure-report.json with export_failures."""
+        from processors.imessage_imazing.preprocess import ImazingPreprocessor
+
+        # Create minimal iMazing structure without media files
+        # Need CSV to satisfy detection, but no media files
+        csv_content = (
+            "Date,Sender,Text,Attachment Name,Attachment Type\n"
+            "2024-01-01 12:00:00,+1234567890,Hello,,\n"  # No attachment
+        )
+        (imazing_export_dir / "messages.csv").write_text(csv_content)
+
+        # Run preprocessor
+        preprocessor = ImazingPreprocessor(
+            export_path=imazing_export_dir,
+            output_dir=imazing_output_dir,
+            owner_name="testuser",
+        )
+        result = preprocessor.run()
+
+        # Should return False (FAILED)
+        assert result is False
+
+        # Should produce failure-report.json with export_failures
+        report_path = imazing_output_dir / "issues" / "failure-report.json"
+        assert report_path.exists(), "failure-report.json should be created"
+
+        report = json.loads(report_path.read_text())
+        assert "export_failures" in report
+        assert len(report["export_failures"]) > 0
+        assert report["export_failures"][0]["reason"] == "no_media_files"

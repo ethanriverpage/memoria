@@ -46,6 +46,7 @@ class FailureTracker:
         self.orphaned_media: List[Dict[str, Any]] = []
         self.orphaned_metadata: List[Dict[str, Any]] = []
         self.processing_failures: List[Dict[str, Any]] = []
+        self.export_failures: List[Dict[str, Any]] = []
 
     def add_orphaned_media(
         self,
@@ -135,9 +136,37 @@ class FailureTracker:
 
         self.processing_failures.append(entry)
 
+    def add_export_failure(
+        self,
+        reason: str,
+        error_details: str = "",
+        context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Track an export-level failure (e.g., empty export).
+
+        Args:
+            reason: Human-readable reason for the failure
+            error_details: Additional error details or stacktrace
+            context: Additional context information
+        """
+        if context is None:
+            context = {}
+
+        entry = {
+            "reason": reason,
+            "error_details": error_details,
+            "context": context,
+        }
+
+        self.export_failures.append(entry)
+
     def has_failures(self) -> bool:
         return bool(
-            self.orphaned_media or self.orphaned_metadata or self.processing_failures
+            self.orphaned_media
+            or self.orphaned_metadata
+            or self.processing_failures
+            or self.export_failures
         )
 
     def get_summary(self) -> Dict[str, int]:
@@ -149,9 +178,12 @@ class FailureTracker:
         """
         failed_matching = len(self.orphaned_media) + len(self.orphaned_metadata)
         return {
-            "total_failures": failed_matching + len(self.processing_failures),
+            "total_failures": failed_matching
+            + len(self.processing_failures)
+            + len(self.export_failures),
             "failed_matching": failed_matching,
             "failed_processing": len(self.processing_failures),
+            "export_failures": len(self.export_failures),
         }
 
     def _relative_path(self, full_path: str) -> str:
@@ -241,6 +273,14 @@ class FailureTracker:
                         f"Tracked {len(paths)} processing failures ({reason}), e.g.: {samples}"
                     )
 
+        if self.export_failures:
+            reasons: Dict[str, int] = {}
+            for entry in self.export_failures:
+                reason = entry.get("reason", "unknown")
+                reasons[reason] = reasons.get(reason, 0) + 1
+            for reason, count in reasons.items():
+                logger.debug(f"Tracked {count} export-level failures ({reason})")
+
     def generate_report(self) -> Dict[str, Any]:
         """
         Generate a comprehensive failure report.
@@ -258,7 +298,53 @@ class FailureTracker:
                 "orphaned_metadata": self.orphaned_metadata,
             },
             "failed_processing": self.processing_failures,
+            "export_failures": self.export_failures,
         }
+
+    def move_processing_failures(self, output_dir: Path) -> None:
+        """
+        Move processing failure outputs into issues/failed-processing/.
+
+        Ensures failed outputs are not mixed with successful outputs.
+
+        Args:
+            output_dir: Processor output directory (e.g., {base}/Google Photos/)
+        """
+        if not self.processing_failures:
+            return
+
+        dest_dir = output_dir / "issues" / "failed-processing"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        moved_count = 0
+        for entry in self.processing_failures:
+            source_path = Path(entry["file_path"])
+            context = entry.setdefault("context", {})
+
+            if not source_path.exists():
+                context["move_error"] = "Source file not found"
+                continue
+
+            dest_path = dest_dir / source_path.name
+            if dest_path.exists():
+                counter = 1
+                stem = dest_path.stem
+                suffix = dest_path.suffix
+                while dest_path.exists():
+                    dest_path = dest_dir / f"{stem}_{counter}{suffix}"
+                    counter += 1
+
+            try:
+                shutil.move(str(source_path), dest_path)
+                context["moved_to"] = str(dest_path.relative_to(output_dir))
+                moved_count += 1
+            except Exception as e:
+                logger.error(f"Failed to move processing failure {source_path}: {e}")
+                context["move_error"] = str(e)
+
+        logger.info(
+            f"Moved {moved_count}/{len(self.processing_failures)} failed outputs to {dest_dir}"
+        )
 
     def copy_orphaned_media(self, output_dir: Path) -> None:
         """
@@ -440,11 +526,15 @@ class FailureTracker:
         # Save orphaned metadata
         self.save_orphaned_metadata(output_path)
 
+        # Move failed processing outputs
+        self.move_processing_failures(output_path)
+
         # Save failure report
         self.save_report(output_path)
 
         summary = self.get_summary()
         logger.info(
             f"Failure handling complete: {summary['failed_matching']} matching failures, "
-            f"{summary['failed_processing']} processing failures"
+            f"{summary['failed_processing']} processing failures, "
+            f"{summary['export_failures']} export-level failures"
         )

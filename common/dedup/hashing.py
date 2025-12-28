@@ -474,52 +474,19 @@ def get_image_dimensions(file_path: Path) -> Optional[Tuple[int, int]]:
 def get_video_dimensions(video_path: Path) -> Optional[Tuple[int, int]]:
     """Get dimensions of a video file using ffprobe.
 
+    Delegates to get_video_metadata() to avoid redundant ffprobe implementations.
+
     Args:
         video_path: Path to the video file.
 
     Returns:
         Tuple of (width, height) or None if detection failed.
     """
-    try:
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height",
-            "-of",
-            "csv=p=0",
-            str(video_path),
-        ]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            timeout=10,
-        )
-
-        if result.returncode == 0:
-            output = result.stdout.decode().strip()
-            if output:
-                # Handle multiple video streams or multiline output
-                # Take only the first line (first video stream)
-                first_line = output.split("\n")[0].strip()
-                if "," in first_line:
-                    parts = first_line.split(",")
-                    # Ensure we have exactly 2 numeric parts
-                    if len(parts) >= 2:
-                        try:
-                            width = int(parts[0])
-                            height = int(parts[1])
-                            return (width, height)
-                        except ValueError:
-                            pass  # Fall through to return None
-
-    except Exception as e:
-        logger.debug(f"Video dims failed: {short_path(video_path)}: {e}")
-
+    metadata = get_video_metadata(video_path)
+    if metadata is None or not metadata.has_video:
+        return None
+    if metadata.width is not None and metadata.height is not None:
+        return (metadata.width, metadata.height)
     return None
 
 
@@ -646,9 +613,7 @@ def find_live_photo_videos_in_files(files: Iterable[Path]) -> Set[Path]:
             # Look for matching video
             for video_ext in LIVE_PHOTO_VIDEO_EXTENSIONS:
                 video_path = file_path.with_suffix(video_ext)
-                if video_path in file_set and is_live_photo_pair(
-                    file_path, video_path
-                ):
+                if video_path in file_set and is_live_photo_pair(file_path, video_path):
                     live_photo_videos.add(video_path)
                     break
                 # Also check case variations

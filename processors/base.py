@@ -7,7 +7,11 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from common.failure_tracker import FailureTracker
+    from common.media.exiftool import BatchWriteOutcome
 
 from common.dependency_checker import (
     check_exiftool,
@@ -17,13 +21,13 @@ from common.dependency_checker import (
     print_ffmpeg_error,
     print_pillow_error,
 )
-from common.metadata.schema import (
-    validate_metadata,
-    get_content_type,
-    MetadataValidationError,
-    ContentType,
-)
+from common.metadata.schema import validate_metadata
 from common.output.paths import OutputInfo
+from common.validation.invariants import (
+    InvariantViolation,
+    require_non_unknown_username,
+)
+from common.files.utils import short_path
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +198,7 @@ class ProcessorBase(ABC):
 
         Args:
             input_dir: Path to input directory.
-            **kwargs: Additional arguments (verbose, workers).
+            **kwargs: Additional arguments (workers).
 
         Yields:
             Catalog entry dictionaries with hashes and metadata.
@@ -232,7 +236,7 @@ class ProcessorBase(ABC):
         Args:
             input_dir: Path to the raw export directory.
             cache_dir: Path to the cache directory for storing preprocessed output.
-            **kwargs: Additional arguments (workers, verbose).
+            **kwargs: Additional arguments (workers).
 
         Returns:
             Path to the working directory (preprocessed output) on success,
@@ -331,7 +335,7 @@ class ProcessorBase(ABC):
                             return all_entries if all_entries else None
 
         except Exception as e:
-            logger.debug(f"Could not check preprocessed format: {e}")
+            logger.debug("Could not check preprocessed format: %s", e)
 
         return None
 
@@ -361,7 +365,8 @@ class ProcessorBase(ABC):
 
         Returns:
             Iterator yielding catalog entries if preprocessed format found,
-            None if directory is not preprocessed or uses legacy format.
+            None if directory is not preprocessed (no metadata.json or no
+            source_path entries).
 
         Example:
             @staticmethod
@@ -420,11 +425,13 @@ class ProcessorBase(ABC):
         """
         return cls
 
-    @staticmethod
+    @classmethod
     def load_metadata(
+        cls,
         metadata_path: Path,
         validate: bool = False,
         require_source_paths: bool = True,
+        processor_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Load and optionally validate metadata.json.
 
@@ -438,12 +445,24 @@ class ProcessorBase(ABC):
 
         Raises:
             MetadataValidationError: If validation is enabled and fails.
+            InvariantViolation: If export username is unknown.
         """
         with open(metadata_path, "r", encoding="utf-8") as f:
             metadata = json.load(f)
 
         if validate:
             validate_metadata(metadata, require_source_paths=require_source_paths)
+            # Enforce username invariant when validation is enabled
+            export_info = metadata.get("export_info", {})
+            username = export_info.get("export_username")
+            username_source = export_info.get("username_source", "unknown")
+            require_non_unknown_username(
+                username=username,
+                source=username_source,
+                export_dir=metadata_path.parent,
+                processor=processor_name
+                or getattr(cls, "get_name", lambda: cls.__name__)(),
+            )
 
         return metadata
 
@@ -505,6 +524,10 @@ class ProcessorBase(ABC):
         )
 
         materialized = 0
+        missing_media = 0
+        missing_media_examples: list[str] = []
+        missing_overlays = 0
+        missing_overlay_examples: list[str] = []
         for case in ambiguous_cases:
             # Create timestamped subfolder (sanitized)
             timestamp = case.get("timestamp", "unknown")
@@ -531,7 +554,9 @@ class ProcessorBase(ABC):
                         except Exception as e:
                             logger.warning("Failed to copy %s: %s", filename, e)
                     else:
-                        logger.warning("Source file not found: %s", source_path)
+                        missing_media += 1
+                        if len(missing_media_examples) < 5:
+                            missing_media_examples.append(short_path(source_path))
 
             # Copy overlay files from source_path
             for overlay_info in case.get("overlays", []):
@@ -546,7 +571,9 @@ class ProcessorBase(ABC):
                         except Exception as e:
                             logger.warning("Failed to copy %s: %s", filename, e)
                     else:
-                        logger.warning("Source overlay not found: %s", source_path)
+                        missing_overlays += 1
+                        if len(missing_overlay_examples) < 5:
+                            missing_overlay_examples.append(short_path(source_path))
 
             # Write match_info.json manifest
             match_info_path = case_dir / "match_info.json"
@@ -556,6 +583,19 @@ class ProcessorBase(ABC):
                 materialized += 1
             except Exception as e:
                 logger.error("Failed to write %s: %s", match_info_path, e)
+
+        if missing_media:
+            logger.info(
+                "Source media missing for %d files (e.g. %s)",
+                missing_media,
+                ", ".join(missing_media_examples),
+            )
+        if missing_overlays:
+            logger.info(
+                "Source overlays missing for %d files (e.g. %s)",
+                missing_overlays,
+                ", ".join(missing_overlay_examples),
+            )
 
         logger.info(
             "Created %d matching case folders in %s", materialized, needs_matching_dir
@@ -585,75 +625,28 @@ class ProcessorBase(ABC):
         Yields:
             Media entry dicts with at minimum: filename, source_path
         """
-        content_type = None
-        try:
-            content_type = get_content_type(metadata)
-        except MetadataValidationError:
-            # No valid content key found - still extract unmatched_media below
-            pass
+        from common.metadata.extraction import extract_all_media_entries
 
-        # Get file_hashes lookup for content_hash (used by cross-processor dedup)
-        file_hashes = metadata.get("file_hashes", {})
-
-        if content_type == ContentType.MEDIA_FILES:
-            # media_files entries should already have content_hash
-            yield from metadata.get("media_files", [])
-
-        elif content_type == ContentType.MEDIA:
-            for post in metadata.get("media", []):
-                source_paths = post.get("source_paths", {})
-                for filename in post.get("media_files", []):
-                    yield {
-                        "filename": filename,
-                        "source_path": source_paths.get(filename, ""),
-                        "content_hash": file_hashes.get(filename),
-                        "timestamp": post.get("timestamp"),
-                        "media_type": post.get("media_type"),
-                        "caption": post.get("caption"),
-                    }
-
-        elif content_type == ContentType.CONVERSATIONS:
-            conversations = metadata.get("conversations", {})
-            if isinstance(conversations, dict):
-                conv_items = list(conversations.values())
-            else:
-                conv_items = conversations
-
-            for conv in conv_items:
-                conv_title = conv.get("conversation_title") or conv.get(
-                    "conversation_name"
-                )
-                for msg in conv.get("messages", []):
-                    source_paths = msg.get("source_paths", {})
-                    for filename in msg.get("media_files", []):
-                        yield {
-                            "filename": filename,
-                            "source_path": source_paths.get(filename, ""),
-                            "content_hash": file_hashes.get(filename),
-                            "timestamp": msg.get("timestamp") or msg.get("created"),
-                            "sender": msg.get("sender"),
-                            "conversation": conv_title,
-                        }
-
-        # Include unmatched_media
-        for entry in metadata.get("unmatched_media", []):
-            yield entry
+        yield from extract_all_media_entries(metadata)
 
     @staticmethod
     def should_skip_for_dedup(
-        file_path: str,
         dedup_manifest: Optional[Dict[str, Any]],
+        content_hash: str,
         processor_name: str,
+        source_path: str,
     ) -> bool:
         """Check if file should be skipped due to deduplication.
 
-        Computes content hash and checks against dedup manifest to determine
-        if this file is a secondary copy that should be skipped.
+        Uses the precomputed content hash from preprocessing metadata to check
+        against the dedup manifest. Returns True if this file is a secondary
+        copy that should be skipped.
 
         Args:
-            file_path: Path to the file to check.
-            dedup_manifest: Optional deduplication manifest dictionary.
+            dedup_manifest: Deduplication manifest dictionary (or None if dedup disabled).
+            content_hash: Precomputed xxHash64 content hash from preprocessing.
             processor_name: Name of the processor for manifest lookup.
+            source_path: Path to the source file (for within-processor dedup).
 
         Returns:
             True if file is a secondary (should be skipped), False if primary.
@@ -661,13 +654,10 @@ class ProcessorBase(ABC):
         if not dedup_manifest:
             return False
 
-        from common.dedup.hashing import compute_content_hash
         from common.dedup.service import is_file_primary_by_hash
 
-        content_hash = compute_content_hash(file_path)
-        # Pass source_path for within-processor dedup
         return not is_file_primary_by_hash(
-            dedup_manifest, content_hash, processor_name, file_path
+            dedup_manifest, content_hash, processor_name, source_path
         )
 
     @staticmethod
@@ -718,7 +708,7 @@ class ProcessorBase(ABC):
         file_info: List[Tuple],
         metadata_request_builder: Callable[[List[Tuple]], List],
         dedup_manifest: Optional[Dict[str, Any]] = None,
-    ) -> int:
+    ) -> Tuple[int, "BatchWriteOutcome", List[str]]:
         """Batch validate, rebuild, and write EXIF metadata.
 
         Performs the standard EXIF processing pipeline:
@@ -736,9 +726,10 @@ class ProcessorBase(ABC):
                 from cross-processor duplicates.
 
         Returns:
-            Count of files with rebuilt EXIF structures.
+            Tuple of (exif_rebuilt_count, write_outcome, missing_files).
         """
         from common.media.exiftool import (
+            BatchWriteOutcome,
             batch_read_existing_metadata,
             batch_rebuild_exif,
             batch_validate_exif,
@@ -746,7 +737,7 @@ class ProcessorBase(ABC):
         )
 
         if not file_paths:
-            return 0
+            return 0, BatchWriteOutcome(), []
 
         exif_rebuilt_count = 0
 
@@ -757,7 +748,9 @@ class ProcessorBase(ABC):
             metadata_future = executor.submit(batch_read_existing_metadata, file_paths)
 
             corrupted_files = validate_future.result()
-            existing_metadata_map = metadata_future.result()
+            metadata_result = metadata_future.result()
+            existing_metadata_map = metadata_result.metadata_map
+            missing_files = metadata_result.missing_files
 
         # Rebuild corrupted EXIF structures
         if corrupted_files:
@@ -770,13 +763,15 @@ class ProcessorBase(ABC):
             # Re-read metadata for rebuilt files to ensure accuracy
             # The initial parallel read may have gotten incomplete data from corrupted files
             rebuilt_metadata = batch_read_existing_metadata(list(corrupted_files))
-            existing_metadata_map.update(rebuilt_metadata)
+            existing_metadata_map.update(rebuilt_metadata.metadata_map)
 
         # Build and write metadata requests
         requests = metadata_request_builder(file_info)
-        batch_write_metadata_requests(requests, existing_metadata_map, dedup_manifest)
+        write_outcome = batch_write_metadata_requests(
+            requests, existing_metadata_map, dedup_manifest
+        )
 
-        return exif_rebuilt_count
+        return exif_rebuilt_count, write_outcome, missing_files
 
     @classmethod
     def finalize_files(
@@ -786,6 +781,8 @@ class ProcessorBase(ABC):
         metadata_builder: Callable[[List[Tuple]], List],
         dedup_manifest: Optional[Dict[str, Any]] = None,
         path_index: int = 0,
+        failure_tracker: Optional["FailureTracker"] = None,
+        metadata_for_file: Optional[Callable[[str], Optional[dict]]] = None,
     ) -> Tuple[List[str], List[Tuple], int]:
         """Correct extensions and batch process EXIF metadata.
 
@@ -799,6 +796,10 @@ class ProcessorBase(ABC):
                 a list of MetadataWriteRequest objects.
             dedup_manifest: Optional deduplication manifest for merging.
             path_index: Index of the path element in each file_info tuple.
+            failure_tracker: Optional FailureTracker for recording EXIF failures.
+                When provided, EXIF failures are tracked as processing failures.
+            metadata_for_file: Optional callable that returns metadata dict for
+                a file path (used for tracking failures with context).
 
         Returns:
             Tuple of (updated_file_paths, updated_file_info, exif_rebuilt_count).
@@ -808,9 +809,38 @@ class ProcessorBase(ABC):
         )
         exif_rebuilt_count = 0
         if file_paths:
-            exif_rebuilt_count = cls.batch_process_exif(
+            exif_rebuilt_count, write_outcome, missing_files = cls.batch_process_exif(
                 file_paths, file_info, metadata_builder, dedup_manifest
             )
+
+            # Track EXIF failures if failure_tracker is provided
+            if failure_tracker:
+                # Track missing files (output files that don't exist at EXIF write time)
+                for missing_path in missing_files:
+                    metadata = (
+                        metadata_for_file(missing_path) if metadata_for_file else None
+                    )
+                    failure_tracker.add_processing_failure(
+                        media_path=Path(missing_path),
+                        metadata=metadata,
+                        reason="exif_target_missing",
+                        error_details=f"Output file missing at EXIF write time: {missing_path}",
+                    )
+
+                # Track EXIF write failures
+                for failure in write_outcome.failures:
+                    metadata = (
+                        metadata_for_file(failure.file_path)
+                        if metadata_for_file
+                        else None
+                    )
+                    failure_tracker.add_processing_failure(
+                        media_path=Path(failure.file_path),
+                        metadata=metadata,
+                        reason=failure.reason_code,
+                        error_details=failure.stderr_excerpt or "",
+                    )
+
         return file_paths, file_info, exif_rebuilt_count
 
     @staticmethod

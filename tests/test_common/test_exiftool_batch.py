@@ -12,11 +12,15 @@ from unittest.mock import MagicMock, patch
 
 
 from common.media.exiftool import (
+    BatchReadResult,
+    BatchWriteOutcome,
     DEFAULT_PREAMBLE,
     DescriptionWriteSpec,
+    ExifWriteFailure,
     GPSData,
     MetadataWriteRequest,
     XMP_PRESERVED_FILENAME_EXTENSIONS,
+    batch_read_existing_metadata,
     batch_write_metadata_requests,
 )
 
@@ -589,3 +593,91 @@ class TestOriginalFilename:
 
         assert len(argfile_content) == 1
         assert "-XMP:PreservedFileName=VID_20231215_143000.mp4" in argfile_content[0]
+
+
+class TestBatchWriteOutcomes:
+    """Tests for BatchWriteOutcome and failure classification."""
+
+    def test_success_outcome_records_successes(self, tmp_path: Path) -> None:
+        """Successful exiftool run should populate successes."""
+        test_file = tmp_path / "ok.jpg"
+        test_file.touch()
+        request = MetadataWriteRequest(
+            file_path=str(test_file),
+            arg_preamble=DEFAULT_PREAMBLE,
+            processor_name="test",
+        )
+
+        with patch(
+            "common.media.exiftool.subprocess.run",
+            return_value=MagicMock(returncode=0, stdout="", stderr=""),
+        ):
+            outcome = batch_write_metadata_requests(
+                [request],
+                existing_metadata_map={str(test_file): {}},
+                dedup_manifest=None,
+            )
+        assert isinstance(outcome, BatchWriteOutcome)
+        assert str(test_file) in outcome.successes
+        assert not outcome.failures
+
+    def test_missing_file_emits_failure(self, tmp_path: Path) -> None:
+        """Missing files should be reported with reason_code=file_missing."""
+        missing_file = tmp_path / "missing.jpg"
+        request = MetadataWriteRequest(
+            file_path=str(missing_file),
+            arg_preamble=DEFAULT_PREAMBLE,
+            processor_name="test",
+        )
+
+        outcome = batch_write_metadata_requests(
+            [request],
+            existing_metadata_map={},
+            dedup_manifest=None,
+        )
+        assert len(outcome.failures) == 1
+        failure = outcome.failures[0]
+        assert isinstance(failure, ExifWriteFailure)
+        assert failure.reason_code == "file_missing"
+        assert not outcome.successes
+
+    def test_format_error_reason_code(self, tmp_path: Path) -> None:
+        """Exiftool format errors should classify as format_error."""
+        test_file = tmp_path / "bad.mov"
+        test_file.touch()
+        request = MetadataWriteRequest(
+            file_path=str(test_file),
+            arg_preamble=DEFAULT_PREAMBLE,
+            processor_name="test",
+        )
+
+        with patch(
+            "common.media.exiftool.subprocess.run",
+            return_value=MagicMock(
+                returncode=1,
+                stdout="",
+                stderr="File format error: cannot parse",
+            ),
+        ):
+            outcome = batch_write_metadata_requests(
+                [request], existing_metadata_map={str(test_file): {}}, dedup_manifest=None
+            )
+
+        assert outcome.failures
+        assert outcome.failures[0].reason_code == "format_error"
+        assert str(test_file) not in outcome.successes
+
+
+class TestBatchReadResult:
+    """Tests for batch_read_existing_metadata return structure."""
+
+    def test_missing_files_listed(self, tmp_path: Path) -> None:
+        """Missing files should be returned in missing_files."""
+        existing = tmp_path / "exists.jpg"
+        existing.touch()
+        missing = tmp_path / "nope.jpg"
+
+        result = batch_read_existing_metadata([str(existing), str(missing)])
+        assert isinstance(result, BatchReadResult)
+        assert str(missing) in result.missing_files
+        assert str(existing) in result.metadata_map

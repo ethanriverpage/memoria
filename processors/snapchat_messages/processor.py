@@ -7,7 +7,11 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.dedup.service import is_file_primary_by_hash
+from common.dedup.service import (
+    get_canonical_timestamp,
+    save_dedup_metadata,
+)
+from common.failure_tracker import FailureTracker
 from common.dedup.description import (
     SourceEntry,
     build_description,
@@ -23,10 +27,12 @@ from common.media.exiftool import (
     MetadataWriteRequest,
     build_datetime_tags,
 )
+from common.files.utils import short_path
 from common.output.logging import init_worker_logging
 from common.media.overlay import (
     create_image_with_overlay,
     create_video_with_overlay,
+    OverlayProcessingError,
 )
 from common.processing import (
     print_processing_summary,
@@ -37,7 +43,6 @@ from common.utils import (
     FilenameGenerator,
     get_media_type,
     is_preprocessed_directory,
-    sanitize_filename,
     update_file_timestamps,
 )
 from common.output.logging import get_processor_logger
@@ -209,7 +214,7 @@ class SnapchatMessagesProcessor(ProcessorBase):
 
         Args:
             input_dir: Path to preprocessed input directory
-            **kwargs: Additional arguments (verbose, workers)
+            **kwargs: Additional arguments (workers)
 
         Yields:
             Catalog entries with processor name and file data.
@@ -292,7 +297,7 @@ class SnapchatMessagesProcessor(ProcessorBase):
             return True
 
         except Exception as e:
-            logger.error(f"Error in SnapchatMessagesProcessor: {e}")
+            logger.error("Error in SnapchatMessagesProcessor: %s", e)
             return False
 
 
@@ -399,7 +404,8 @@ def _build_metadata_requests(
 
         # Build datetime tags (handles both legacy date-only and standard formats)
         date_str = (
-            message.get("primary_created") if is_merged else message.get("created")
+            message.get("canonical_timestamp")
+            or (message.get("primary_created") if is_merged else message.get("created"))
         )
         datetime_tags = build_datetime_tags(date_str, strip_utc=True)
 
@@ -484,30 +490,6 @@ def extract_date_from_filename(filename: str) -> Optional[str]:
     if match:
         return match.group(1)
     return None
-
-
-def _build_chat_identifier(message: dict, export_username: str) -> str:
-    """Build identifier for snapchat message filename based on conversation type."""
-    is_merged = "messages" in message and isinstance(message["messages"], list)
-
-    if is_merged:
-        # Merged messages use simplified naming without conversation
-        return export_username
-
-    # Determine conversation type and identifier
-    conv_type = message.get("conversation_type")
-    conv_id = message.get("conversation_id")
-
-    # Handle orphaned media (no conversation context)
-    if conv_id is None or conv_type is None:
-        return f"{export_username}-unknown"
-    elif conv_type == "dm":
-        # Direct message - use conversation_id (other user's username)
-        return f"{export_username}-{sanitize_filename(conv_id)}"
-    else:
-        # Group chat - use conversation_title
-        title = message.get("conversation_title", "unknown")
-        return f"{export_username}-{sanitize_filename(title)}"
 
 
 def _get_message_timestamp(message: dict) -> Optional[str]:
@@ -605,52 +587,64 @@ def _create_file_worker(args_tuple):
                 # Build description with full message context (handles merged messages)
                 video_description = _build_description(message, export_username)
 
-                success = create_video_with_overlay(
-                    media_path,
-                    overlay_path,
-                    output_path,
-                    video_metadata,
-                    export_username=export_username,
-                    description=video_description,
-                    original_filename=original_filename,
-                )
-
-                if success:
-                    _update_snapchat_timestamps(output_path, message)
-                    # MKV files already have metadata embedded (including original_filename)
-                    return (
-                        True,
-                        str(output_path),
-                        True,
-                        message,
-                        export_username,
-                        content_hash,
-                        original_filename,
+                try:
+                    success = create_video_with_overlay(
+                        media_path,
+                        overlay_path,
+                        output_path,
+                        video_metadata,
+                        export_username=export_username,
+                        description=video_description,
+                        original_filename=original_filename,
                     )
-                else:
-                    # Fallback: copy original video with original extension
+
+                    if success:
+                        _update_snapchat_timestamps(output_path, message)
+                        # MKV files already have metadata embedded (including original_filename)
+                        return (
+                            True,
+                            str(output_path),
+                            True,
+                            message,
+                            export_username,
+                            content_hash,
+                            original_filename,
+                        )
+                    else:
+                        # Fallback: copy original video with original extension
+                        fallback_filename = output_filename.replace(".mkv", file_ext)
+                        fallback_path = output_dir / fallback_filename
+                        copy_file(media_path, fallback_path)
+                        _update_snapchat_timestamps(fallback_path, message)
+                        # Fallback file needs batch EXIF processing
+                        return (
+                            True,
+                            str(fallback_path),
+                            False,
+                            message,
+                            export_username,
+                            content_hash,
+                            original_filename,
+                        )
+                except OverlayProcessingError as e:
+                    # Overlay corrupt - soft-fail, copy base video
+                    logger.warning(
+                        "Overlay processing failed for %s: %s - copying base video",
+                        media_path.name,
+                        e,
+                    )
                     fallback_filename = output_filename.replace(".mkv", file_ext)
                     fallback_path = output_dir / fallback_filename
                     copy_file(media_path, fallback_path)
                     _update_snapchat_timestamps(fallback_path, message)
-                    # Fallback file needs batch EXIF processing
-                    return (
-                        True,
-                        str(fallback_path),
-                        False,
-                        message,
-                        export_username,
-                        content_hash,
-                        original_filename,
-                    )
+                    raise  # Re-raise for outer exception handler to track
 
             elif is_image:
                 # Image with overlay - composite
-                success = create_image_with_overlay(
-                    media_path, overlay_path, output_path
-                )
-
-                if success:
+                try:
+                    create_image_with_overlay(
+                        media_path, overlay_path, output_path
+                    )
                     _update_snapchat_timestamps(output_path, message)
                     # Image needs batch EXIF processing
                     return (
@@ -662,19 +656,16 @@ def _create_file_worker(args_tuple):
                         content_hash,
                         original_filename,
                     )
-                else:
-                    # Fallback: copy original
+                except OverlayProcessingError as e:
+                    # Overlay corrupt - soft-fail, copy base image
+                    logger.warning(
+                        "Overlay processing failed for %s: %s - copying base image",
+                        media_path.name,
+                        e,
+                    )
                     copy_file(media_path, output_path)
                     _update_snapchat_timestamps(output_path, message)
-                    return (
-                        True,
-                        str(output_path),
-                        False,
-                        message,
-                        export_username,
-                        content_hash,
-                        original_filename,
-                    )
+                    raise  # Re-raise for outer exception handler to track
             else:
                 # Unknown file type with overlay - just copy
                 copy_file(media_path, output_path)
@@ -703,8 +694,20 @@ def _create_file_worker(args_tuple):
                 original_filename,
             )
 
+    except OverlayProcessingError:
+        # Overlay corrupt - base file was already copied by inner handler
+        # Treat as success (file was produced) but log warning was already emitted
+        return (
+            True,
+            str(output_path),
+            False,
+            message,
+            export_username,
+            content_hash,
+            original_filename,
+        )
     except Exception as e:
-        logger.error(f"Error processing {media_path.name}: {e}")
+        logger.error("Error processing %s: %s", media_path.name, e)
         return (
             False,
             None,
@@ -732,7 +735,7 @@ def process_logic(
     # Validate input directory exists
     input_dir = Path(input_dir)
     if not input_dir.exists():
-        logger.error(f"Input directory not found: {input_dir}")
+        logger.error("Input directory not found: %s", short_path(input_dir))
         return
 
     # Check for required tools
@@ -740,7 +743,6 @@ def process_logic(
         return
 
     logger.info("Snapchat Messages Processor")
-    logger.info("=" * 50)
 
     output_dir = Path(output_dir)
 
@@ -753,7 +755,7 @@ def process_logic(
         )
         return False
 
-    logger.info(f"Processing preprocessed directory: {input_dir}")
+    logger.info("Processing preprocessed directory: %s", short_path(input_dir))
     _process_snapchat_working_directory(
         input_dir, output_dir, workers, log_filename, dedup_manifest
     )
@@ -775,24 +777,34 @@ def _process_snapchat_working_directory(
 
     # Check for metadata file (should exist after preprocessing or if already preprocessed)
     if not metadata_file.exists():
-        logger.error(f"Metadata file not found: {metadata_file}")
+        logger.error("Metadata file not found: %s", short_path(metadata_file))
         return
 
     # Load metadata
-    logger.info(f"Loading metadata from {metadata_file}...")
+    logger.info("Loading metadata from %s...", short_path(metadata_file))
     metadata = SnapchatMessagesProcessor.load_metadata(
-        metadata_file, validate=True, require_source_paths=True
+        metadata_file,
+        validate=True,
+        require_source_paths=True,
+        processor_name="Snapchat Messages",
     )
 
-    export_username = metadata.get("export_info", {}).get("export_username", "unknown")
-    logger.info(f"Export username: {export_username}")
+    export_info = metadata.get("export_info", {})
+    export_username = export_info.get("export_username")
+    log.export_username(export_username)
+
+    # Initialize failure tracker for this export
+    failure_tracker = FailureTracker(
+        processor_name="Snapchat Messages",
+        export_directory=str(working_dir),
+    )
 
     # Build media index
     logger.info("Building media index...")
     media_index = build_media_index(metadata)
     filename_index = build_filename_index(metadata)
-    logger.info(f"Found {len(media_index)} messages with media IDs")
-    logger.info(f"Found {len(filename_index)} orphaned media entries by filename")
+    logger.info("Found %d messages with media IDs", len(media_index))
+    logger.info("Found %d orphaned media entries by filename", len(filename_index))
 
     # Build list of source files from metadata.
     #
@@ -801,6 +813,10 @@ def _process_snapchat_working_directory(
     # Unmatched media entries store:
     #   filename + source_path
     media_files: list[Path] = []
+    missing_source_path = 0
+    missing_path_examples: list[str] = []
+    missing_file_count = 0
+    missing_file_examples: list[str] = []
     for filename, ctx in filename_index.items():
         source_path_str: Optional[str] = None
         if isinstance(ctx, dict) and ctx.get("source_path"):
@@ -811,42 +827,63 @@ def _process_snapchat_working_directory(
                 source_path_str = source_paths.get(filename)
 
         if not source_path_str:
-            logger.warning("No source path for file in metadata: %s", filename)
+            missing_source_path += 1
+            if len(missing_path_examples) < 5:
+                missing_path_examples.append(filename)
             continue
 
         source_path = Path(source_path_str)
         if source_path.exists():
             media_files.append(source_path)
         else:
-            logger.warning("Source file not found: %s", source_path)
+            missing_file_count += 1
+            if len(missing_file_examples) < 5:
+                missing_file_examples.append(short_path(source_path))
+
+    if missing_source_path > 0:
+        logger.info(
+            "Missing source_path for %d files (e.g. %s)",
+            missing_source_path,
+            ", ".join(missing_path_examples),
+        )
+    if missing_file_count > 0:
+        logger.info(
+            "Source file not found for %d files (e.g. %s)",
+            missing_file_count,
+            ", ".join(missing_file_examples),
+        )
 
     logger.info("Found %d media files from metadata", len(media_files))
 
     # Filter out secondary files based on dedup manifest (using hash-based lookup)
-    # Use cached file_hashes from preprocessing when available to avoid re-hashing
     file_hashes = metadata.get("file_hashes", {})
+    skipped_secondary_files: list[str] = []
     if dedup_manifest:
         original_count = len(media_files)
         filtered_files = []
         for f in media_files:
             content_hash = file_hashes.get(f.name)
             source_path_str = str(f)
-            if content_hash:
-                # Use cached hash from preprocessing (avoids re-hashing)
-                if is_file_primary_by_hash(
-                    dedup_manifest, content_hash, "Snapchat Messages", source_path_str
-                ):
-                    filtered_files.append(f)
+            if SnapchatMessagesProcessor.should_skip_for_dedup(
+                dedup_manifest, content_hash, "Snapchat Messages", source_path_str
+            ):
+                skipped_secondary_files.append(source_path_str)
             else:
-                # Fallback for files without cached hash
-                if not SnapchatMessagesProcessor.should_skip_for_dedup(
-                    source_path_str, dedup_manifest, "Snapchat Messages"
-                ):
-                    filtered_files.append(f)
+                filtered_files.append(f)
         media_files = filtered_files
         skipped_count = original_count - len(media_files)
         if skipped_count > 0:
-            logger.info(f"Skipped {skipped_count} secondary files (dedup)")
+            log.skipped_secondary(skipped_count)
+
+    # Check for no media files (export-level soft-fail)
+    if not media_files:
+        logger.warning("No media files found to process.")
+        failure_tracker.add_export_failure(
+            reason="no_media_files",
+            error_details="No media files found in export to process",
+        )
+        failure_tracker.handle_failures(output_dir)
+        return False
 
     # Create output directory (subdirectory already set by caller)
     output_dir.mkdir(exist_ok=True, parents=True)
@@ -872,13 +909,16 @@ def _process_snapchat_working_directory(
             # Could not match - add to unmatched
             unmatched_files.append(media_file)
 
-    logger.info(f"Matched {len(matched_files)} files")
-    logger.info(f"Unmatched {len(unmatched_files)} files")
+    logger.info("Matched %d files", len(matched_files))
+    logger.info("Unmatched %d files", len(unmatched_files))
 
     # Pre-generate all output filenames to ensure deterministic naming
     logger.info("Pre-generating output filenames...")
     filename_gen = FilenameGenerator(
-        "snap-messages", timestamp_format="%Y-%m-%d %H:%M:%S UTC"
+        "snap",
+        export_username,
+        service="msgs",
+        timestamp_format="%Y-%m-%d %H:%M:%S UTC",
     )
     output_filenames = []  # List of output filenames in same order as matched_files
 
@@ -901,21 +941,26 @@ def _process_snapchat_working_directory(
             if Path(overlay_source_path).exists():
                 will_have_overlay = True
 
-        # Build identifier (policy) and delegate to FilenameGenerator (mechanism)
-        identifier = _build_chat_identifier(message, export_username)
+        # Generate output filename from canonical timestamp (dedup merged earliest preferred)
         timestamp = _get_message_timestamp(message)
+        content_hash = file_hashes.get(media_file.name)
+        canonical_ts = get_canonical_timestamp(dedup_manifest, content_hash, timestamp)
+        message["canonical_timestamp"] = canonical_ts
         ext = ".mkv" if will_have_overlay else file_ext
-        output_filename = filename_gen.generate(timestamp, identifier, ext)
+        output_filename = filename_gen.generate(canonical_ts, ext)
 
         output_filenames.append(output_filename)
 
     # Process matched files with parallel processing
-    logger.info(f"Processing {len(matched_files)} matched files to {output_dir}/")
-    logger.info("=" * 50)
+    logger.info(
+        "Processing %d matched files to %s/",
+        len(matched_files),
+        short_path(output_dir),
+    )
 
     # Determine number of parallel workers
     num_workers = workers if workers is not None else default_worker_count()
-    logger.info(f"Using {num_workers} parallel workers")
+    logger.info("Using %d parallel workers", num_workers)
 
     # Prepare arguments for parallel processing
     process_args = []
@@ -943,8 +988,8 @@ def _process_snapchat_working_directory(
         # Specify app modules for DEBUG level in workers
         worker_app_modules = [
             __name__,
-            "common.overlay",
-            "common.video_encoder",
+            "common.media.overlay",
+            "common.media.encoder",
             "processors.snapchat_messages.preprocess",
         ]
         with Pool(
@@ -986,8 +1031,9 @@ def _process_snapchat_working_directory(
     )
 
     logger.info(
-        f"\nCreated {collected.success_count} files "
-        f"({len(collected.file_info)} need EXIF processing)"
+        "Created %d files (%d need EXIF processing)",
+        collected.success_count,
+        len(collected.file_info),
     )
 
     # Phase 3: Correct file extensions and batch process EXIF metadata
@@ -1002,18 +1048,26 @@ def _process_snapchat_working_directory(
         )
     )
 
-    # Handle unmatched files - copy to failed-matching directory
+    # Handle unmatched files via FailureTracker
     if unmatched_files:
-        logger.info(f"Processing {len(unmatched_files)} unmatched files...")
-        failed_matching_dir = output_dir / "issues" / "failed-matching" / "media"
-        failed_matching_dir.mkdir(exist_ok=True, parents=True)
-
+        logger.info("Processing %d unmatched files...", len(unmatched_files))
         for media_file in unmatched_files:
-            try:
-                # Copy to failed-matching directory with original filename
-                copy_file(media_file, failed_matching_dir / media_file.name)
-            except Exception as e:
-                logger.error(f"Error copying unmatched file {media_file.name}: {e}")
+            failure_tracker.add_orphaned_media(
+                source_path=media_file,
+                reason="No matching metadata found",
+            )
+
+    # Handle failures - copy orphaned files and generate report
+    failure_tracker.handle_failures(output_dir)
+
+    # Save dedup references for skipped secondary files
+    if dedup_manifest and skipped_secondary_files:
+        save_dedup_metadata(
+            manifest=dedup_manifest,
+            skipped_files=skipped_secondary_files,
+            processor_name="Snapchat Messages",
+            output_dir=output_dir,
+        )
 
     # Print summary using shared utility
     print_processing_summary(
@@ -1029,7 +1083,7 @@ def _process_snapchat_working_directory(
 
     if unmatched_files:
         logger.info(
-            f"Unmatched files saved to: {(output_dir / 'issues' / 'failed-matching' / 'media').absolute()}"
+            "Unmatched files were tracked via FailureTracker (see issues/failure-report.json)."
         )
 
     logger.info("Note: Videos with overlays are saved as multi-track MKV files:")
@@ -1045,6 +1099,8 @@ def _process_snapchat_working_directory(
         )
         if materialized > 0:
             needs_matching_dest = output_dir / "issues" / "needs_matching"
-            logger.info(f"Ambiguous cases created in: {needs_matching_dest.absolute()}")
+            logger.info(
+                "Ambiguous cases created in: %s", short_path(needs_matching_dest)
+            )
     except Exception as e:
-        logger.warning(f"Failed to materialize ambiguous cases: {e}")
+        logger.warning("Failed to materialize ambiguous cases: %s", e)

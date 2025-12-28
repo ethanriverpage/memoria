@@ -38,6 +38,37 @@ from common.dedup.service import (
 )
 
 
+def write_catalogs_to_db(db: HashDatabase, run_id: str, catalogs: list) -> None:
+    """Write catalog entries to the database for testing analyze_from_db.
+
+    This helper prepares catalog entries with the _processor field set
+    and writes them to the database in the format expected by analyze_from_db.
+
+    Args:
+        db: HashDatabase instance.
+        run_id: Run identifier for this test.
+        catalogs: List of catalog dictionaries (same format as analyze() took).
+    """
+    for catalog in catalogs:
+        processor = catalog.get("processor", "Unknown")
+        export_name = catalog.get("input_dir", "export")
+        entries = []
+        for file_entry in catalog.get("files", []):
+            entry = dict(file_entry)
+            entry["_processor"] = processor
+            # Preserve live_photo_video in metadata for database round-trip
+            if "live_photo_video" in entry:
+                metadata = entry.get("metadata", {})
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata = dict(metadata)
+                metadata["live_photo_video"] = entry["live_photo_video"]
+                entry["metadata"] = metadata
+            entries.append(entry)
+        if entries:
+            db.write_catalog_entries_batch(run_id, export_name, entries)
+
+
 @pytest.fixture(autouse=True)
 def reset_dedup_config_fixture():
     """Reset dedup config before and after each test."""
@@ -159,7 +190,9 @@ class TestCrossProcessorDescriptionBuilding:
         self, dedup_service, cross_processor_catalogs
     ):
         """Test that the manifest correctly identifies duplicates across processors."""
-        manifest = dedup_service.analyze(cross_processor_catalogs)
+        run_id = "test_cross_processor_duplicates"
+        write_catalogs_to_db(dedup_service.db, run_id, cross_processor_catalogs)
+        manifest = dedup_service.analyze_from_db(run_id)
 
         # Verify duplicate was found
         assert "00183fbb4f4f1212" in manifest["duplicates"]
@@ -182,7 +215,9 @@ class TestCrossProcessorDescriptionBuilding:
         self, dedup_service, cross_processor_catalogs
     ):
         """Test that get_merged_description_for_file includes all source processors."""
-        manifest = dedup_service.analyze(cross_processor_catalogs)
+        run_id = "test_merged_desc_all_sources"
+        write_catalogs_to_db(dedup_service.db, run_id, cross_processor_catalogs)
+        manifest = dedup_service.analyze_from_db(run_id)
 
         # Get merged description for primary file
         primary_path = "/exports/google/IMG_5895.heic"
@@ -207,7 +242,9 @@ class TestCrossProcessorDescriptionBuilding:
             +iMessage/m3_mbp: ...
             +Instagram Messages/myinsta/messages: ...
         """
-        manifest = dedup_service.analyze(cross_processor_catalogs)
+        run_id = "test_desc_format"
+        write_catalogs_to_db(dedup_service.db, run_id, cross_processor_catalogs)
+        manifest = dedup_service.analyze_from_db(run_id)
         primary_path = "/exports/google/IMG_5895.heic"
         description = get_merged_description_for_file(manifest, primary_path)
 
@@ -226,7 +263,9 @@ class TestCrossProcessorDescriptionBuilding:
         self, dedup_service, cross_processor_catalogs
     ):
         """Test that secondary source entries include message context."""
-        manifest = dedup_service.analyze(cross_processor_catalogs)
+        run_id = "test_secondary_context"
+        write_catalogs_to_db(dedup_service.db, run_id, cross_processor_catalogs)
+        manifest = dedup_service.analyze_from_db(run_id)
 
         # Get the duplicate group
         dup_group = manifest["duplicates"]["00183fbb4f4f1212"]
@@ -249,7 +288,9 @@ class TestCrossProcessorDescriptionBuilding:
         self, dedup_service, cross_processor_catalogs
     ):
         """Test that get_merged_description_for_file returns None for secondary files."""
-        manifest = dedup_service.analyze(cross_processor_catalogs)
+        run_id = "test_secondary_returns_none"
+        write_catalogs_to_db(dedup_service.db, run_id, cross_processor_catalogs)
+        manifest = dedup_service.analyze_from_db(run_id)
 
         # Try to get description for a secondary file
         secondary_path = "/exports/imessage/iph13p/attachment_001.heic"
@@ -380,10 +421,9 @@ class TestMergedDescriptionWiring:
             },
         }
 
-        file_path = str(tmp_path / "photo.jpg")
         default_description = "Source: Google Photos"
 
-        result = _get_description_for_file(file_path, default_description, manifest)
+        result = _get_description_for_file(default_description, manifest)
 
         # When manifest is provided and file is primary, should return merged description
         # This test documents the expected behavior
@@ -395,7 +435,6 @@ class TestMergedDescriptionWiring:
 
         default_description = "Source: Google Photos"
         result = _get_description_for_file(
-            "/some/path.jpg",
             default_description,
             dedup_manifest=None,
         )

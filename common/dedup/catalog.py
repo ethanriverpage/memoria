@@ -24,8 +24,7 @@ logger = logging.getLogger(__name__)
 def _extract_media_entries(metadata: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
     """Extract all media entries from any metadata structure.
 
-    This is a wrapper around ProcessorBase.extract_all_media_entries() to avoid
-    circular imports. The actual implementation is in ProcessorBase.
+    Delegates to common.metadata.extraction.extract_all_media_entries().
 
     Args:
         metadata: Parsed metadata.json dict
@@ -33,10 +32,9 @@ def _extract_media_entries(metadata: Dict[str, Any]) -> Iterator[Dict[str, Any]]
     Yields:
         Media entry dicts with at minimum: filename, source_path, content_hash
     """
-    # Import here to avoid circular import
-    from processors.base import ProcessorBase
+    from common.metadata.extraction import extract_all_media_entries
 
-    yield from ProcessorBase.extract_all_media_entries(metadata)
+    yield from extract_all_media_entries(metadata)
 
 
 def catalog_from_preprocessed(
@@ -84,15 +82,14 @@ def catalog_from_preprocessed(
         logger.info(f"No files to catalog: {get_export_name(input_path)}")
         return
 
-    # Check if this uses source_path format (new) vs media/ directory (legacy)
+    # Verify preprocessed metadata has source_path (required invariant)
     sample = media_entries[0] if media_entries else {}
     if "source_path" not in sample or not sample.get("source_path"):
-        # Legacy format - caller should use catalog_media_files instead
-        logger.debug(
-            f"Legacy format detected in {input_path}, "
-            "caller should use catalog_media_files"
+        raise ValueError(
+            f"Preprocessed metadata in {input_path} is missing source_path. "
+            "All preprocessed metadata must include source_path for each media entry. "
+            "This indicates corrupted or incompatible preprocessed output."
         )
-        return
 
     export_name = get_export_name(input_path)
     logger.info(f"Cataloging {len(media_entries)} files from metadata: {export_name}")
@@ -179,9 +176,7 @@ def catalog_from_preprocessed(
                 ): (entry, source_path)
                 for entry, source_path in entries_needing_hashes
             }
-            for future in futures_progress(
-                futures, PHASE_CATALOG, "Computing hashes", unit="file"
-            ):
+            for future in futures_progress(futures, PHASE_CATALOG, "Computing hashes"):
                 result = future.result()
                 if result:
                     catalog_entry, cache_entry = result
@@ -306,6 +301,7 @@ def _compute_missing_hashes(
     except Exception as e:
         logger.warning(f"Failed to compute hashes for {short_path(source_path)}: {e}")
         return None
+
 
 # Environment variable to override catalog workers (for memory-constrained systems)
 # Large images (HEIC) can use 36-50MB each during perceptual hashing
@@ -543,9 +539,7 @@ def catalog_media_files(
             ): fp
             for fp in media_files
         }
-        for future in futures_progress(
-            futures, PHASE_CATALOG, "Hashing files", unit="file"
-        ):
+        for future in futures_progress(futures, PHASE_CATALOG, "Hashing files"):
             result = future.result()
             if result:
                 entry, was_cached, cache_entry = result

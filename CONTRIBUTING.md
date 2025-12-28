@@ -9,12 +9,14 @@ Thank you for your interest in contributing to Memoria! This document provides g
 Ensure you have the following installed on your system:
 
 **Required:**
+
 - Python 3.7 or higher
 - exiftool ([installation instructions](README.md#system-requirements))
 - ffmpeg ([installation instructions](README.md#system-requirements))
 - libmagic ([installation instructions](README.md#system-requirements))
 
 **Optional (for Immich integration):**
+
 - Immich CLI: `npm i -g @immich/cli`
 
 ### Setting Up Your Development Environment
@@ -26,20 +28,20 @@ git clone https://github.com/yourusername/memoria.git
 cd memoria
 ```
 
-2. **Create and activate a virtual environment:**
+1. **Create and activate a virtual environment:**
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-3. **Install dependencies:**
+1. **Install dependencies:**
 
 ```bash
 pip install -r requirements.txt
 ```
 
-4. **Install in development mode:**
+1. **Install in development mode:**
 
 ```bash
 pip install -e .
@@ -47,7 +49,7 @@ pip install -e .
 
 This makes the `common` and `processors` modules importable and allows you to test changes immediately.
 
-5. **Verify installation:**
+1. **Verify installation:**
 
 ```bash
 # Test system dependencies
@@ -55,7 +57,7 @@ exiftool -ver
 ffmpeg -version
 
 # Test Python imports
-python3 -c "from common.filter_banned_files import BannedFilesFilter; print('Success!')"
+python3 -c "from common.files.filter import BannedFilesFilter; print('Success!')"
 
 # Run the main script
 ./memoria.py --list-processors
@@ -85,19 +87,22 @@ DISABLE_TEMP_CLEANUP=false
 We follow these coding standards:
 
 1. **Formatting**: Use [Black](https://github.com/psf/black) for code formatting
+
    ```bash
    pip install black
    black .
    ```
 
 2. **Type Hints**: Use type hints for function signatures
+
    ```python
-   def process_file(input_path: Path, verbose: bool = False) -> bool:
+   def process_file(input_path: Path, verbosity: int = 0) -> bool:
        """Process a file and return success status"""
        pass
    ```
 
 3. **Docstrings**: Use Google-style docstrings
+
    ```python
    def my_function(param1: str, param2: int) -> bool:
        """Short description of function.
@@ -119,6 +124,7 @@ We follow these coding standards:
    - Bad: `get_data`, `cnt`, `x`
 
 5. **Error Handling**: Include context in error messages and logging
+
    ```python
    try:
        process_file(path)
@@ -128,6 +134,7 @@ We follow these coding standards:
    ```
 
 6. **Logging**: Use the logging module, not print statements (except for user-facing output)
+
    ```python
    import logging
    logger = logging.getLogger(__name__)
@@ -179,7 +186,10 @@ Description of what this processor does.
 """
 import logging
 from pathlib import Path
+from typing import Optional
+
 from processors.base import ProcessorBase
+from common.output.paths import OutputInfo
 
 logger = logging.getLogger(__name__)
 
@@ -229,28 +239,47 @@ class MyPlatformProcessor(ProcessorBase):
         return 50  # Adjust based on your detection specificity
     
     @staticmethod
-    def process(input_dir: str, output_dir: str = None, **kwargs) -> bool:
+    def get_output_info() -> OutputInfo:
+        """Define output routing for Platform/User/Service structure.
+        
+        Returns:
+            OutputInfo with platform name, service subdirectory, and
+            username prefix for extracting username from export directory.
+        """
+        return OutputInfo(
+            platform="MyPlatform",
+            service="media",  # or None if no service subdirectory
+            username_prefix="myplatform",
+        )
+    
+    @staticmethod
+    def process(
+        input_dir: str,
+        output_dir: Optional[str] = None,
+        **kwargs
+    ) -> bool:
         """Process the export
         
         Args:
             input_dir: Path to input directory
-            output_dir: Optional base output directory
-            **kwargs: Additional args (verbose, workers, temp_dir, etc.)
+            output_dir: Platform/User output directory (from get_output_info)
+            **kwargs: Additional args (workers, temp_dir, etc.)
             
         Returns:
             True if processing succeeded, False otherwise
         """
-        from common.processor_config import get_effective_output_dir
-        
-        verbose = kwargs.get("verbose", False)
         workers = kwargs.get("workers", 4)
         
-        # Get processor-specific output directory
-        effective_output = get_effective_output_dir("My Platform", output_dir)
+        # Build effective output: output_dir/service
+        output_info = MyPlatformProcessor.get_output_info()
+        if output_dir and output_info.service:
+            effective_output = str(Path(output_dir) / output_info.service)
+        else:
+            effective_output = output_dir
         
         # Your processing logic here
-        print(f"Processing My Platform export from: {input_dir}")
-        print(f"Output directory: {effective_output}")
+        logger.info(f"Processing My Platform export from: {input_dir}")
+        logger.info(f"Output directory: {effective_output}")
         
         # Return True on success, False on failure
         return True
@@ -265,7 +294,7 @@ def get_processor():
 
 ```bash
 # Test detection
-./memoria.py /path/to/test/export --verbose
+./memoria.py /path/to/test/export -v
 
 # Verify it's discovered
 ./memoria.py --list-processors
@@ -274,6 +303,7 @@ def get_processor():
 ### 4. Add Documentation
 
 Update the main README.md to include:
+
 - Platform name in "Supported Formats" section
 - Any platform-specific requirements or notes
 
@@ -284,7 +314,7 @@ Update the main README.md to include:
 1. **Test with sample data**: Use actual export data from the platform
 2. **Test edge cases**: Empty exports, missing files, corrupted data
 3. **Test error handling**: Invalid paths, missing dependencies
-4. **Test verbose output**: Run with `--verbose` to check logging
+4. **Test verbose output**: Run with `-v` / `-vv` to check logging
 
 ### Running Tests
 
@@ -308,13 +338,14 @@ pytest --cov=common --cov=processors
 - [ ] Logging uses appropriate levels (DEBUG/INFO/ERROR)
 - [ ] Tested with real export data
 - [ ] No hardcoded paths or credentials
-- [ ] Works with both `--verbose` and normal modes
+- [ ] Works with both `-v/-vv` and normal modes
 
 ## Submitting Changes
 
 ### Pull Request Process
 
 1. **Fork the repository** and create a new branch from `main`:
+
    ```bash
    git checkout -b feature/my-new-processor
    ```
@@ -324,21 +355,23 @@ pytest --cov=common --cov=processors
 3. **Test thoroughly** with real export data
 
 4. **Commit with descriptive messages**:
+
    ```bash
    git commit -m "Add processor for My Platform exports"
    ```
-   
+
    Good commit messages:
    - "Add Instagram Reels processor"
    - "Fix metadata parsing for Google Photos albums"
    - "Improve error handling in exiftool batch operations"
-   
+
    Bad commit messages:
    - "fix bug"
    - "update"
    - "changes"
 
 5. **Push to your fork**:
+
    ```bash
    git push origin feature/my-new-processor
    ```
@@ -371,7 +404,7 @@ When reporting bugs, include:
    - OS and version
    - Python version
    - Dependency versions (exiftool, ffmpeg)
-4. **Logs**: Output with `--verbose` flag (redact any personal info)
+4. **Logs**: Output with `-v`/`-vv` flag (redact any personal info)
 5. **Sample Data**: If possible, provide minimal reproducible example
 
 ### Feature Requests
@@ -396,4 +429,3 @@ Be respectful, constructive, and professional in all interactions. We're all her
 ---
 
 Thank you for contributing to Memoria!
-

@@ -10,13 +10,14 @@ This package provides:
 
 from common.files.utils import (
     copy_file,
-    copy_file_safe,
     batch_correct_extensions,
     get_mime_type,
     MIME_TO_EXTENSION,
 )
 from common.files.scanner import (
     iter_media_files,
+    iter_files,
+    iter_subdirs,
     collect_media_files,
 )
 from common.files.filter import BannedFilesFilter
@@ -24,12 +25,13 @@ from common.files.filter import BannedFilesFilter
 __all__ = [
     # File utilities
     "copy_file",
-    "copy_file_safe",
     "batch_correct_extensions",
     "get_mime_type",
     "MIME_TO_EXTENSION",
     # Scanner
     "iter_media_files",
+    "iter_files",
+    "iter_subdirs",
     "collect_media_files",
     # Filter
     "BannedFilesFilter",

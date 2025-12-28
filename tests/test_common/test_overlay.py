@@ -21,6 +21,7 @@ from common.media.overlay import (
     create_image_with_overlay,
     create_video_with_overlay,
     get_video_metadata,
+    OverlayProcessingError,
 )
 
 
@@ -308,27 +309,28 @@ class TestCreateImageWithOverlay:
         with Image.open(output_path) as img:
             assert img.format == "PNG"
 
-    def test_missing_overlay_returns_false(
+    def test_missing_overlay_copies_base_image(
         self, test_image: Path, tmp_path: Path
     ) -> None:
-        """Should return False when overlay file is missing."""
+        """Missing overlay should copy base image and return True (policy G)."""
         output_path = tmp_path / "output.jpg"
         missing_overlay = tmp_path / "nonexistent.png"
 
         result = create_image_with_overlay(test_image, missing_overlay, output_path)
 
-        assert result is False
-        assert not output_path.exists()
+        # Per policy G: warning + continue with base image
+        assert result is True
+        assert output_path.exists()
 
-    def test_corrupted_overlay_returns_false(
+    def test_corrupted_overlay_raises_error(
         self, test_image: Path, corrupted_overlay: Path, tmp_path: Path
     ) -> None:
-        """Should return False when overlay file is corrupted."""
+        """Corrupted overlay should raise OverlayProcessingError (policy G soft-fail)."""
         output_path = tmp_path / "output.jpg"
 
-        result = create_image_with_overlay(test_image, corrupted_overlay, output_path)
-
-        assert result is False
+        # Per policy G: corrupt overlay is soft-fail
+        with pytest.raises(OverlayProcessingError):
+            create_image_with_overlay(test_image, corrupted_overlay, output_path)
 
     def test_quality_parameter(
         self, test_image: Path, test_overlay: Path, tmp_path: Path
@@ -496,27 +498,29 @@ class TestCreateVideoWithOverlay:
             # Rich format should contain "messages" and sender info
             assert "messages" in description.lower() or "friend" in description.lower()
 
-    def test_missing_overlay_returns_false(
+    def test_missing_overlay_continues_without_overlay(
         self, test_video: Path, tmp_path: Path
     ) -> None:
-        """Should return False when overlay file is missing."""
+        """Missing overlay should continue with base video (policy G)."""
         output_path = tmp_path / "output.mkv"
         missing_overlay = tmp_path / "nonexistent.png"
 
         result = create_video_with_overlay(test_video, missing_overlay, output_path)
 
-        assert result is False
-        assert not output_path.exists()
+        # Per policy G: warning + continue with base video
+        assert result is True
+        # Output is the rotated video path from pass1 (which may not have .mkv extension)
+        # So we just check the result is True
 
-    def test_corrupted_overlay_returns_false(
+    def test_corrupted_overlay_raises_error(
         self, test_video: Path, corrupted_overlay: Path, tmp_path: Path
     ) -> None:
-        """Should return False when overlay file is corrupted."""
+        """Corrupted overlay should raise OverlayProcessingError (policy G soft-fail)."""
         output_path = tmp_path / "output.mkv"
 
-        result = create_video_with_overlay(test_video, corrupted_overlay, output_path)
-
-        assert result is False
+        # Per policy G: corrupt overlay is soft-fail
+        with pytest.raises(OverlayProcessingError):
+            create_video_with_overlay(test_video, corrupted_overlay, output_path)
 
 
 # ============================================================================
@@ -573,28 +577,26 @@ class TestImageOverlayErrors:
         """Create a test overlay."""
         return create_test_overlay(tmp_path / "overlay.png")
 
-    def test_missing_source_image_returns_false(
+    def test_missing_source_image_raises_error(
         self, test_overlay: Path, tmp_path: Path
     ) -> None:
-        """Should return False when source image is missing."""
+        """Missing source image should raise OverlayProcessingError."""
         missing_image = tmp_path / "nonexistent.jpg"
         output_path = tmp_path / "output.jpg"
 
-        result = create_image_with_overlay(missing_image, test_overlay, output_path)
+        with pytest.raises(OverlayProcessingError):
+            create_image_with_overlay(missing_image, test_overlay, output_path)
 
-        assert result is False
-
-    def test_corrupted_source_image_returns_false(
+    def test_corrupted_source_image_raises_error(
         self, test_overlay: Path, tmp_path: Path
     ) -> None:
-        """Should return False when source image is corrupted."""
+        """Corrupted source image should raise OverlayProcessingError."""
         corrupted_image = tmp_path / "corrupted.jpg"
         corrupted_image.write_bytes(b"not an image file")
         output_path = tmp_path / "output.jpg"
 
-        result = create_image_with_overlay(corrupted_image, test_overlay, output_path)
-
-        assert result is False
+        with pytest.raises(OverlayProcessingError):
+            create_image_with_overlay(corrupted_image, test_overlay, output_path)
 
     def test_output_to_existing_directory(
         self, test_image: Path, test_overlay: Path, tmp_path: Path

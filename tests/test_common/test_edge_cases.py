@@ -17,11 +17,11 @@ from pathlib import Path
 
 import pytest
 
+from common.detection import detect_from_dirname
 from common.utils import (
     sanitize_filename,
     FilenameGenerator,
     update_file_timestamps,
-    extract_username_from_export_dir,
     default_worker_count,
 )
 from common.files.filter import BannedFilesFilter
@@ -50,35 +50,39 @@ class TestEmptyInputs:
         result = sanitize_filename("   \t\n  ")
         assert result is not None
 
-    def test_filename_generator_empty_prefix(self) -> None:
-        """Should handle empty prefix."""
-        gen = FilenameGenerator("")
-        result = gen.generate("2021-01-01 12:00:00", "test", ".jpg")
+    def test_filename_generator_empty_platform(self) -> None:
+        """Should handle empty platform."""
+        gen = FilenameGenerator("", "user")
+        result = gen.generate("2021-01-01 12:00:00", ".jpg")
         assert result is not None
         assert result.endswith(".jpg")
 
     def test_filename_generator_none_timestamp(self) -> None:
         """Should handle None timestamp."""
-        gen = FilenameGenerator("prefix")
-        result = gen.generate(None, "test", ".jpg")
+        gen = FilenameGenerator("platform", "user")
+        result = gen.generate(None, ".jpg")
         assert result is not None
         assert result.endswith(".jpg")
 
-    def test_filename_generator_empty_identifier(self) -> None:
-        """Should handle empty identifier."""
-        gen = FilenameGenerator("prefix")
-        result = gen.generate("2021-01-01 12:00:00", "", ".jpg")
+    def test_filename_generator_empty_username(self) -> None:
+        """Should handle empty username."""
+        gen = FilenameGenerator("platform", "")
+        result = gen.generate("2021-01-01 12:00:00", ".jpg")
         assert result is not None
 
-    def test_extract_username_empty_prefix(self) -> None:
-        """Should handle empty prefix."""
-        result = extract_username_from_export_dir("some-dir", "")
-        assert result is not None
+    def test_detect_from_dirname_empty_prefix(self, tmp_path: Path) -> None:
+        """Should handle empty platform prefix (used for export dir detection)."""
+        test_dir = tmp_path / "some-dir"
+        test_dir.mkdir()
+        result = detect_from_dirname(test_dir, "")
+        # Returns None when no match, which is acceptable
+        assert result is None or isinstance(result, str)
 
-    def test_extract_username_empty_dir(self) -> None:
+    def test_detect_from_dirname_empty_dir(self, tmp_path: Path) -> None:
         """Should handle empty directory name."""
-        result = extract_username_from_export_dir("", "prefix")
-        assert result is not None
+        result = detect_from_dirname(tmp_path, "prefix")
+        # Returns None when no match
+        assert result is None or isinstance(result, str)
 
     def test_collect_media_files_empty_list(self) -> None:
         """Should handle empty path list."""
@@ -308,7 +312,7 @@ class TestTimestampEdgeCases:
 
     def test_filename_generator_malformed_timestamp(self) -> None:
         """Should handle malformed timestamp strings."""
-        gen = FilenameGenerator("prefix")
+        gen = FilenameGenerator("platform", "user")
 
         malformed_timestamps = [
             "not-a-date",
@@ -320,7 +324,7 @@ class TestTimestampEdgeCases:
         ]
 
         for ts in malformed_timestamps:
-            result = gen.generate(ts, "test", ".jpg")
+            result = gen.generate(ts, ".jpg")
             # Should return something usable
             assert result is not None
             assert result.endswith(".jpg")

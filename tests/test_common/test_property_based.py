@@ -14,6 +14,7 @@ Tests cover:
 import string
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 from hypothesis import given, assume, settings, strategies as st, HealthCheck
 
@@ -120,41 +121,45 @@ class TestFilenameGeneratorProperties:
     """Property-based tests for FilenameGenerator."""
 
     @given(
-        prefix=st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10),
+        platform=st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10),
+        username=st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10),
+        service=st.one_of(st.none(), st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10)),
         timestamp=st.from_regex(
             r"20[0-9]{2}-[01][0-9]-[0-3][0-9] [0-2][0-9]:[0-5][0-9]:[0-5][0-9]",
             fullmatch=True,
         ),
-        identifier=st.text(alphabet=string.ascii_letters, min_size=1, max_size=20),
         extension=st.sampled_from([".jpg", ".png", ".mp4"]),
     )
     def test_generates_unique_filenames(
         self,
-        prefix: str,
+        platform: str,
+        username: str,
+        service: Optional[str],
         timestamp: str,
-        identifier: str,
         extension: str,
     ) -> None:
         """Generator should produce unique filenames for different inputs."""
-        gen = FilenameGenerator(prefix)
-        filename = gen.generate(timestamp, identifier, extension)
+        gen = FilenameGenerator(platform, username, service=service)
+        filename = gen.generate(timestamp, extension)
 
         assert filename is not None
         assert filename.endswith(extension)
         assert len(filename) > 0
 
     @given(
-        prefix=st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10),
-        identifier=st.text(alphabet=string.ascii_letters, min_size=1, max_size=20),
+        platform=st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10),
+        username=st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10),
+        service=st.one_of(st.none(), st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10)),
     )
     def test_handles_none_timestamp(
         self,
-        prefix: str,
-        identifier: str,
+        platform: str,
+        username: str,
+        service: Optional[str],
     ) -> None:
         """Generator should handle None timestamp gracefully."""
-        gen = FilenameGenerator(prefix)
-        filename = gen.generate(None, identifier, ".jpg")
+        gen = FilenameGenerator(platform, username, service=service)
+        filename = gen.generate(None, ".jpg")
 
         assert filename is not None
         assert filename.endswith(".jpg")

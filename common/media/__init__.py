@@ -19,7 +19,6 @@ from common.media.exiftool import (
     PREAMBLE_WITH_IGNORE_ERRORS,
 )
 from common.media.encoder import (
-    get_video_bitrate,
     get_encoder_args,
     get_encoder_input_args,
     get_encoder_name,
@@ -46,7 +45,6 @@ __all__ = [
     "DEFAULT_PREAMBLE",
     "PREAMBLE_WITH_IGNORE_ERRORS",
     # Encoder
-    "get_video_bitrate",
     "get_encoder_args",
     "get_encoder_input_args",
     "get_encoder_name",

@@ -14,12 +14,12 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor
 
-from common.output.progress import PHASE_PREPROCESS, futures_progress
+from common.output.progress import PHASE_PREPROCESS
 from common.preprocess.context_mergers import merge_albums
-from common.processing import print_preprocessing_stats
+from common.processing import print_preprocessing_stats, process_parallel_threaded
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
+from common.files.scanner import iter_subdirs, iter_files
 from common.output.logging import get_processor_logger
 from common.utils import ALL_MEDIA_EXTENSIONS
 from processors.preprocess_base import PreprocessorBase, CopyTask
@@ -215,61 +215,40 @@ class GooglePhotosPreprocessor(PreprocessorBase):
 
     def scan_albums(self) -> List[Tuple[str, Path]]:
         """
-        Scan Google Photos directory for all album folders
-        Returns list of (album_name, folder_path) tuples
+        Scan Google Photos directory for all album folders.
+
+        Returns list of (album_name, folder_path) tuples.
+
+        Uses shared iter_subdirs utility for consistent directory scanning
+        with automatic hidden file and banned pattern filtering.
         """
         albums = []
 
-        try:
-            import os
+        def has_files(album_dir: Path) -> bool:
+            """Check if directory contains at least one file."""
+            try:
+                for item in album_dir.iterdir():
+                    if item.is_file():
+                        return True
+            except OSError:
+                pass
+            return False
 
-            with os.scandir(self.photos_dir) as entries:
-                for entry in sorted(entries, key=lambda e: e.name):
-                    if not entry.is_dir():
-                        continue
-
-                    # Skip system directories early
-                    if entry.name.startswith((".", "_")):
-                        continue
-
-                    album_dir = Path(entry.path)
-
-                    # Skip banned directories
-                    if self.is_banned(album_dir):
-                        with self.stats_lock:
-                            self.stats["skipped_banned"] += 1
-                        self.log_message(
-                            "SKIPPED_BANNED",
-                            f"Skipped banned directory: {entry.name}",
-                        )
-                        continue
-
-                    album_name = entry.name
-
-                    # Check if folder has media or metadata
-                    has_content = False
-                    with os.scandir(album_dir) as items:
-                        for item in items:
-                            if item.is_file():
-                                has_content = True
-                                break
-
-                    if has_content:
-                        albums.append((album_name, album_dir))
-
-        except Exception as e:
-            self.log_message(
-                "SCAN_ERROR",
-                "Failed to scan album folders",
-                str(e),
-            )
-            logger.error(f"Failed to scan albums: {e}")
+        for album_dir in iter_subdirs(
+            self.photos_dir,
+            banned_filter=self.banned_filter,
+            skip_hidden=True,
+            sorted_=True,
+        ):
+            if has_files(album_dir):
+                albums.append((album_dir.name, album_dir))
 
         return albums
 
     def build_album_catalog(self, album_folder: Path) -> Dict:
         """
-        Build file catalog for a specific album folder
+        Build file catalog for a specific album folder.
+
         Returns: Dict with 'media' (filename -> path) and 'metadata' (filename -> json_path)
         """
         catalog: Dict[str, Any] = {
@@ -281,114 +260,95 @@ class GooglePhotosPreprocessor(PreprocessorBase):
         media_extensions = ALL_MEDIA_EXTENSIONS
 
         try:
-            import os
+            # Use shared scanner for consistent filtering of hidden and banned files
+            for file_path in iter_files(
+                album_folder,
+                banned_filter=self.banned_filter,
+                extensions=None,  # Accept all files, filter below
+                skip_hidden=True,
+            ):
+                filename = file_path.name
 
-            with os.scandir(album_folder) as entries:
-                for entry in entries:
-                    if not entry.is_file():
-                        continue
+                # Check for metadata JSON files
+                if filename.endswith(".json"):
+                    # Album metadata file
+                    if filename == "metadata.json":
+                        catalog["album_metadata"] = file_path
+                    # Media metadata file - handle multiple patterns
+                    else:
+                        # Extract the base media filename
+                        base_name = None
 
-                    filename = entry.name
-
-                    # Skip system files early (before Path creation)
-                    if filename.startswith((".", "_")):
-                        continue
-
-                    # Create Path object only once when needed
-                    file_path = Path(entry.path)
-
-                    # Skip banned files
-                    if self.is_banned(file_path):
-                        with self.stats_lock:
-                            self.stats["skipped_banned"] += 1
-                        continue
-
-                    # Check for metadata JSON files
-                    if filename.endswith(".json"):
-                        # Album metadata file
-                        if filename == "metadata.json":
-                            catalog["album_metadata"] = file_path
-                        # Media metadata file - handle multiple patterns
+                        # Pattern 1: file.ext.supplemental*(N).json (with duplicate number)
+                        # Example: RenderedImage.JPG.supplemental-metadata(1).json -> RenderedImage(1).JPG
+                        # Must check this first before the general supplemental pattern
+                        # Matches ANY truncation: .supplemental-metadata(1), .supplemental-meta(1),
+                        # .supplemental(1), .suppl(1), etc.
+                        # Changed to .supp[^.]* to handle truncation within the word itself
+                        match = self.SUPPLEMENTAL_WITH_DUP_PATTERN.search(filename)
+                        if match:
+                            # Extract extension and duplicate index to reconstruct correct base name
+                            ext = match.group(1)  # e.g., ".JPG"
+                            idx = match.group(2)  # e.g., "1"
+                            base_without_ext = filename[
+                                : match.start()
+                            ]  # e.g., "RenderedImage"
+                            # Reconstruct with duplicate number in correct position
+                            base_name = f"{base_without_ext}({idx}){ext}"
                         else:
-                            # Extract the base media filename
-                            base_name = None
-
-                            # Pattern 1: file.ext.supplemental*(N).json (with duplicate number)
-                            # Example: RenderedImage.JPG.supplemental-metadata(1).json -> RenderedImage(1).JPG
-                            # Must check this first before the general supplemental pattern
-                            # Matches ANY truncation: .supplemental-metadata(1), .supplemental-meta(1),
-                            # .supplemental(1), .suppl(1), etc.
+                            # Pattern 2: file.ext.supplemental*.json (any truncation)
+                            # Matches .supplemental-metadata.json, .supplemental-meta.json,
+                            # .supplemental.json, .supple.json, .suppl.json, etc.
+                            # Uses regex HasPrefix logic like immich-go to handle all truncations
                             # Changed to .supp[^.]* to handle truncation within the word itself
-                            match = self.SUPPLEMENTAL_WITH_DUP_PATTERN.search(filename)
+                            match = self.SUPPLEMENTAL_PATTERN.search(filename)
                             if match:
-                                # Extract extension and duplicate index to reconstruct correct base name
-                                ext = match.group(1)  # e.g., ".JPG"
-                                idx = match.group(2)  # e.g., "1"
-                                base_without_ext = filename[
-                                    : match.start()
-                                ]  # e.g., "RenderedImage"
-                                # Reconstruct with duplicate number in correct position
-                                base_name = f"{base_without_ext}({idx}){ext}"
+                                base_name = filename[: match.start()]
+                            # Pattern 3: file.ext.json (has 2+ dots, likely media metadata)
+                            elif filename.count(".") >= 2:
+                                base_name = filename[:-5]  # Remove .json
+                            # Pattern 4: single extension .json that's not metadata.json
+                            # These are direct metadata files like "uuid__hash.json"
                             else:
-                                # Pattern 2: file.ext.supplemental*.json (any truncation)
-                                # Matches .supplemental-metadata.json, .supplemental-meta.json,
-                                # .supplemental.json, .supple.json, .suppl.json, etc.
-                                # Uses regex HasPrefix logic like immich-go to handle all truncations
-                                # Changed to .supp[^.]* to handle truncation within the word itself
-                                match = self.SUPPLEMENTAL_PATTERN.search(filename)
-                                if match:
-                                    base_name = filename[: match.start()]
-                                # Pattern 3: file.ext.json (has 2+ dots, likely media metadata)
-                                elif filename.count(".") >= 2:
-                                    base_name = filename[:-5]  # Remove .json
-                                # Pattern 4: single extension .json that's not metadata.json
-                                # These are direct metadata files like "uuid__hash.json"
-                                else:
-                                    # This is likely a media metadata file without double extension
-                                    # Store without .json extension
-                                    base_name = filename[:-5]  # Remove .json
+                                # This is likely a media metadata file without double extension
+                                # Store without .json extension
+                                base_name = filename[:-5]  # Remove .json
 
-                            if base_name:
-                                catalog["metadata"][base_name] = file_path
+                        if base_name:
+                            catalog["metadata"][base_name] = file_path
 
-                                # Some Google Photos exports store media sidecars as "uuid__hash.json"
-                                # (no media extension) but the JSON "title" contains the real media
-                                # filename (including extension). Index by title too to improve matching.
-                                #
-                                # This prevents cases where media exists on disk with a long common prefix
-                                # but the metadata sidecar name is truncated or lacks the extension.
-                                try:
-                                    base_suffix = Path(base_name).suffix.lower()
-                                    if base_suffix not in ALL_MEDIA_EXTENSIONS:
-                                        with open(
-                                            file_path, "r", encoding="utf-8"
-                                        ) as f:
-                                            metadata_json = json.load(f)
-                                        title = (
-                                            metadata_json.get("title") or ""
-                                        ).strip()
-                                        if (
-                                            title
-                                            and Path(title).suffix.lower()
-                                            in ALL_MEDIA_EXTENSIONS
-                                        ):
-                                            catalog["metadata"].setdefault(
-                                                title, file_path
-                                            )
-                                except (
-                                    OSError,
-                                    UnicodeDecodeError,
-                                    json.JSONDecodeError,
-                                    ValueError,
-                                    TypeError,
-                                ):
-                                    # Title indexing is a best-effort optimization; never fail cataloging.
-                                    pass
-                        continue
+                            # Some Google Photos exports store media sidecars as "uuid__hash.json"
+                            # (no media extension) but the JSON "title" contains the real media
+                            # filename (including extension). Index by title too to improve matching.
+                            #
+                            # This prevents cases where media exists on disk with a long common prefix
+                            # but the metadata sidecar name is truncated or lacks the extension.
+                            try:
+                                base_suffix = Path(base_name).suffix.lower()
+                                if base_suffix not in ALL_MEDIA_EXTENSIONS:
+                                    with open(file_path, "r", encoding="utf-8") as f:
+                                        metadata_json = json.load(f)
+                                    title = (metadata_json.get("title") or "").strip()
+                                    if (
+                                        title
+                                        and Path(title).suffix.lower()
+                                        in ALL_MEDIA_EXTENSIONS
+                                    ):
+                                        catalog["metadata"].setdefault(title, file_path)
+                            except (
+                                OSError,
+                                UnicodeDecodeError,
+                                json.JSONDecodeError,
+                                ValueError,
+                                TypeError,
+                            ):
+                                # Title indexing is a best-effort optimization; never fail cataloging.
+                                pass
+                    continue
 
-                    # Check if it's a media file
-                    if file_path.suffix.lower() in media_extensions:
-                        catalog["media"][filename] = file_path
+                # Check if it's a media file
+                if file_path.suffix.lower() in media_extensions:
+                    catalog["media"][filename] = file_path
 
             # Build stem index for O(1) candidate lookup
             catalog["metadata_by_stem"] = {}
@@ -1105,7 +1065,7 @@ class GooglePhotosPreprocessor(PreprocessorBase):
         """
         logger.info("Scanning albums...")
         album_list = self.scan_albums()
-        logger.info(f"   Found {len(album_list)} albums")
+        logger.info("   Found %d albums", len(album_list))
 
         logger.info(
             "Processing albums and media files (using %d workers)...", self.workers
@@ -1115,59 +1075,62 @@ class GooglePhotosPreprocessor(PreprocessorBase):
         all_copy_tasks: List[CopyTask] = []
         album_data_list: List[Dict] = []
 
-        with ThreadPoolExecutor(max_workers=self.workers) as executor:
-            # Submit all album processing tasks
-            future_to_album = {
-                executor.submit(self._collect_album_tasks, album_tuple): album_tuple
-                for album_tuple in album_list
+        # Process albums in parallel - each returns (album_tuple, result_data)
+        def process_album_with_context(album_tuple: Tuple) -> Tuple[Tuple, Tuple]:
+            """Wrapper to include album_tuple in result for post-processing."""
+            return (album_tuple, self._collect_album_tasks(album_tuple))
+
+        results = process_parallel_threaded(
+            tasks=album_list,
+            worker_fn=process_album_with_context,
+            workers=self.workers,
+            phase=PHASE_PREPROCESS,
+            description="Parsing albums",
+            task_id_fn=lambda t: t[0],  # album_name
+            on_error=lambda tid, e: (
+                self.log_message(
+                    "ALBUM_PROCESSING_ERROR",
+                    f"Failed to process album {tid}",
+                    str(e),
+                ),
+                logger.error("Failed to process album %s: %s", tid, e),
+            ),
+        )
+
+        # Post-process results
+        for album_tuple, result_data in results:
+            album_name = album_tuple[0]
+            (
+                copy_tasks,
+                path_to_metadata,
+                album_unmatched,
+                album_metadata,
+            ) = result_data
+
+            # Store metadata for later use
+            self._parsed_metadata.update(path_to_metadata)
+
+            # Add to all copy tasks
+            all_copy_tasks.extend(copy_tasks)
+
+            # Store album info for later
+            album_title = (
+                album_metadata.get("title", album_name)
+                if album_metadata
+                else album_name
+            )
+            album_data = {
+                "album_name": album_name,
+                "album_title": album_title,
+                "unmatched_media": album_unmatched,
+                "album_metadata": album_metadata,
             }
-
-            # Collect results as they complete
-            for future in futures_progress(
-                future_to_album, PHASE_PREPROCESS, "Parsing albums", unit="album"
-            ):
-                album_tuple = future_to_album[future]
-                album_name = album_tuple[0]
-                try:
-                    (
-                        copy_tasks,
-                        path_to_metadata,
-                        album_unmatched,
-                        album_metadata,
-                    ) = future.result()
-
-                    # Store metadata for later use
-                    self._parsed_metadata.update(path_to_metadata)
-
-                    # Add to all copy tasks
-                    all_copy_tasks.extend(copy_tasks)
-
-                    # Store album info for later
-                    album_title = (
-                        album_metadata.get("title", album_name)
-                        if album_metadata
-                        else album_name
-                    )
-                    album_data = {
-                        "album_name": album_name,
-                        "album_title": album_title,
-                        "unmatched_media": album_unmatched,
-                        "album_metadata": album_metadata,
-                    }
-                    album_data_list.append(album_data)
-
-                except Exception as e:
-                    self.log_message(
-                        "ALBUM_PROCESSING_ERROR",
-                        f"Failed to process album {album_name}",
-                        str(e),
-                    )
-                    logger.error(f"Failed to process album {album_name}: {e}")
+            album_data_list.append(album_data)
 
         # Phase 2: Hash all files with deduplication (no file copying)
         # Files will be copied directly from source to final output during processing
         if all_copy_tasks:
-            logger.info(f"Hashing {len(all_copy_tasks)} files with deduplication...")
+            logger.info("Hashing %d files with deduplication...", len(all_copy_tasks))
             results = self.hash_with_dedup(all_copy_tasks)
 
             # Update stats
@@ -1182,7 +1145,7 @@ class GooglePhotosPreprocessor(PreprocessorBase):
             )
 
         logger.info("   Processed %d albums", self.stats["total_albums"])
-        logger.info(f"   Found {self.stats['total_media_files']} media files")
+        logger.info("   Found %d media files", self.stats["total_media_files"])
         logger.info("   Matched %d files with metadata", self.stats["matched_files"])
         logger.info("   Unmatched %d files", self.stats["unmatched_files"])
 

@@ -137,6 +137,64 @@ class TestAddProcessingFailure:
         assert "ValueError" in tracker.processing_failures[0]["error_details"]
 
 
+class TestExportFailures:
+    """Tests for export-level failure tracking."""
+
+    def test_export_failure_in_summary_and_report(self, tmp_path):
+        """Export failures should be counted and included in reports."""
+        tracker = FailureTracker("Test Processor", str(tmp_path))
+        tracker.add_export_failure("no_media_files", error_details="Nothing to do")
+
+        summary = tracker.get_summary()
+        assert summary["export_failures"] == 1
+        assert summary["total_failures"] == 1
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        tracker.save_report(output_dir)
+
+        report_path = output_dir / "issues" / "failure-report.json"
+        with open(report_path) as f:
+            report = json.load(f)
+
+        assert report["export_failures"][0]["reason"] == "no_media_files"
+
+
+class TestMoveProcessingFailures:
+    """Tests for moving failed-processing outputs."""
+
+    def test_moves_failed_outputs_and_handles_collisions(self, tmp_path):
+        """Processing failures should be moved under issues/failed-processing/."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        tracker = FailureTracker("Test Processor", str(tmp_path))
+
+        # Create two files with same name to force collision handling
+        failed1 = output_dir / "photo.jpg"
+        failed1.write_bytes(b"one")
+        subdir = output_dir / "nested"
+        subdir.mkdir()
+        failed2 = subdir / "photo.jpg"
+        failed2.write_bytes(b"two")
+
+        tracker.add_processing_failure(failed1, {}, "exif_failed", "oops")
+        tracker.add_processing_failure(failed2, {}, "exif_failed", "oops2")
+
+        tracker.move_processing_failures(output_dir)
+
+        dest_dir = output_dir / "issues" / "failed-processing"
+        moved_files = sorted(p.name for p in dest_dir.iterdir())
+        # Expect both files moved with unique names
+        assert len(moved_files) == 2
+        assert moved_files[0].startswith("photo")
+        assert moved_files[1].startswith("photo")
+
+        # Context should record destinations
+        for entry in tracker.processing_failures:
+            assert "moved_to" in entry["context"]
+
+
 class TestHasFailures:
     """Tests for has_failures method."""
 

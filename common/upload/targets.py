@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Type, Union, TYPE_CHECKING
 
 from common.output.paths import OutputInfo
-from common.utils import extract_username_from_export_dir
+from common.detection import detect_from_dirname
 
 if TYPE_CHECKING:
     from processors.base import ProcessorBase
@@ -85,16 +85,18 @@ def build_upload_targets(
     if isinstance(processor, OutputInfo):
         output_info = processor
     elif isinstance(processor, str):
-        # Legacy: processor name string - should not happen with new code
-        # Fall back to returning the base path with no album
-        return [(str(out_base), "")]
+        # Legacy string processor names are not supported.
+        # Callers must pass a ProcessorBase instance or OutputInfo.
+        raise TypeError(
+            f"processor must be ProcessorBase or OutputInfo, got str: {processor!r}"
+        )
     else:
         # Processor instance - get both name and output info
         processor_name = processor.get_name()
         output_info = processor.get_output_info()
 
     # Extract username using the prefix from OutputInfo
-    username = extract_username_from_export_dir(input_dir, output_info.username_prefix)
+    username = detect_from_dirname(Path(input_dir), output_info.username_prefix) or "unknown"
 
     # Handle Instagram Public Media specially (has nested subfolder structure)
     # Note: Only apply to "Instagram Public Media" processor, NOT "Instaloader"

@@ -13,12 +13,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from bs4 import BeautifulSoup
-from concurrent.futures import ThreadPoolExecutor
 
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
+from common.files.scanner import iter_subdirs, iter_media_files
 from common.output.logging import get_processor_logger
-from common.processing import print_preprocessing_stats
-from common.output.progress import PHASE_PREPROCESS, futures_progress
+from common.processing import print_preprocessing_stats, process_parallel_threaded
+from common.output.progress import PHASE_PREPROCESS
 from processors.preprocess_base import PreprocessorBase, CopyTask
 
 # Standard logger for worker processes and exception logging
@@ -66,17 +66,19 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
         # (no accumulating fields like albums)
 
         # Statistics specific to this preprocessor (preserves shared keys from base)
-        self.stats.update({
-            "total_conversations": 0,
-            "total_messages_with_media": 0,
-            "total_media_files": 0,
-            "media_copied": 0,
-            "orphaned_files": 0,
-            "missing_files": 0,
-            "banned_files_skipped": 0,
-            "unique_files": 0,
-            "duplicate_files": 0,
-        })
+        self.stats.update(
+            {
+                "total_conversations": 0,
+                "total_messages_with_media": 0,
+                "total_media_files": 0,
+                "media_copied": 0,
+                "orphaned_files": 0,
+                "missing_files": 0,
+                "banned_files_skipped": 0,
+                "unique_files": 0,
+                "duplicate_files": 0,
+            }
+        )
 
         # Deleted user counter
         self.deleted_user_counter = 0
@@ -370,17 +372,6 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
                         "content": content,
                     }
 
-                    # Log constructed metadata
-                    logger.debug(
-                        f"Constructed metadata for message in {html_path.name}:"
-                    )
-                    logger.debug(f"  Sender: {sender}")
-                    logger.debug(f"  Timestamp: {timestamp} (raw: {timestamp_raw})")
-                    logger.debug(f"  Content: {content}")
-                    logger.debug(f"  Media files: {len(media_paths)} file(s)")
-                    for media_path in media_paths:
-                        logger.debug(f"    - {media_path}")
-
                     messages.append(message_data)
 
         except Exception as e:
@@ -391,61 +382,54 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
             )
             log.parse_error(html_path.name, e)
 
+        if messages:
+            media_refs = sum(len(m.get("media_paths", [])) for m in messages)
+            logger.debug(
+                "Parsed %s: messages_with_media=%d media_refs=%d",
+                html_path.name,
+                len(messages),
+                media_refs,
+            )
+
         return messages
 
     def scan_conversations(self) -> List[Tuple[str, Path]]:
         """
-        Scan messages/inbox directory for all conversation folders
-        Returns list of (conversation_id, html_path) tuples
+        Scan messages/inbox directory for all conversation folders.
+
+        Returns list of (conversation_id, html_path) tuples.
+
+        Uses shared iter_subdirs utility for consistent directory scanning
+        with automatic hidden file and banned pattern filtering.
         """
         conversations = []
 
-        try:
-            # Get all subdirectories
-            import os
+        for conv_dir in iter_subdirs(
+            self.messages_dir,
+            banned_filter=self.banned_filter,
+            skip_hidden=True,
+            sorted_=True,
+        ):
+            conversation_id = conv_dir.name
+            html_path = conv_dir / "message_1.html"
 
-            with os.scandir(self.messages_dir) as entries:
-                for entry in sorted(entries, key=lambda e: e.name):
-                    if not entry.is_dir():
-                        continue
-
-                    conv_dir = Path(entry.path)
-
-                    # Skip banned directories
-                    if self.banned_filter.is_banned(conv_dir):
-                        self.log_message(
-                            "BANNED_DIRECTORY",
-                            f"Skipping banned directory: {entry.name}",
-                        )
-                        with self.stats_lock:
-                            self.stats["banned_files_skipped"] += 1
-                        continue
-
-                    conversation_id = entry.name
-                    html_path = conv_dir / "message_1.html"
-
-                    if html_path.exists():
-                        conversations.append((conversation_id, html_path))
-                    else:
-                        self.log_message(
-                            "MISSING_HTML",
-                            f"No message_1.html found in {conversation_id}",
-                        )
-
-        except Exception as e:
-            self.log_message(
-                "SCAN_ERROR",
-                "Failed to scan conversation folders",
-                str(e),
-            )
-            log.logger.error("Failed to scan conversations: %s", e)
+            if html_path.exists():
+                conversations.append((conversation_id, html_path))
+            else:
+                self.log_message(
+                    "MISSING_HTML",
+                    f"No message_1.html found in {conversation_id}",
+                )
 
         return conversations
 
     def build_file_catalog(self) -> Dict[str, Path]:
         """
-        Scan all photos directories and build catalog mapping filename -> full source path
+        Scan all photos directories and build catalog mapping filename -> full source path.
+
         Returns: Dict[filename, source_path]
+
+        Uses shared scanner utilities for consistent filtering.
         """
         catalog = {}
 
@@ -454,46 +438,36 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
 
         log.logger.info("Scanning media directories...")
 
-        # Recursively find all media files in photos directories
-        import os
+        # Scan conversation directories
+        for conv_dir in iter_subdirs(
+            self.messages_dir,
+            banned_filter=self.banned_filter,
+            skip_hidden=True,
+        ):
+            photos_dir = conv_dir / "photos"
+            if not photos_dir.exists():
+                continue
 
-        with os.scandir(self.messages_dir) as entries:
-            for entry in entries:
-                if not entry.is_dir():
-                    continue
+            # Use iter_media_files for recursive media scanning
+            for file_path in iter_media_files(
+                photos_dir,
+                banned_filter=self.banned_filter,
+                skip_hidden=True,
+                skip_overlays=False,  # Instagram doesn't have overlay concept
+                skip_thumbnails=False,  # Instagram doesn't have thumbnail files
+                recursive=True,
+            ):
+                filename = file_path.name
 
-                conv_dir = Path(entry.path)
-
-                # Skip banned directories
-                if self.banned_filter.is_banned(conv_dir):
-                    continue
-
-                photos_dir = conv_dir / "photos"
-                if not photos_dir.exists():
-                    continue
-
-                for file_path in photos_dir.rglob("*"):
-                    if file_path.is_file():
-                        # Skip banned files
-                        if self.banned_filter.is_banned(file_path):
-                            self.log_message(
-                                "BANNED_FILE",
-                                f"Skipping banned file: {file_path.name}",
-                            )
-                            self.stats["banned_files_skipped"] += 1
-                            continue
-
-                        filename = file_path.name
-
-                        # Map filename to source path
-                        if filename in catalog:
-                            self.log_message(
-                                "DUPLICATE_FILENAME",
-                                f"Duplicate filename found: {filename}",
-                                f"Previous: {catalog[filename]}, New: {file_path}",
-                            )
-                        catalog[filename] = file_path
-                        self.stats["total_media_files"] += 1
+                # Map filename to source path
+                if filename in catalog:
+                    self.log_message(
+                        "DUPLICATE_FILENAME",
+                        f"Duplicate filename found: {filename}",
+                        f"Previous: {catalog[filename]}, New: {file_path}",
+                    )
+                catalog[filename] = file_path
+                self.stats["total_media_files"] += 1
 
         log.found_files(len(catalog), "media")
 
@@ -553,36 +527,22 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
         )
 
         # Process conversations in parallel
-        with ThreadPoolExecutor(max_workers=self.workers) as executor:
-            # Submit all conversation processing tasks
-            future_to_conversation = {
-                executor.submit(
-                    self._process_single_conversation, conv_tuple
-                ): conv_tuple[0]
-                for conv_tuple in conversation_list
-            }
-
-            # Collect results as they complete
-            for future in futures_progress(
-                future_to_conversation,
-                PHASE_PREPROCESS,
-                "Parsing conversations",
-                unit="conv",
-            ):
-                conversation_id = future_to_conversation[future]
-                try:
-                    conversation_data = future.result()
-                    if conversation_data:
-                        all_conversations.append(conversation_data)
-                except Exception as e:
-                    self.log_message(
-                        "CONVERSATION_PROCESSING_ERROR",
-                        f"Failed to process conversation {conversation_id}",
-                        str(e),
-                    )
-                    log.logger.error(
-                        "Failed to process conversation %s: %s", conversation_id, e
-                    )
+        all_conversations = process_parallel_threaded(
+            tasks=conversation_list,
+            worker_fn=self._process_single_conversation,
+            workers=self.workers,
+            phase=PHASE_PREPROCESS,
+            description="Parsing conversations",
+            task_id_fn=lambda t: t[0],  # conversation_id
+            on_error=lambda tid, e: (
+                self.log_message(
+                    "CONVERSATION_PROCESSING_ERROR",
+                    f"Failed to process conversation {tid}",
+                    str(e),
+                ),
+                log.logger.error("Failed to process conversation %s: %s", tid, e),
+            ),
+        )
 
         with self.stats_lock:
             self.stats["total_conversations"] = len(all_conversations)

@@ -10,8 +10,6 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Set
 
-from common.detection import detect_from_dirname
-
 # Re-export logging functions from centralized logging module for backwards compatibility
 
 
@@ -76,17 +74,6 @@ def get_gps_format(file_path) -> str:
     """Return "absolute" for images (with hemisphere refs), "signed" for videos."""
     media_type = get_media_type(file_path)
     return "absolute" if media_type == "image" else "signed"
-
-
-# ============================================================================
-# Username Extraction
-# ============================================================================
-
-
-def extract_username_from_export_dir(input_dir: str, prefix: str) -> str:
-    """Extract username from export directory name like "prefix-username-YYYYMMDD"."""
-    result = detect_from_dirname(Path(input_dir), prefix)
-    return result if result else "unknown"
 
 
 # Unicode quote characters to normalize to ASCII equivalents
@@ -155,15 +142,22 @@ class FilenameGenerator:
     """Generate unique filenames with sequence numbers for duplicates.
 
     Tracks used filenames to ensure uniqueness by appending _2, _3, etc.
+    Filenames follow the Platform/User/Service order used across outputs:
+      - Single-service: {platform}-{username}-{date}
+      - Multi-service:  {platform}-{username}-{service}-{date}
     """
 
     def __init__(
         self,
-        prefix: str,
+        platform: str,
+        username: str,
+        service: Optional[str] = None,
         timestamp_format: str = "%Y-%m-%d %H:%M:%S",
         sequence_start: int = 2,
     ):
-        self.prefix = prefix
+        self.platform = platform
+        self.username = username
+        self.service = service
         self.timestamp_format = timestamp_format
         self.sequence_start = sequence_start
         self.used_filenames: Set[str] = set()
@@ -171,12 +165,18 @@ class FilenameGenerator:
     def generate(
         self,
         timestamp_str: Optional[str],
-        identifier: str,
         extension: str,
     ) -> str:
-        """Generate a unique filename like "prefix-identifier-20240115.ext"."""
+        """Generate a unique filename following Platform/User/Service order."""
         date_key = self._parse_date(timestamp_str)
-        base = f"{self.prefix}-{identifier}-{date_key}{extension}"
+
+        if self.service:
+            base = (
+                f"{self.platform}-{self.username}-{self.service}-{date_key}{extension}"
+            )
+        else:
+            base = f"{self.platform}-{self.username}-{date_key}{extension}"
+
         return self._ensure_unique(base, extension)
 
     def _parse_date(self, timestamp_str: Optional[str]) -> str:

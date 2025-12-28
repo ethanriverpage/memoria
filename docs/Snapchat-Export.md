@@ -377,11 +377,23 @@ The `match_info.json` file includes:
 
 ### Process for Snapchat Memories
 
-1. Read `metadata.json` which explicitly links media files to overlay files
-2. Base media file is loaded
-3. Corresponding overlay is identified from metadata
-4. Overlay is composited onto the media
-5. Result is saved with original quality
+Snapchat Memories uses a two-phase architecture:
+
+**Phase 1: Preprocessing**
+
+1. Load Snapchat's raw `metadata.json` (list of memory objects)
+2. Scan `media/` and `overlays/` directories
+3. Hash media files for within-export deduplication
+4. Build standardized `metadata.json` with `source_path` entries
+5. Store overlay associations from raw metadata (explicit links, unlike Messages)
+
+**Phase 2: Processing**
+
+1. Load preprocessed `metadata.json` with `source_path` references
+2. For each media file, check if overlay is associated
+3. Composite overlay onto media (images via PIL, videos via FFmpeg)
+4. Embed EXIF metadata and update filesystem timestamps
+5. Save result with original quality
 
 ### Process for Snapchat Messages
 
@@ -460,7 +472,7 @@ Videos with embedded overlays are saved as multi-track MKV files. This format al
 Memoria will automatically:
 
 1. Detect whether your export contains memories, messages, or both
-2. For messages: Preprocess the raw export to organize files and match media to conversations
+2. Preprocess raw exports to organize files, hash for deduplication, and build standardized metadata
 3. Process all media with overlay embedding and metadata writing
 4. Organize output files by conversation or memory type
 

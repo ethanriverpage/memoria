@@ -94,9 +94,9 @@ if memories_subdir.exists() and memories_subdir.is_dir():
     if (media_dir.exists() and overlays_dir.exists() and metadata_file.exists()):
         actual_input_dir = str(memories_subdir)
         # Extract username from parent directory for consolidated exports
-        export_username_override = extract_username_from_export_dir(
-            input_dir, "snapchat"
-        )
+        export_username_override = detect_from_dirname(
+            Path(input_dir), "snapchat"
+        ) or "unknown"
 # ...
 process_logic(
     input_dir=actual_input_dir,
@@ -128,9 +128,9 @@ def preprocess(input_dir: str, cache_dir: str, **kwargs) -> Optional[str]:
                 messages_subdir,
             )
             # Extract username from parent directory BEFORE switching
-            username_override = extract_username_from_export_dir(
-                str(input_path), "snapchat"
-            )
+            username_override = detect_from_dirname(
+                input_path, "snapchat"
+            ) or "unknown"
             input_path = messages_subdir
 
     preprocessor = SnapchatPreprocessor(

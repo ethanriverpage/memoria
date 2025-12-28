@@ -8,14 +8,14 @@ The `common` module provides reusable functionality that is shared across multip
 
 ## Modules
 
-### `filter_banned_files.py`
+### `files/filter.py`
 
 Provides the `BannedFilesFilter` class for filtering out system files and directories that should be skipped during processing.
 
 **Usage:**
 
 ```python
-from common.filter_banned_files import BannedFilesFilter
+from common.files.filter import BannedFilesFilter
 
 # Initialize the filter
 banned_filter = BannedFilesFilter()
@@ -74,7 +74,7 @@ Verify the setup works:
 
 ```bash
 cd /path/to/memoria
-python3 -c "from common.filter_banned_files import BannedFilesFilter; print('Success!')"
+python3 -c "from common.files.filter import BannedFilesFilter; print('Success!')"
 ```
 
 ## Migration Notes

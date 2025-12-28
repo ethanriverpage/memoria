@@ -717,7 +717,7 @@ Examples:
     args = parser.parse_args()
 
     # Set up logging using shared infrastructure
-    setup_logging(verbose=args.verbose, log_file=str(args.log))
+    setup_logging(verbosity=1 if args.verbose else 0, log_file=str(args.log))
 
     # Create comparator and run
     comparator = ExportComparator(

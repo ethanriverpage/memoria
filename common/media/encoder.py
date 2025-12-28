@@ -12,91 +12,9 @@ multiple encoding passes.
 import logging
 import platform
 import subprocess
-from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
-
-
-def get_video_bitrate(video_path: Path) -> Optional[int]:
-    """
-    Get the bitrate of a video file in bits per second.
-
-    Args:
-        video_path: Path to the video file
-
-    Returns:
-        Bitrate in bits per second, or None if detection fails
-    """
-    try:
-        # Try to get overall bitrate first (includes video + audio)
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=bit_rate",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(video_path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-            stdin=subprocess.DEVNULL,
-        )
-
-        if result.returncode == 0 and result.stdout.strip():
-            try:
-                bitrate = int(result.stdout.strip())
-                if bitrate > 0:
-                    logger.debug(
-                        f"Detected overall bitrate: {bitrate / 1_000_000:.2f} Mbps"
-                    )
-                    return bitrate
-            except ValueError:
-                pass
-
-        # Fallback: try to get video stream bitrate specifically
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=bit_rate",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(video_path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-            stdin=subprocess.DEVNULL,
-        )
-
-        if result.returncode == 0 and result.stdout.strip():
-            try:
-                bitrate = int(result.stdout.strip())
-                if bitrate > 0:
-                    logger.debug(
-                        f"Detected video stream bitrate: {bitrate / 1_000_000:.2f} Mbps"
-                    )
-                    return bitrate
-            except ValueError:
-                pass
-
-        logger.debug(f"Could not detect bitrate for {video_path.name}")
-        return None
-
-    except Exception as e:
-        logger.warning(f"Error detecting video bitrate: {e}")
-        return None
 
 
 class VideoEncoder:

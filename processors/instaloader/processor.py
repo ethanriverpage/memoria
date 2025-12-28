@@ -13,7 +13,11 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.dedup.service import is_file_primary_by_hash
+from common.dedup.service import (
+    get_canonical_timestamp,
+    save_dedup_metadata,
+)
+from common.failure_tracker import FailureTracker
 from common.dedup.description import (
     SourceEntry,
     build_description,
@@ -23,14 +27,14 @@ from common.dedup.description import (
     SERVICE_REELS,
 )
 from common.output.console import console
-from common.files.utils import batch_correct_extensions, copy_file
+from common.files.utils import batch_correct_extensions, copy_file, short_path
 from common.processing import print_processing_summary
 from common.output.progress import PHASE_PROCESS, progress_bar
 from processors.instaloader.preprocess import InstaloaderPreprocessor
 from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
+from common.detection import detect_from_dirname
 from common.utils import (
-    extract_username_from_export_dir,
     FilenameGenerator,
     is_preprocessed_directory,
     update_file_timestamps,
@@ -156,7 +160,7 @@ class InstaloaderProcessor(ProcessorBase):
 
         Args:
             input_dir: Path to preprocessed input directory
-            **kwargs: Additional arguments (verbose, workers)
+            **kwargs: Additional arguments (workers)
 
         Yields:
             Catalog entries with processor name and file data.
@@ -200,7 +204,7 @@ class InstaloaderProcessor(ProcessorBase):
             input_dir: Path to input directory
             output_dir: Optional base output directory
             dedup_manifest: Optional deduplication manifest
-            **kwargs: Additional arguments (verbose, workers, temp_dir)
+            **kwargs: Additional arguments (workers, temp_dir)
 
         Returns:
             True if processing succeeded, False otherwise
@@ -220,14 +224,13 @@ class InstaloaderProcessor(ProcessorBase):
             process_logic(
                 input_dir=input_dir,
                 output_dir=processor_output,
-                verbose=kwargs.get("verbose", False),
                 workers=kwargs.get("workers"),
                 dedup_manifest=dedup_manifest,
             )
             return True
 
         except Exception as e:
-            logger.error(f"Error in InstaloaderProcessor: {e}")
+            logger.error("Error in InstaloaderProcessor: %s", e)
             return False
 
 
@@ -259,7 +262,7 @@ def _build_metadata_requests(
         original_filename,
     ) in file_info:
         # Build datetime tags (ISO format)
-        datetime_tags = build_datetime_tags(post_data.get("timestamp"))
+        datetime_tags = build_datetime_tags(post_data.get("canonical_timestamp"))
 
         # Build description using unified format
         # Map media_type to service name (story->stories, post->posts, reel->reels)
@@ -337,16 +340,12 @@ def process_media_batch(batch_args):
         media_type_dir = os.path.join(output_dir, media_type)
         output_path = os.path.join(media_type_dir, output_filename)
 
-        logger.debug(f"Processing: {media_file} -> {output_filename}")
-
         if not os.path.exists(media_path):
-            logger.warning("Media file not found: %s", media_path)
+            logger.warning("Media file not found: %s", short_path(media_path))
             results.append((False, None, None))
             continue
 
         try:
-            file_size = os.path.getsize(media_path)
-            logger.debug(f"Copying {media_file} ({file_size} bytes) to {output_path}")
             copy_file(media_path, output_path)
             file_paths.append(output_path)
             file_info.append(
@@ -378,12 +377,13 @@ def process_media_batch(batch_args):
         content_hash,
         original_filename,
     ) in file_info:
-        if post_data.get("timestamp"):
-            logger.debug(
-                f"Updating timestamps for {output_path} to {post_data['timestamp']}"
-            )
         update_file_timestamps(output_path, post_data.get("timestamp"))
-        logger.debug(f"Successfully processed {output_path}")
+        logger.debug(
+            "proc=instaloader src=%s dest=%s type=%s",
+            Path(output_path).name,
+            output_filename,
+            media_type,
+        )
         results.append(
             (
                 True,
@@ -398,7 +398,6 @@ def process_media_batch(batch_args):
 def process_logic(
     input_dir,
     output_dir="final_media",
-    verbose=False,
     workers=None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ):
@@ -410,19 +409,14 @@ def process_logic(
     Args:
         input_dir: Input directory (must be preprocessed)
         output_dir: Output directory for processed files
-        verbose: Enable verbose logging
         workers: Number of parallel workers (None = auto-detect)
         dedup_manifest: Optional deduplication manifest for filtering secondary files
     """
-    # Logging is configured by the main process
-    # Verbose mode enables detailed logging to file
-
     # Check for exiftool
     if not InstaloaderProcessor.check_dependencies():
         return
 
-    logger.info("Instaloader Media Processor")
-    logger.info("=" * 50)
+    log.processor_start("Instaloader Media Processor")
 
     def _process_working_directory(working_dir: str) -> None:
         # Configuration
@@ -430,11 +424,11 @@ def process_logic(
 
         # Check for metadata file (should exist after preprocessing or if already preprocessed)
         if not os.path.exists(metadata_file):
-            logger.error(f"Metadata file not found: {metadata_file}")
+            logger.error("Metadata file not found: %s", short_path(metadata_file))
             return
 
         # Load metadata
-        logger.info(f"Loading metadata from {metadata_file}...")
+        log.loading_metadata(short_path(metadata_file))
         metadata_json = InstaloaderProcessor.load_metadata(
             Path(metadata_file), validate=True, require_source_paths=True
         )
@@ -443,16 +437,17 @@ def process_logic(
         media_posts = metadata_json.get("media", [])
         file_hashes = metadata_json.get("file_hashes", {})
 
-        logger.info(f"Found {len(media_posts)} posts to process")
+        log.found_items(len(media_posts), "posts")
 
-        # Extract export username from export_info
-        export_name = export_info.get("export_name", "")
-        if export_name:
-            export_username = extract_username_from_export_dir(export_name, "instagram")
-        else:
-            export_username = "unknown"
+        # Extract export username from validated export_info
+        export_username = export_info.get("export_username")
+        log.export_username(export_username)
 
-        logger.info(f"Export username: {export_username}")
+        # Initialize failure tracker for this export
+        failure_tracker = FailureTracker(
+            processor_name="Instaloader",
+            export_directory=str(working_dir),
+        )
 
         # Create output directory
         Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -461,15 +456,25 @@ def process_logic(
         from common.utils import default_worker_count
 
         num_workers = workers if workers is not None else default_worker_count()
-        logger.debug(f"Using {num_workers} parallel workers")
+        log.using_workers(num_workers)
 
         # Pre-generate all output filenames to avoid race conditions
-        logger.debug("Pre-generating filenames...")
-        filename_gen = FilenameGenerator("insta")
+        log.generating_filenames()
+        generators: Dict[str, FilenameGenerator] = {}
+
+        def get_filename_generator(media_type: str) -> FilenameGenerator:
+            if media_type not in generators:
+                generators[media_type] = FilenameGenerator(
+                    "insta", export_username, service=media_type
+                )
+            return generators[media_type]
+
         processing_tasks = []
         media_types_set = set()
-
         skipped_dedup = 0
+        skipped_secondary_files: list[str] = []
+        missing_source_path = 0
+        missing_examples: list[str] = []
         for post in media_posts:
             media_type = post.get("media_type", "posts")
             media_files = post.get("media_files", [])
@@ -484,36 +489,32 @@ def process_logic(
                 source_paths = post.get("source_paths", {})
                 full_source_path = source_paths.get(media_file)
                 if not full_source_path:
-                    logger.warning(f"No source_path for file: {media_file}")
+                    missing_source_path += 1
+                    if len(missing_examples) < 5:
+                        missing_examples.append(media_file)
                     continue
 
                 source_file_path = os.path.dirname(full_source_path)
                 source_file_name = os.path.basename(full_source_path)
 
-                if dedup_manifest:
-                    if content_hash:
-                        # Use cached hash from preprocessing (avoids re-hashing)
-                        if not is_file_primary_by_hash(
-                            dedup_manifest, content_hash, "Instaloader", full_source_path
-                        ):
-                            skipped_dedup += 1
-                            continue
-                    else:
-                        # Fallback for files without cached hash
-                        if InstaloaderProcessor.should_skip_for_dedup(
-                            full_source_path, dedup_manifest, "Instaloader"
-                        ):
-                            skipped_dedup += 1
-                            continue
+                if InstaloaderProcessor.should_skip_for_dedup(
+                    dedup_manifest, content_hash, "Instaloader", full_source_path
+                ):
+                    skipped_dedup += 1
+                    skipped_secondary_files.append(full_source_path)
+                    continue
 
                 # Get file extension
                 file_ext = os.path.splitext(media_file)[1].lower()
 
-                # Generate output filename using shared FilenameGenerator
-                identifier = f"{media_type}-{export_username}"
-                output_filename = filename_gen.generate(
-                    post.get("timestamp"),
-                    identifier,
+                canonical_ts = get_canonical_timestamp(
+                    dedup_manifest, content_hash, post.get("timestamp")
+                )
+                post["canonical_timestamp"] = canonical_ts
+
+                # Generate output filename using shared FilenameGenerator (per media type)
+                output_filename = get_filename_generator(media_type).generate(
+                    canonical_ts,
                     file_ext,
                 )
 
@@ -536,26 +537,39 @@ def process_logic(
                 )
 
         if skipped_dedup > 0:
-            logger.info(f"Skipped {skipped_dedup} secondary files (dedup)")
+            log.skipped_secondary(skipped_dedup)
+        if missing_source_path > 0:
+            logger.info(
+                "Missing source_path for %d files (e.g. %s)",
+                missing_source_path,
+                ", ".join(missing_examples),
+            )
 
-        # Create subdirectories for each media type
-        logger.debug(
-            f"Creating subdirectories for {len(media_types_set)} media types..."
-        )
+        # Ensure subdirectories exist (no per-dir logging)
         for media_type in media_types_set:
             media_type_dir = os.path.join(output_dir, media_type)
             Path(media_type_dir).mkdir(parents=True, exist_ok=True)
-            logger.debug("Created directory: %s", media_type_dir)
 
         # Process media files in parallel
-        logger.info("Processing media files to %s/", output_dir)
-        logger.info("%s", "=" * 50)
+        log.processing_start(str(output_dir))
 
         import time
 
+        # Check for no media files (export-level soft-fail)
+        if not processing_tasks:
+            log.logger.warning("No media files found to process.")
+            failure_tracker.add_export_failure(
+                reason="no_media_files",
+                error_details="No media files found in export to process",
+            )
+            failure_tracker.handle_failures(Path(output_dir))
+            return False
+
         start_time = time.time()
         logger.debug(
-            f"Starting parallel processing of {len(processing_tasks)} files with {num_workers} workers"
+            "Starting parallel processing of %d files with %d workers",
+            len(processing_tasks),
+            num_workers,
         )
 
         # Group tasks into batches of 100 files each
@@ -580,24 +594,62 @@ def process_logic(
 
         processing_time = time.time() - start_time
         logger.debug(
-            f"Processing completed in {processing_time:.2f} seconds "
-            f"({len(processing_tasks)/processing_time:.2f} files/sec)"
+            "Processing completed in %.2f seconds (%.2f files/sec)",
+            processing_time,
+            len(processing_tasks) / processing_time if processing_time else 0,
         )
-        logger.info(
-            f"Copied {collected.success_count} files ({collected.failed_count} failed)"
-        )
+        log.copied_files(collected.success_count, collected.failed_count)
 
         # Consolidated EXIF processing
         exif_rebuilt_count = 0
         if collected.file_paths:
-            logger.info("Batch processing EXIF metadata...")
-            exif_rebuilt_count = InstaloaderProcessor.batch_process_exif(
-                collected.file_paths,
-                collected.file_info,
-                _build_metadata_requests,
-                dedup_manifest,
+            log.exif_batch_start()
+
+            # Build metadata lookup for failure tracking
+            file_info_map = {info[0]: info for info in collected.file_info}
+
+            def metadata_for_file(file_path: str) -> Optional[dict]:
+                info = file_info_map.get(file_path)
+                return info[1] if info else None  # info[1] is post_data
+
+            exif_rebuilt_count, write_outcome, missing_files = (
+                InstaloaderProcessor.batch_process_exif(
+                    collected.file_paths,
+                    collected.file_info,
+                    _build_metadata_requests,
+                    dedup_manifest,
+                )
             )
-            logger.info(f"EXIF metadata written for {len(collected.file_info)} files")
+
+            # Track EXIF failures
+            for missing_path in missing_files:
+                failure_tracker.add_processing_failure(
+                    media_path=Path(missing_path),
+                    metadata=metadata_for_file(missing_path),
+                    reason="exif_target_missing",
+                    error_details=f"Output file missing at EXIF write time: {missing_path}",
+                )
+            for failure in write_outcome.failures:
+                failure_tracker.add_processing_failure(
+                    media_path=Path(failure.file_path),
+                    metadata=metadata_for_file(failure.file_path),
+                    reason=failure.reason_code,
+                    error_details=failure.stderr_excerpt or "",
+                )
+
+            log.exif_written(len(collected.file_info))
+
+        # Handle failures - move failed outputs and generate report
+        failure_tracker.handle_failures(Path(output_dir))
+
+        # Save dedup references for skipped secondary files
+        if dedup_manifest and skipped_secondary_files:
+            save_dedup_metadata(
+                manifest=dedup_manifest,
+                skipped_files=skipped_secondary_files,
+                processor_name="Instaloader",
+                output_dir=Path(output_dir),
+            )
 
         # Print summary using shared utility
         print_processing_summary(
@@ -622,5 +674,5 @@ def process_logic(
         )
         return False
 
-    logger.info(f"Processing preprocessed directory: {input_dir}")
+    logger.info("Processing preprocessed directory: %s", short_path(input_dir))
     _process_working_directory(input_dir)

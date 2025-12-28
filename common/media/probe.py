@@ -88,7 +88,9 @@ def get_video_metadata(video_path: Path, timeout: int = 10) -> Optional[VideoMet
         )
 
         if result.returncode != 0:
-            logger.debug(f"FFprobe failed for {short_path(video_path)}: {result.stderr}")
+            logger.debug(
+                "FFprobe failed for %s: %s", short_path(video_path), result.stderr
+            )
             return None
 
         data = json.loads(result.stdout)
@@ -96,7 +98,7 @@ def get_video_metadata(video_path: Path, timeout: int = 10) -> Optional[VideoMet
         # Extract stream info
         streams = data.get("streams", [])
         if not streams:
-            logger.debug(f"No video streams found in {short_path(video_path)}")
+            logger.debug("No video streams found in %s", short_path(video_path))
             return VideoMetadata(has_video=False)
 
         stream = streams[0]
@@ -104,7 +106,7 @@ def get_video_metadata(video_path: Path, timeout: int = 10) -> Optional[VideoMet
         # Check if this is actually a video stream
         codec_type = stream.get("codec_type", "")
         if codec_type and codec_type.lower() != "video":
-            logger.debug(f"First stream is not video in {short_path(video_path)}")
+            logger.debug("First stream is not video in %s", short_path(video_path))
             return VideoMetadata(has_video=False)
 
         # Extract dimensions
@@ -112,7 +114,9 @@ def get_video_metadata(video_path: Path, timeout: int = 10) -> Optional[VideoMet
         height = stream.get("height")
 
         if not width or not height:
-            logger.debug(f"Missing dimensions in stream data for {short_path(video_path)}")
+            logger.debug(
+                "Missing dimensions in stream data for %s", short_path(video_path)
+            )
             return VideoMetadata(has_video=False)
 
         # Extract rotation from tags or side_data
@@ -120,11 +124,6 @@ def get_video_metadata(video_path: Path, timeout: int = 10) -> Optional[VideoMet
 
         # Extract bitrate - try format first, then stream
         bitrate = _extract_bitrate(stream, data.get("format", {}))
-
-        logger.debug(
-            f"Video metadata for {short_path(video_path)}: "
-            f"{width}x{height}, rotation={rotation}, bitrate={bitrate}"
-        )
 
         return VideoMetadata(
             has_video=True,
@@ -135,16 +134,20 @@ def get_video_metadata(video_path: Path, timeout: int = 10) -> Optional[VideoMet
         )
 
     except subprocess.TimeoutExpired:
-        logger.warning(f"Timeout probing video metadata for {short_path(video_path)}")
+        logger.warning("Timeout probing video metadata for %s", short_path(video_path))
         return None
     except json.JSONDecodeError as e:
-        logger.warning(f"Failed to parse FFprobe JSON for {short_path(video_path)}: {e}")
+        logger.warning(
+            "Failed to parse FFprobe JSON for %s: %s", short_path(video_path), e
+        )
         return None
     except FileNotFoundError:
         logger.warning("ffprobe not found, cannot extract video metadata")
         return None
     except Exception as e:
-        logger.debug(f"Error probing video metadata for {short_path(video_path)}: {e}")
+        logger.debug(
+            "Error probing video metadata for %s: %s", short_path(video_path), e
+        )
         return None
 
 

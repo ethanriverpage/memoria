@@ -17,9 +17,9 @@ from datetime import datetime
 from collections import defaultdict
 from html.parser import HTMLParser
 
-from common.preprocess.context_mergers import merge_first_occurrence
 from common.processing import print_preprocessing_stats
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
+from common.files.scanner import iter_files
 from common.output.logging import get_processor_logger
 from common.utils import ALL_MEDIA_EXTENSIONS
 from processors.preprocess_base import CopyTask, PreprocessorBase
@@ -160,15 +160,17 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         self.export_username = None
 
         # Statistics specific to this preprocessor (preserves shared keys from base)
-        self.stats.update({
-            "total_conversations": 0,
-            "total_messages_with_media": 0,
-            "total_media_files": 0,
-            "media_copied": 0,
-            "missing_files": 0,
-            "fuzzy_matches": 0,
-            "banned_files_skipped": 0,
-        })
+        self.stats.update(
+            {
+                "total_conversations": 0,
+                "total_messages_with_media": 0,
+                "total_media_files": 0,
+                "media_copied": 0,
+                "missing_files": 0,
+                "fuzzy_matches": 0,
+                "banned_files_skipped": 0,
+            }
+        )
 
         # Track used files for duplicate handling
         self.used_files = defaultdict(int)
@@ -180,9 +182,6 @@ class GoogleVoicePreprocessor(PreprocessorBase):
 
         # Track which media files were copied (for orphaned media detection)
         self.copied_media_paths = set()
-
-        # Set context merger for deduplication (first occurrence wins)
-        self.set_context_merger(merge_first_occurrence)
 
     @staticmethod
     def _resolve_voice_calls_dir(export_path: Path) -> Path:
@@ -510,34 +509,17 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         """
         catalog = {}
 
-        # Media extensions to look for
+        # Media extensions to look for (including audio)
         media_extensions = ALL_MEDIA_EXTENSIONS | {".mp3", ".wav", ".m4a"}
 
-        # Scan Voice/Calls directory for media files
-        import os
-
-        with os.scandir(self.voice_dir) as entries:
-            for entry in entries:
-                if entry.is_file():
-                    file_path = Path(entry.path)
-                    filename = entry.name
-
-                    # Skip HTML files
-                    if filename.endswith(".html"):
-                        continue
-
-                    # Skip banned files (system files, thumbnails, etc.)
-                    if self.banned_filter.is_banned(file_path):
-                        self.stats["banned_files_skipped"] += 1
-                        self.log_message(
-                            "BANNED_FILE_SKIPPED",
-                            f"Skipped banned file: {filename}",
-                        )
-                        continue
-
-                    # Check if it's a media file
-                    if file_path.suffix.lower() in media_extensions:
-                        catalog[filename] = file_path
+        # Use shared scanner for consistent filtering of hidden and banned files
+        for file_path in iter_files(
+            self.voice_dir,
+            banned_filter=self.banned_filter,
+            extensions=media_extensions,
+            skip_hidden=True,
+        ):
+            catalog[file_path.name] = file_path
 
         return catalog
 
@@ -652,7 +634,7 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         html_files = sorted(self.voice_dir.glob("*.html"))
         text_files = [f for f in html_files if self.is_text_conversation(f)]
 
-        logger.info(f"   Found {len(text_files)} text conversation files")
+        logger.info("   Found %d text conversation files", len(text_files))
 
         for html_file in text_files:
             conv_info = self.extract_conversation_info(html_file)
@@ -698,7 +680,7 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         # Build media catalog
         media_catalog = self.build_media_catalog()
         self.stats["total_media_files"] = len(media_catalog)
-        logger.info(f"   Found {self.stats['total_media_files']} media files")
+        logger.info("   Found %d media files", self.stats["total_media_files"])
 
         # Reset used files tracker
         self.used_files.clear()
@@ -782,7 +764,10 @@ class GoogleVoicePreprocessor(PreprocessorBase):
 
             # Map this source path to the resulting (dest_filename, source_path)
             if source_path_str and result.dest_filename:
-                source_to_result[source_path_str] = (result.dest_filename, str(result.source_path))
+                source_to_result[source_path_str] = (
+                    result.dest_filename,
+                    str(result.source_path),
+                )
 
         # Phase 3: Update messages with resulting filenames and source paths
         for conv_idx, conversation in enumerate(conversations):
@@ -797,20 +782,24 @@ class GoogleVoicePreprocessor(PreprocessorBase):
                         result_info = source_to_result.get(str(source_path))
                         if result_info:
                             dest_filename, src_path = result_info
-                            media_entries.append({
-                                "filename": dest_filename,
-                                "source_path": src_path,
-                            })
+                            media_entries.append(
+                                {
+                                    "filename": dest_filename,
+                                    "source_path": src_path,
+                                }
+                            )
 
                 # Update message with matched files (new format with source_path)
                 message["media_files"] = [e["filename"] for e in media_entries]
-                message["source_paths"] = {e["filename"]: e["source_path"] for e in media_entries}
+                message["source_paths"] = {
+                    e["filename"]: e["source_path"] for e in media_entries
+                }
                 # Remove media_src as it's no longer needed
                 if "media_src" in message:
                     del message["media_src"]
 
         logger.info("   Copied %d unique files", self.stats["media_copied"])
-        logger.info(f"   Deduplicated {duplicate_count} duplicate files")
+        logger.info("   Deduplicated %d duplicate files", duplicate_count)
         logger.info("   Fuzzy matches: %d", self.stats["fuzzy_matches"])
         logger.info("   Missing files: %d", self.stats["missing_files"])
 
@@ -830,7 +819,7 @@ class GoogleVoicePreprocessor(PreprocessorBase):
             )
 
         if orphaned_media:
-            logger.info(f"   Found {len(orphaned_media)} orphaned media files")
+            logger.info("   Found %d orphaned media files", len(orphaned_media))
 
     def get_content_key(self) -> str:
         """Return the content key for Google Voice metadata."""

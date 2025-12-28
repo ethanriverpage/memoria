@@ -13,12 +13,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 from bs4 import BeautifulSoup
-from concurrent.futures import ThreadPoolExecutor
 
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
-from common.preprocess.context_mergers import merge_first_occurrence
-from common.processing import print_preprocessing_stats
-from common.output.progress import PHASE_PREPROCESS, futures_progress
+from common.files.scanner import iter_media_files
+from common.processing import print_preprocessing_stats, process_parallel_threaded
+from common.output.progress import PHASE_PREPROCESS
 from common.output.logging import get_processor_logger
 from common.utils import normalize_text
 from processors.preprocess_base import CopyTask, PreprocessorBase
@@ -88,9 +87,6 @@ class InstagramPreprocessor(PreprocessorBase):
                 "by_type": {},
             }
         )
-
-        # Set context merger for deduplication (first occurrence wins)
-        self.set_context_merger(merge_first_occurrence)
 
     def validate_export(self) -> bool:
         """Validate that export directory has required structure."""
@@ -328,10 +324,6 @@ class InstagramPreprocessor(PreprocessorBase):
                 "div", class_="pam _3-95 _2ph- _a6-g uiBoxWhite noborder"
             )
 
-            logger.debug(
-                "   Found %d posts in %s", len(post_containers), html_path.name
-            )
-
             for idx, container in enumerate(post_containers):
                 post_data: Dict[str, Any] = {"media_type": media_type}
 
@@ -370,23 +362,6 @@ class InstagramPreprocessor(PreprocessorBase):
                     post_data["additional_metadata"] = additional
 
                 # Log constructed metadata
-                logger.debug(
-                    f"Constructed metadata for post {idx + 1} in {html_path.name}:"
-                )
-                logger.debug(f"  Media type: {post_data['media_type']}")
-                logger.debug(
-                    f"  Timestamp: {post_data['timestamp']} (raw: {post_data['timestamp_raw']})"
-                )
-                logger.debug(
-                    f"  Caption: {post_data['caption'][:100] if post_data['caption'] else '(none)'}..."
-                )
-                logger.debug(f"  GPS: lat={latitude}, lon={longitude}")
-                logger.debug(f"  Media files: {len(media_paths)} file(s)")
-                for media_path in media_paths:
-                    logger.debug(f"    - {media_path}")
-                if additional:
-                    logger.debug(f"  Additional metadata: {additional}")
-
                 posts.append(post_data)
 
         except Exception as e:
@@ -397,12 +372,26 @@ class InstagramPreprocessor(PreprocessorBase):
             )
             logger.error("Failed to parse %s: %s", html_path.name, e)
 
+        if posts:
+            missing_ts = sum(1 for p in posts if not p.get("timestamp"))
+            media_refs = sum(len(p.get("media_paths", [])) for p in posts)
+            logger.debug(
+                "Parsed %s: posts=%d media_refs=%d missing_timestamp=%d",
+                html_path.name,
+                len(posts),
+                media_refs,
+                missing_ts,
+            )
+
         return posts
 
     def build_file_catalog(self) -> Dict[str, Path]:
         """
         Scan media directories and build catalog mapping filename -> full source path
         Returns: Dict[filename, source_path]
+
+        Uses shared iter_media_files utility for consistent file scanning
+        with automatic hidden file and banned pattern filtering.
         """
         catalog = {}
 
@@ -411,31 +400,20 @@ class InstagramPreprocessor(PreprocessorBase):
 
         logger.info("Scanning media directories...")
 
-        # Recursively find all media files
-        for file_path in self.media_source_dir.rglob("*"):
-            # Skip banned directories (check all parts of path)
-            if any(
-                self.banned_filter.is_banned(part_path)
-                for part_path in file_path.parents
-            ):
-                continue
+        # Use shared scanner for recursive media file scanning
+        for file_path in iter_media_files(
+            self.media_source_dir,
+            banned_filter=self.banned_filter,
+            skip_hidden=True,
+            skip_overlays=False,  # Instagram doesn't have overlay concept
+            skip_thumbnails=False,  # Instagram doesn't have thumbnail files
+            recursive=True,
+        ):
+            # Map filename to source path
+            catalog[file_path.name] = file_path
+            self.stats["total_media_files"] += 1
 
-            if file_path.is_file():
-                # Skip banned files
-                if self.banned_filter.is_banned(file_path):
-                    self.stats["banned_files_skipped"] += 1
-                    self.log_message(
-                        "BANNED_FILE_SKIPPED",
-                        f"Skipped banned file: {file_path.name}",
-                        f"path: {file_path.relative_to(self.media_source_dir)}",
-                    )
-                    continue
-
-                # Map filename to source path
-                catalog[file_path.name] = file_path
-                self.stats["total_media_files"] += 1
-
-        logger.info(f"   Found {len(catalog)} media files")
+        logger.info("   Found %d media files", len(catalog))
 
         return catalog
 
@@ -625,34 +603,30 @@ class InstagramPreprocessor(PreprocessorBase):
         html_files = list(self.MEDIA_TYPES.items())
 
         # Process HTML files in parallel
-        with ThreadPoolExecutor(max_workers=self.workers) as executor:
-            # Submit all HTML file processing tasks
-            future_to_html = {
-                executor.submit(self._process_single_html_file, html_tuple): html_tuple[
-                    0
-                ]
-                for html_tuple in html_files
-            }
+        results = process_parallel_threaded(
+            tasks=html_files,
+            worker_fn=self._process_single_html_file,
+            workers=self.workers,
+            phase=PHASE_PREPROCESS,
+            description="Parsing HTML files",
+            task_id_fn=lambda t: t[0],  # html_basename
+            on_error=lambda tid, e: (
+                self.log_message(
+                    "HTML_PROCESSING_ERROR",
+                    f"Failed to process {tid}.html",
+                    str(e),
+                ),
+                logger.error("Failed to process %s.html: %s", tid, e),
+            ),
+        )
 
-            # Collect results as they complete
-            for future in futures_progress(
-                future_to_html, PHASE_PREPROCESS, "Parsing HTML files", unit="file"
-            ):
-                html_basename = future_to_html[future]
-                try:
-                    _, posts = future.result()
-                    if posts:
-                        logger.debug(
-                            "   Processed %s.html: %d posts", html_basename, len(posts)
-                        )
-                        all_posts.extend(posts)
-                except Exception as e:
-                    self.log_message(
-                        "HTML_PROCESSING_ERROR",
-                        f"Failed to process {html_basename}.html",
-                        str(e),
-                    )
-                    logger.error(f"Failed to process {html_basename}.html: {e}")
+        # Flatten results - each result is (basename, posts_list)
+        for html_basename, posts in results:
+            if posts:
+                logger.debug(
+                    "   Processed %s.html: %d posts", html_basename, len(posts)
+                )
+                all_posts.extend(posts)
 
         with self.stats_lock:
             self.stats["total_posts"] = len(all_posts)

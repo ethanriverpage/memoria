@@ -298,10 +298,14 @@ def process(
     When dedup_manifest is provided, skip files marked as secondary
     (they will be handled by their primary processor).
     """
-    # Recommended: use ProcessorBase.should_skip_for_dedup()
+    # Use cached content_hash from preprocessing metadata
+    file_hashes = metadata.get("file_hashes", {})
+    
     for file_path in media_files:
+        content_hash = file_hashes.get(file_path.name)
+        source_path = str(file_path)
         if ProcessorBase.should_skip_for_dedup(
-            str(file_path), dedup_manifest, "YourProcessorName"
+            dedup_manifest, content_hash, "YourProcessorName", source_path
         ):
             continue
         # Process file normally...
@@ -314,11 +318,7 @@ Use these utilities from the `common` subpackages:
 ```python
 # Deduplication utilities
 from common.dedup.config import get_dedup_config
-from common.dedup.service import is_file_primary_by_hash
-from common.dedup.hashing import (
-    compute_content_hash,
-    compute_perceptual_hash_with_dims,
-)
+from common.dedup.service import get_canonical_timestamp, save_dedup_metadata
 
 # Media processing
 from common.media.exiftool import batch_write_metadata_requests, MetadataWriteRequest

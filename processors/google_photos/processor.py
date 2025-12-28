@@ -11,8 +11,12 @@ from common.dedup.description import (
     PLATFORM_GOOGLE,
     SERVICE_PHOTOS,
 )
+from common.failure_tracker import FailureTracker
 from common.files.utils import batch_correct_extensions, copy_file
-from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
+from common.dedup.service import (
+    get_canonical_timestamp,
+    save_dedup_metadata,
+)
 from common.media.exiftool import (
     DescriptionWriteSpec,
     GPSData,
@@ -25,9 +29,9 @@ from common.processing import (
     process_batches_parallel,
     print_processing_summary,
 )
+from common.detection import detect_from_dirname
 from common.utils import (
     default_worker_count,
-    extract_username_from_export_dir,
     FilenameGenerator,
     is_preprocessed_directory,
     update_file_timestamps,
@@ -140,7 +144,7 @@ class GooglePhotosProcessor(ProcessorBase):
 
         Args:
             input_dir: Path to preprocessed input directory
-            **kwargs: Additional arguments (verbose, workers)
+            **kwargs: Additional arguments (workers)
 
         Yields:
             Catalog entries with processor name and file data.
@@ -244,8 +248,8 @@ def _build_metadata_requests(
         content_hash,
         original_filename,
     ) in file_info:
-        # Build datetime tags (ISO format)
-        datetime_tags = build_datetime_tags(media_data.get("capture_timestamp"))
+        # Build datetime tags (ISO format) using canonical timestamp
+        datetime_tags = build_datetime_tags(media_data.get("canonical_timestamp"))
 
         # Build GPS data
         gps: Optional[GPSData] = None
@@ -461,36 +465,35 @@ def _process_working_directory(
             if media_file:
                 source_path = media_data.get("source_path", "")
                 content_hash = media_data.get("content_hash")
-                if content_hash:
-                    # Use cached hash from preprocessing (avoids re-hashing)
-                    # Pass source_path for within-processor dedup
-                    if is_file_primary_by_hash(
-                        dedup_manifest,
-                        content_hash,
-                        "Google Photos",
-                        source_path,
-                    ):
-                        filtered_media_files.append(media_data)
-                    else:
-                        skipped_secondary_files.append(source_path)
+                if GooglePhotosProcessor.should_skip_for_dedup(
+                    dedup_manifest, content_hash, "Google Photos", source_path
+                ):
+                    skipped_secondary_files.append(source_path)
                 else:
-                    # Fallback for metadata without cached hash
-                    if GooglePhotosProcessor.should_skip_for_dedup(
-                        source_path, dedup_manifest, "Google Photos"
-                    ):
-                        skipped_secondary_files.append(source_path)
-                    else:
-                        filtered_media_files.append(media_data)
+                    filtered_media_files.append(media_data)
         media_files = filtered_media_files
         skipped_count = original_count - len(media_files)
         log.skipped_secondary(skipped_count)
 
-    # Extract export username from export_name
-    # Pattern: "google-{username}-{date}" (date can be YYYYMMDD or YYYY-MM-DD)
-    export_name = export_info.get("export_name", "")
-    export_username = extract_username_from_export_dir(export_name, "google")
-
+    # Extract export username from validated export_info
+    export_username = export_info.get("export_username")
     log.export_username(export_username)
+
+    # Initialize failure tracker for this export
+    failure_tracker = FailureTracker(
+        processor_name="Google Photos",
+        export_directory=str(working_dir),
+    )
+
+    # Check for no media files (export-level soft-fail)
+    if not media_files:
+        log.logger.warning("No media files found to process.")
+        failure_tracker.add_export_failure(
+            reason="no_media_files",
+            error_details="No media files found in export to process",
+        )
+        failure_tracker.handle_failures(Path(output_dir))
+        return False
 
     # Create output directory
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -519,10 +522,17 @@ def _process_working_directory(
 
     # Second pass: Generate filenames using FilenameGenerator
     # For live photo pairs, reuse base filename (with same sequence) for both files
-    filename_gen = FilenameGenerator("gphotos", timestamp_format="%Y-%m-%dT%H:%M:%S")
+    filename_gen = FilenameGenerator(
+        "google",
+        export_username,
+        service="photos",
+        timestamp_format="%Y-%m-%dT%H:%M:%S",
+    )
     live_photo_bases = {}  # Map: live_photo_key -> base filename (without extension)
 
     processing_tasks = []
+    missing_source_path = 0
+    missing_examples: list[str] = []
 
     for media_data in media_files:
         media_file = media_data.get("filename")
@@ -542,9 +552,11 @@ def _process_working_directory(
             # Generate filename using FilenameGenerator (mechanism handles uniqueness)
             timestamp_str = media_data.get("capture_timestamp")
             timestamp_clean = _clean_iso_timestamp(timestamp_str)
-            output_filename = filename_gen.generate(
-                timestamp_clean, export_username, file_ext
+            canonical_ts = get_canonical_timestamp(
+                dedup_manifest, media_data.get("content_hash"), timestamp_clean
             )
+            media_data["canonical_timestamp"] = canonical_ts
+            output_filename = filename_gen.generate(canonical_ts, file_ext)
 
             # If this is first file in a live photo pair, record base for second file
             if is_live_photo_pair:
@@ -561,7 +573,9 @@ def _process_working_directory(
         # Get source path from metadata
         full_source_path = media_data.get("source_path")
         if not full_source_path:
-            logger.warning(f"No source_path for file: {media_file}")
+            missing_source_path += 1
+            if len(missing_examples) < 5:
+                missing_examples.append(media_file or "unknown")
             continue
         source_path = os.path.dirname(full_source_path)
         source_file = os.path.basename(full_source_path)
@@ -588,6 +602,13 @@ def _process_working_directory(
             )
         )
 
+    if missing_source_path > 0:
+        logger.info(
+            "Missing source_path for %d files (e.g. %s)",
+            missing_source_path,
+            ", ".join(missing_examples),
+        )
+
     # Process media files in parallel
     log.processing_start(output_dir)
 
@@ -609,13 +630,43 @@ def _process_working_directory(
     exif_rebuilt_count = 0
     if collected.file_paths:
         log.exif_batch_start()
-        exif_rebuilt_count = GooglePhotosProcessor.batch_process_exif(
-            collected.file_paths,
-            collected.file_info,
-            _build_metadata_requests,
-            dedup_manifest,
+
+        # Build metadata lookup for failure tracking
+        file_info_map = {info[0]: info for info in collected.file_info}
+
+        def metadata_for_file(file_path: str) -> Optional[dict]:
+            info = file_info_map.get(file_path)
+            return info[1] if info else None  # info[1] is media_data
+
+        exif_rebuilt_count, write_outcome, missing_files = (
+            GooglePhotosProcessor.batch_process_exif(
+                collected.file_paths,
+                collected.file_info,
+                _build_metadata_requests,
+                dedup_manifest,
+            )
         )
+
+        # Track EXIF failures
+        for missing_path in missing_files:
+            failure_tracker.add_processing_failure(
+                media_path=Path(missing_path),
+                metadata=metadata_for_file(missing_path),
+                reason="exif_target_missing",
+                error_details=f"Output file missing at EXIF write time: {missing_path}",
+            )
+        for failure in write_outcome.failures:
+            failure_tracker.add_processing_failure(
+                media_path=Path(failure.file_path),
+                metadata=metadata_for_file(failure.file_path),
+                reason=failure.reason_code,
+                error_details=failure.stderr_excerpt or "",
+            )
+
         log.exif_written(len(collected.file_info))
+
+    # Handle failures - move failed outputs and generate report
+    failure_tracker.handle_failures(Path(output_dir))
 
     # Save dedup references for skipped secondary files
     if dedup_manifest and skipped_secondary_files:

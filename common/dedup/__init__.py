@@ -69,17 +69,12 @@ from common.dedup.description import (
 from common.dedup.service import (
     DeduplicationService,
     save_manifest,
-    load_manifest,
-    is_file_primary,
     is_file_primary_by_hash,
     filter_primary_files,
-    get_primary_for_file,
     get_merged_description_for_file,
     get_merged_metadata_for_hash,
-    get_duplicate_group_for_file,
     get_secondary_reference,
     build_dedup_references,
-    get_skipped_secondary_files,
     save_dedup_metadata,
 )
 
@@ -141,16 +136,11 @@ __all__ = [
     # Service
     "DeduplicationService",
     "save_manifest",
-    "load_manifest",
-    "is_file_primary",
     "is_file_primary_by_hash",
     "filter_primary_files",
-    "get_primary_for_file",
     "get_merged_description_for_file",
     "get_merged_metadata_for_hash",
-    "get_duplicate_group_for_file",
     "get_secondary_reference",
     "build_dedup_references",
-    "get_skipped_secondary_files",
     "save_dedup_metadata",
 ]

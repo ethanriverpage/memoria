@@ -15,12 +15,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
 
-from common.preprocess.context_mergers import merge_first_occurrence
-from common.processing import print_preprocessing_stats
-from common.output.progress import PHASE_PREPROCESS, futures_progress
+from common.processing import print_preprocessing_stats, process_parallel_threaded
+from common.output.progress import PHASE_PREPROCESS
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
+from common.files.scanner import iter_subdirs, iter_files
 from common.output.logging import get_processor_logger
 from common.utils import ALL_MEDIA_EXTENSIONS
 from processors.preprocess_base import CopyTask, PreprocessorBase
@@ -75,9 +74,6 @@ class GoogleChatPreprocessor(PreprocessorBase):
 
         # Track which media files were copied (for orphaned media detection)
         self.copied_media_paths = set()
-
-        # Set context merger for deduplication (first occurrence wins)
-        self.set_context_merger(merge_first_occurrence)
 
     def validate_export(self) -> bool:
         """Validate that export directory has required structure."""
@@ -500,143 +496,103 @@ class GoogleChatPreprocessor(PreprocessorBase):
 
     def scan_conversations(self) -> List[Tuple[str, str, Path]]:
         """
-        Scan Groups directory for all conversation folders
-        Returns list of (conversation_type, conversation_id, folder_path) tuples
+        Scan Groups directory for all conversation folders.
+
+        Returns list of (conversation_type, conversation_id, folder_path) tuples.
         """
         conversations = []
 
-        try:
-            import os
+        for conv_dir in iter_subdirs(
+            self.groups_dir,
+            banned_filter=self.banned_filter,
+            skip_hidden=True,
+            sorted_=True,
+        ):
+            # Parse folder name: "DM xxxxx" or "Space xxxxx"
+            folder_name = conv_dir.name
+            parts = folder_name.split(" ", 1)
 
-            with os.scandir(self.groups_dir) as entries:
-                for entry in sorted(entries, key=lambda e: e.name):
-                    if not entry.is_dir():
-                        continue
+            if len(parts) != 2:
+                self.log_message(
+                    "FOLDER_NAME_ERROR",
+                    f"Unexpected folder name format: {folder_name}",
+                )
+                continue
 
-                    conv_dir = Path(entry.path)
+            conversation_type, conversation_id = parts
 
-                    # Parse folder name: "DM xxxxx" or "Space xxxxx"
-                    folder_name = entry.name
-                    parts = folder_name.split(" ", 1)
+            if conversation_type not in ["DM", "Space"]:
+                self.log_message(
+                    "FOLDER_TYPE_ERROR",
+                    f"Unknown conversation type: {conversation_type}",
+                )
+                continue
 
-                    if len(parts) != 2:
-                        self.log_message(
-                            "FOLDER_NAME_ERROR",
-                            f"Unexpected folder name format: {folder_name}",
-                        )
-                        continue
+            group_info_path = conv_dir / "group_info.json"
+            messages_path = conv_dir / "messages.json"
 
-                    conversation_type, conversation_id = parts
+            if not group_info_path.exists():
+                self.log_message(
+                    "MISSING_GROUP_INFO",
+                    f"No group_info.json found in {folder_name}",
+                )
+                continue
 
-                    if conversation_type not in ["DM", "Space"]:
-                        self.log_message(
-                            "FOLDER_TYPE_ERROR",
-                            f"Unknown conversation type: {conversation_type}",
-                        )
-                        continue
+            if not messages_path.exists():
+                self.log_message(
+                    "MISSING_MESSAGES",
+                    f"No messages.json found in {folder_name}",
+                )
+                continue
 
-                    group_info_path = conv_dir / "group_info.json"
-                    messages_path = conv_dir / "messages.json"
-
-                    if not group_info_path.exists():
-                        self.log_message(
-                            "MISSING_GROUP_INFO",
-                            f"No group_info.json found in {folder_name}",
-                        )
-                        continue
-
-                    if not messages_path.exists():
-                        self.log_message(
-                            "MISSING_MESSAGES",
-                            f"No messages.json found in {folder_name}",
-                        )
-                        continue
-
-                    conversations.append((conversation_type, conversation_id, conv_dir))
-
-        except Exception as e:
-            self.log_message(
-                "SCAN_ERROR",
-                "Failed to scan conversation folders",
-                str(e),
-            )
-            logger.error(f"Failed to scan conversations: {e}")
+            conversations.append((conversation_type, conversation_id, conv_dir))
 
         return conversations
 
     def build_conversation_catalog(self, conv_folder: Path) -> Dict[str, Path]:
         """
-        Build file catalog for a specific conversation folder
+        Build file catalog for a specific conversation folder.
+
         Returns: Dict[filename, source_path]
+
+        Uses shared iter_files utility for consistent file scanning
+        with automatic hidden file and banned pattern filtering.
         """
         catalog = {}
 
-        # Media extensions to look for
-        media_extensions = ALL_MEDIA_EXTENSIONS
-
-        # Look for media files directly in the conversation folder
-        import os
-
-        with os.scandir(conv_folder) as entries:
-            for entry in entries:
-                if entry.is_file():
-                    file_path = Path(entry.path)
-                    filename = entry.name
-
-                    # Skip banned files
-                    if self.banned_filter.is_banned(file_path):
-                        with self.stats_lock:
-                            self.stats["banned_files_skipped"] += 1
-                        continue
-
-                    # Skip JSON files
-                    if filename.endswith(".json"):
-                        continue
-
-                    # Skip system files
-                    if filename.startswith(".") or filename.startswith("_"):
-                        continue
-
-                    # Check if it's a media file
-                    if file_path.suffix.lower() in media_extensions:
-                        catalog[filename] = file_path
+        # Use shared scanner for consistent filtering
+        for file_path in iter_files(
+            conv_folder,
+            banned_filter=self.banned_filter,
+            extensions=ALL_MEDIA_EXTENSIONS,
+            skip_hidden=True,
+        ):
+            catalog[file_path.name] = file_path
 
         return catalog
 
     def count_total_media_files(self) -> int:
         """
-        Count total media files across all conversation folders
+        Count total media files across all conversation folders.
+
+        Uses shared scanner utilities for consistent filtering.
         """
         total = 0
 
-        # Media extensions to look for
-        media_extensions = ALL_MEDIA_EXTENSIONS
-
         # Scan all conversation folders
-        import os
-
-        with os.scandir(self.groups_dir) as conv_entries:
-            for conv_entry in conv_entries:
-                if not conv_entry.is_dir():
-                    continue
-
-                with os.scandir(conv_entry.path) as file_entries:
-                    for file_entry in file_entries:
-                        if file_entry.is_file():
-                            file_path = Path(file_entry.path)
-                            filename = file_entry.name
-
-                            # Skip banned files
-                            if self.banned_filter.is_banned(file_path):
-                                continue
-
-                            if (
-                                not filename.endswith(".json")
-                                and not filename.startswith(".")
-                                and not filename.startswith("_")
-                                and file_path.suffix.lower() in media_extensions
-                            ):
-                                total += 1
+        for conv_dir in iter_subdirs(
+            self.groups_dir,
+            banned_filter=self.banned_filter,
+            skip_hidden=True,
+        ):
+            # Count media files in each conversation
+            for _ in iter_files(
+                conv_dir,
+                banned_filter=self.banned_filter,
+                extensions=ALL_MEDIA_EXTENSIONS,
+                skip_hidden=True,
+            ):
+                total += 1
 
         return total
 
@@ -758,7 +714,7 @@ class GoogleChatPreprocessor(PreprocessorBase):
 
         # Scan all conversation folders
         conversation_list = self.scan_conversations()
-        logger.info(f"   Found {len(conversation_list)} conversations")
+        logger.info("   Found %d conversations", len(conversation_list))
 
         logger.info(
             "Processing %d conversations (using %d workers)...",
@@ -767,36 +723,22 @@ class GoogleChatPreprocessor(PreprocessorBase):
         )
 
         # Process conversations in parallel
-        with ThreadPoolExecutor(max_workers=self.workers) as executor:
-            # Submit all conversation processing tasks
-            future_to_conversation = {
-                executor.submit(
-                    self._process_single_conversation, conv_tuple
-                ): conv_tuple[1]
-                for conv_tuple in conversation_list
-            }
-
-            # Collect results as they complete
-            for future in futures_progress(
-                future_to_conversation,
-                PHASE_PREPROCESS,
-                "Parsing conversations",
-                unit="conv",
-            ):
-                conversation_id = future_to_conversation[future]
-                try:
-                    conversation_data = future.result()
-                    if conversation_data:
-                        all_conversations.append(conversation_data)
-                except Exception as e:
-                    self.log_message(
-                        "CONVERSATION_PROCESSING_ERROR",
-                        f"Failed to process conversation {conversation_id}",
-                        str(e),
-                    )
-                    logger.error(
-                        f"Failed to process conversation {conversation_id}: {e}"
-                    )
+        all_conversations = process_parallel_threaded(
+            tasks=conversation_list,
+            worker_fn=self._process_single_conversation,
+            workers=self.workers,
+            phase=PHASE_PREPROCESS,
+            description="Parsing conversations",
+            task_id_fn=lambda t: t[1],  # conversation_id
+            on_error=lambda tid, e: (
+                self.log_message(
+                    "CONVERSATION_PROCESSING_ERROR",
+                    f"Failed to process conversation {tid}",
+                    str(e),
+                ),
+                logger.error(f"Failed to process conversation {tid}: {e}"),
+            ),
+        )
 
         with self.stats_lock:
             self.stats["total_conversations"] = len(all_conversations)
@@ -945,14 +887,14 @@ class GoogleChatPreprocessor(PreprocessorBase):
                 if "export_names" in message:
                     del message["export_names"]
 
-        logger.info(f"   Copied {self.stats['media_copied']} unique files")
-        logger.info(f"   Deduplicated {duplicate_count} duplicate files")
+        logger.info("   Copied %d unique files", self.stats["media_copied"])
+        logger.info("   Deduplicated %d duplicate files", duplicate_count)
         logger.info("   Fuzzy matches: %d", self.stats["fuzzy_matches"])
         logger.info("   Missing files: %d", self.stats["missing_files"])
 
         # Track orphaned media (files in filesystem that were never copied)
         logger.info("Scanning for orphaned media files...")
-        all_media_paths = set()
+        all_media_paths: set[str] = set()
         for conversation in conversations:
             conv_id = conversation["conversation_id"]
             conv_type = conversation["conversation_type"]
@@ -973,7 +915,7 @@ class GoogleChatPreprocessor(PreprocessorBase):
             )
 
         if orphaned_media:
-            logger.info(f"   Found {len(orphaned_media)} orphaned media files")
+            logger.info("   Found %d orphaned media files", len(orphaned_media))
 
     def get_content_key(self) -> str:
         """Return the content key for Google Chat metadata."""
@@ -1015,7 +957,7 @@ class GoogleChatPreprocessor(PreprocessorBase):
         # Count total media files for statistics
         logger.info("Scanning media directories...")
         self.stats["total_media_files"] = self.count_total_media_files()
-        logger.info(f"   Found {self.stats['total_media_files']} media files")
+        logger.info("   Found %d media files", self.stats["total_media_files"])
 
         # Create metadata by parsing JSON files
         conversations = self.create_metadata()

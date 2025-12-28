@@ -50,19 +50,6 @@ def merge_snapchat_context(existing: Dict[str, Any], new: Dict[str, Any]) -> Non
         existing["messages"].extend(new["messages"])
 
 
-def merge_first_occurrence(existing: Dict[str, Any], new: Dict[str, Any]) -> None:
-    """No-op merger for processors where first occurrence wins.
-
-    Some processors don't need to merge context - the first file's metadata
-    is sufficient. This function exists as a placeholder for consistency.
-
-    Args:
-        existing: Context dict for the primary (first seen) file.
-        new: Context dict for the duplicate file being merged (ignored).
-    """
-    # Intentional no-op: first occurrence metadata wins
-
-
 def merge_imessage_context(existing: Dict[str, Any], new: Dict[str, Any]) -> None:
     """Merge message context for iMessage attachments.
 

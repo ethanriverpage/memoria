@@ -919,6 +919,10 @@ class HashDatabase:
         else:
             result["metadata"] = {}
 
+        # Extract live_photo_video from metadata if present (for Live Photo dedup)
+        if result["metadata"].get("live_photo_video"):
+            result["live_photo_video"] = result["metadata"]["live_photo_video"]
+
         return result
 
     def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:

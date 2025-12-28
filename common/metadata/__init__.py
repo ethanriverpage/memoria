@@ -21,6 +21,7 @@ from common.metadata.schema import (
     get_content_type,
     MetadataValidationError,
 )
+from common.metadata.extraction import extract_all_media_entries
 
 __all__ = [
     "ContentType",
@@ -34,5 +35,6 @@ __all__ = [
     "validate_metadata",
     "get_content_type",
     "MetadataValidationError",
+    "extract_all_media_entries",
 ]
 

@@ -279,6 +279,12 @@ class TestGooglePhotosContentHashCaching:
         photos_dir = export_dir / "Google Photos" / "Test Album"
         photos_dir.mkdir(parents=True)
 
+        # Create Profile.json for username detection
+        profile_dir = export_dir / "Profile"
+        profile_dir.mkdir()
+        profile_data = {"emails": [{"value": "testuser@gmail.com"}]}
+        (profile_dir / "Profile.json").write_text(json.dumps(profile_data))
+
         # Create a test image
         write_media_file(photos_dir / "photo.jpg", "jpeg")
 

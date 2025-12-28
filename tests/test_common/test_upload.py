@@ -320,18 +320,19 @@ class TestBuildUploadTargets:
         path, album = targets[0]
         assert album == "iMessage/testuser"
 
-    def test_legacy_string_processor(self, tmp_path: Path) -> None:
-        """Should handle legacy string processor name."""
-        targets = build_upload_targets(
-            "Discord",  # Legacy string format
-            input_dir="discord-user-20240101",
-            output_base=str(tmp_path),
-        )
+    def test_legacy_string_processor_raises_error(self, tmp_path: Path) -> None:
+        """Should raise TypeError for deprecated string processor names.
 
-        assert len(targets) == 1
-        path, album = targets[0]
-        assert path == str(tmp_path)
-        assert album == ""  # Legacy returns empty album
+        Legacy string processor names are not supported - callers must pass
+        a ProcessorBase instance or OutputInfo. The string path previously
+        returned an empty album, which Immich rejects anyway.
+        """
+        with pytest.raises(TypeError, match="must be ProcessorBase or OutputInfo"):
+            build_upload_targets(
+                "Discord",  # Legacy string format should raise
+                input_dir="discord-user-20240101",
+                output_base=str(tmp_path),
+            )
 
 
 class TestInstagramPublicMediaTargets:

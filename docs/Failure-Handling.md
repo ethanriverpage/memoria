@@ -199,17 +199,35 @@ Two distinct cases appear in logs:
 
 ## Implementation Notes (How to enforce this)
 
-This section describes recommended mechanisms; exact code changes live elsewhere.
+### Entry Points
 
-- **Centralize invariants**: add shared validators (e.g., `common/validation/`) for:
-  - export username not unknown
-  - filename date matches embedded timestamp
-  - GPS validity (including 0.0,0.0)
-- **Propagate outcome**: helpers like timestamp/EXIF writers must return success/failure so processors can classify correctly.
-- **Use FailureTracker consistently**: every processor should:
-  - track failures during preprocessing (failed-matching)
-  - track failures during processing (failed-processing)
-  - call `failure_tracker.handle_failures(output_dir)` at end of run
+- **FailureTracker** (`common/failure_tracker.py`):
+  - `add_orphaned_media()` - track unmatched media files for `issues/failed-matching/`
+  - `add_orphaned_metadata()` - track unmatched metadata entries
+  - `add_processing_failure()` - track failed outputs for `issues/failed-processing/`
+  - `add_export_failure()` - track export-level failures (e.g., no media files)
+  - `handle_failures(output_dir)` - copy orphaned media, move failed outputs, write report
+
+- **Invariant validators** (`common/validation/invariants.py`):
+  - `require_non_unknown_username()` - hard-fail if username is None or "unknown"
+  - `validate_gps()` - hard-fail if GPS is (0.0, 0.0) or out of valid range
+
+- **EXIF batch outcomes** (`common/media/exiftool.py`):
+  - `BatchWriteOutcome` - structured result with successes and `ExifWriteFailure` list
+  - `batch_read_existing_metadata()` - returns `BatchReadResult` with `missing_files` list
+
+- **Overlay handling** (`common/media/overlay.py`):
+  - Missing overlay: logs warning, returns True with base media (no overlay)
+  - Corrupt overlay: raises `OverlayProcessingError` for soft-fail tracking
+
+### Processor Integration
+
+Every processor should:
+
+- Initialize `FailureTracker` after loading metadata
+- Track failures during preprocessing (failed-matching)
+- Track failures during processing (failed-processing)
+- Call `failure_tracker.handle_failures(output_dir)` at end of run
 
 ## Related Documentation
 

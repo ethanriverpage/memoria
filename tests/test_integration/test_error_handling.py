@@ -73,7 +73,7 @@ class TestPermissionErrors:
         try:
             # Should fail gracefully without crashing
             result = GooglePhotosProcessor.process(
-                working_dir, str(output_dir), verbose=False
+                working_dir, str(output_dir)
             )
             # Result should be False due to permission error
             # (or True if processor handles it differently)
@@ -105,7 +105,7 @@ class TestPermissionErrors:
         try:
             # Should still work (reading is allowed)
             result = GooglePhotosProcessor.process(
-                working_dir, str(output_dir), verbose=False
+                working_dir, str(output_dir)
             )
             assert isinstance(result, bool)
         finally:
@@ -151,7 +151,7 @@ class TestMissingFiles:
         # Should not crash (preprocessed format provided directly)
         try:
             result = SnapchatMemoriesProcessor.process(
-                str(export_dir), str(output_dir), verbose=False
+                str(export_dir), str(output_dir)
             )
             assert isinstance(result, bool)
         except FileNotFoundError:
@@ -185,7 +185,7 @@ class TestMissingFiles:
         # Should not crash on missing file
         try:
             result = GooglePhotosProcessor.process(
-                working_dir, str(output_dir), verbose=False
+                working_dir, str(output_dir)
             )
             assert isinstance(result, bool)
         except Exception:
@@ -226,7 +226,7 @@ class TestCorruptedFiles:
         # Should not crash on corrupted file
         try:
             result = GooglePhotosProcessor.process(
-                working_dir, str(output_dir), verbose=False
+                working_dir, str(output_dir)
             )
             assert isinstance(result, bool)
         except Exception:
@@ -260,7 +260,7 @@ class TestCorruptedFiles:
 
         try:
             result = GooglePhotosProcessor.process(
-                working_dir, str(output_dir), verbose=False
+                working_dir, str(output_dir)
             )
             assert isinstance(result, bool)
         except Exception:
@@ -290,7 +290,7 @@ class TestCorruptedFiles:
                 GooglePhotosProcessor, export_dir, cache_dir
             )
             result = GooglePhotosProcessor.process(
-                working_dir, str(output_dir), verbose=False
+                working_dir, str(output_dir)
             )
             assert isinstance(result, bool)
         except json.JSONDecodeError:
@@ -321,7 +321,7 @@ class TestDiskSpaceErrors:
         with patch("shutil.copy2", side_effect=raise_enospc):
             try:
                 result = GooglePhotosProcessor.process(
-                    working_dir, str(output_dir), verbose=False
+                    working_dir, str(output_dir)
                 )
                 # Should fail gracefully
                 assert result is False or isinstance(result, bool)
@@ -352,7 +352,7 @@ class TestEmptyExports:
 
         try:
             result = GooglePhotosProcessor.process(
-                working_dir, str(output_dir), verbose=False
+                working_dir, str(output_dir)
             )
             assert isinstance(result, bool)
         except Exception:
@@ -379,7 +379,7 @@ class TestEmptyExports:
 
         try:
             result = SnapchatMemoriesProcessor.process(
-                str(export_dir), str(output_dir), verbose=False
+                str(export_dir), str(output_dir)
             )
             assert isinstance(result, bool)
         except Exception:
@@ -422,7 +422,7 @@ class TestConcurrentModification:
         with patch("shutil.copy2", side_effect=delete_file_on_second_call):
             try:
                 result = GooglePhotosProcessor.process(
-                    working_dir, str(output_dir), verbose=False
+                    working_dir, str(output_dir)
                 )
                 assert isinstance(result, bool)
             except FileNotFoundError:
@@ -456,7 +456,7 @@ class TestSpecialCharacterPaths:
 
         try:
             result = GooglePhotosProcessor.process(
-                working_dir, str(output_dir), verbose=False
+                working_dir, str(output_dir)
             )
             assert isinstance(result, bool)
         except Exception:
@@ -481,7 +481,7 @@ class TestSpecialCharacterPaths:
 
         try:
             result = GooglePhotosProcessor.process(
-                working_dir, str(output_dir), verbose=False
+                working_dir, str(output_dir)
             )
             assert isinstance(result, bool)
         except Exception:

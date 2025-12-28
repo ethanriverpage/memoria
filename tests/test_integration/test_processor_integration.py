@@ -93,9 +93,7 @@ class TestGooglePhotosProcessing:
         # Preprocess first
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
-        result = GooglePhotosProcessor.process(
-            working_dir, str(output_dir), verbose=False
-        )
+        result = GooglePhotosProcessor.process(working_dir, str(output_dir))
 
         assert result is True
         assert output_dir.exists()
@@ -125,9 +123,7 @@ class TestGooglePhotosProcessing:
         # Preprocess first
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
-        result = GooglePhotosProcessor.process(
-            working_dir, str(output_dir), verbose=False
-        )
+        result = GooglePhotosProcessor.process(working_dir, str(output_dir))
 
         assert result is True
 
@@ -149,9 +145,7 @@ class TestGooglePhotosProcessing:
         # Preprocess first
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
-        result = GooglePhotosProcessor.process(
-            working_dir, str(output_dir), verbose=False
-        )
+        result = GooglePhotosProcessor.process(working_dir, str(output_dir))
 
         assert result is True
 
@@ -191,7 +185,7 @@ class TestGoogleChatProcessing:
         # minimal test generators don't fully replicate - may exit on validation
         try:
             result = GoogleChatProcessor.process(
-                working_dir, str(output_dir), verbose=False
+                working_dir, str(output_dir)
             )
             assert result is True
         except SystemExit:
@@ -232,7 +226,7 @@ class TestGoogleVoiceProcessing:
         # minimal test generators don't fully replicate - may exit on validation
         try:
             result = GoogleVoiceProcessor.process(
-                working_dir, str(output_dir), verbose=False
+                working_dir, str(output_dir)
             )
             assert result is True
         except SystemExit:
@@ -273,7 +267,7 @@ class TestSnapchatMemoriesProcessing:
         )
 
         result = SnapchatMemoriesProcessor.process(
-            working_dir, str(output_dir), verbose=False
+            working_dir, str(output_dir)
         )
 
         assert result is True
@@ -307,7 +301,7 @@ class TestSnapchatMemoriesProcessing:
         )
 
         result = SnapchatMemoriesProcessor.process(
-            working_dir, str(output_dir), verbose=False
+            working_dir, str(output_dir)
         )
 
         assert result is True
@@ -338,7 +332,7 @@ class TestSnapchatMessagesProcessing:
         # that minimal test generators don't create - may exit on validation
         try:
             result = SnapchatMessagesProcessor.process(
-                working_dir, str(output_dir), verbose=False
+                working_dir, str(output_dir)
             )
             assert result is True
         except SystemExit:
@@ -365,7 +359,7 @@ class TestSnapchatMessagesProcessing:
 
         try:
             result = SnapchatMessagesProcessor.process(
-                working_dir, str(output_dir), verbose=False
+                working_dir, str(output_dir)
             )
             assert result is True
         except SystemExit:
@@ -393,7 +387,7 @@ class TestInstagramMessagesProcessing:
         )
 
         result = InstagramMessagesProcessor.process(
-            working_dir, str(output_dir), verbose=False
+            working_dir, str(output_dir)
         )
 
         assert result is True
@@ -415,7 +409,7 @@ class TestInstagramMessagesProcessing:
         )
 
         result = InstagramMessagesProcessor.process(
-            working_dir, str(output_dir), verbose=False
+            working_dir, str(output_dir)
         )
 
         assert result is True
@@ -447,7 +441,7 @@ class TestInstagramPublicProcessing:
         # that minimal test generators don't create - may exit on validation
         try:
             result = InstagramPublicMediaProcessor.process(
-                working_dir, str(output_dir), verbose=False
+                working_dir, str(output_dir)
             )
             assert result is True
         except SystemExit:
@@ -477,7 +471,7 @@ class TestInstaloaderProcessing:
         working_dir = preprocess_export(InstaloaderProcessor, export_dir, cache_dir)
 
         result = InstaloaderProcessor.process(
-            working_dir, str(output_dir), verbose=False
+            working_dir, str(output_dir)
         )
 
         assert result is True
@@ -518,7 +512,7 @@ class TestDiscordProcessing:
         # Preprocess first
         working_dir = preprocess_export(DiscordProcessor, export_dir, cache_dir)
 
-        result = DiscordProcessor.process(working_dir, str(output_dir), verbose=False)
+        result = DiscordProcessor.process(working_dir, str(output_dir))
 
         assert result is True
 
@@ -532,7 +526,8 @@ class TestIMessageProcessing:
         """Should process Mac iMessage export."""
         from processors.imessage.processor import IMessageProcessor
 
-        export_dir = tmp_path / "export"
+        # Use iMessage naming convention for username detection: imessage-{device}-YYYYMMDD
+        export_dir = tmp_path / "imessage-macbook-20210101"
         cache_dir = tmp_path / "cache"
         output_dir = tmp_path / "output"
 
@@ -556,7 +551,7 @@ class TestIMessageProcessing:
         # Preprocess first
         working_dir = preprocess_export(IMessageProcessor, export_dir, cache_dir)
 
-        result = IMessageProcessor.process(working_dir, str(output_dir), verbose=False)
+        result = IMessageProcessor.process(working_dir, str(output_dir))
 
         assert result is True
 
@@ -578,7 +573,7 @@ class TestOutputStructure:
 
         # Preprocess first
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
-        GooglePhotosProcessor.process(working_dir, str(output_dir), verbose=False)
+        GooglePhotosProcessor.process(working_dir, str(output_dir))
 
         # Output should exist and have files
         assert output_dir.exists()
@@ -603,7 +598,7 @@ class TestOutputStructure:
         # Discord may not produce output if attachments fail to download
         # (common in test environments where URLs are fake)
         try:
-            DiscordProcessor.process(working_dir, str(output_dir), verbose=False)
+            DiscordProcessor.process(working_dir, str(output_dir))
             # If processing completes, output may or may not exist depending on
             # whether any attachments were successfully downloaded
             assert isinstance(output_dir.exists(), bool)

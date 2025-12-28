@@ -43,7 +43,7 @@ class VCardParser:
             Email addresses are lowercased.
         """
         if not self.vcf_path.exists():
-            logger.warning(f"vCard file not found: {self.vcf_path}")
+            logger.warning("vCard file not found: %s", self.vcf_path)
             return {}
 
         try:
@@ -54,13 +54,14 @@ class VCardParser:
                 self._parse_vcard(vcard_lines)
 
             logger.info(
-                f"Parsed {len(vcards)} contacts, "
-                f"{len(self.handle_to_name)} handles mapped"
+                "Parsed %d contacts, %d handles mapped",
+                len(vcards),
+                len(self.handle_to_name),
             )
             return self.handle_to_name
 
         except Exception as e:
-            logger.error(f"Failed to parse vCard file {self.vcf_path}: {e}")
+            logger.error("Failed to parse vCard file %s: %s", self.vcf_path, e)
             return {}
 
     def _read_and_unfold(self, path: Path) -> str:

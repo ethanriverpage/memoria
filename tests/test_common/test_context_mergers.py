@@ -5,7 +5,6 @@ Tests cover:
 - merge_albums for Google Photos album accumulation
 - merge_snapchat_context for Snapchat message accumulation
 - merge_imessage_context for iMessage message accumulation
-- merge_first_occurrence no-op merger
 """
 
 from typing import Any, Dict
@@ -15,7 +14,6 @@ from common.preprocess.context_mergers import (
     merge_albums,
     merge_snapchat_context,
     merge_imessage_context,
-    merge_first_occurrence,
 )
 
 
@@ -203,38 +201,6 @@ class TestMergeImessageContext:
         merge_imessage_context(existing, new)
 
         assert existing["messages"][0] == new
-
-
-class TestMergeFirstOccurrence:
-    """Tests for merge_first_occurrence function."""
-
-    def test_does_not_modify_existing(self) -> None:
-        """Should not modify existing context."""
-        existing = {"key": "original_value"}
-        new = {"key": "new_value"}
-        original = existing.copy()
-
-        merge_first_occurrence(existing, new)
-
-        assert existing == original
-
-    def test_ignores_new_data(self) -> None:
-        """Should completely ignore new context data."""
-        existing: Dict[str, Any] = {}
-        new = {"important_data": "should be ignored"}
-
-        merge_first_occurrence(existing, new)
-
-        assert "important_data" not in existing
-
-    def test_empty_contexts(self) -> None:
-        """Should handle empty contexts."""
-        existing: Dict[str, Any] = {}
-        new: Dict[str, Any] = {}
-
-        # Should not raise
-        merge_first_occurrence(existing, new)
-        assert existing == {}
 
 
 class TestMergerIntegration:

@@ -12,7 +12,7 @@ Log Level Conventions:
 
 Example:
     >>> from common.output.logging import setup_logging, get_logger
-    >>> setup_logging(verbose=True, log_file="processing.log")
+    >>> setup_logging(verbosity=1, log_file="processing.log")
     >>> logger = get_logger(__name__)
     >>> logger.info("Processing started")
 """
@@ -115,7 +115,6 @@ class StreamingFileHandler(logging.FileHandler):
 def setup_logging(
     verbosity: int = 0,
     log_file: Optional[str] = None,
-    verbose: bool = False,
     file_log_level: Optional[int] = None,
 ) -> logging.Logger:
     """Configure logging for media processing with tiered verbosity.
@@ -132,7 +131,6 @@ def setup_logging(
     Args:
         verbosity: Verbosity level (0=errors only, 1=info, 2+=debug)
         log_file: Optional path to log file for persistent logging
-        verbose: Deprecated. If True, treated as verbosity=1 for backwards compatibility.
         file_log_level: Optional logging level for file output (default: DEBUG).
                        Use logging.INFO for smaller log files that capture only
                        phase transitions and summaries, not file-level operations.
@@ -147,10 +145,6 @@ def setup_logging(
         >>> logger = setup_logging(verbosity=1, log_file="processing.log",
         ...                        file_log_level=logging.INFO)
     """
-    # Backwards compatibility: treat verbose=True as verbosity=1
-    if verbose and verbosity == 0:
-        verbosity = 1
-
     # Configure root logger to capture everything
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
@@ -194,7 +188,7 @@ def setup_logging(
 
 
 def add_export_log_handler(
-    export_name: str, verbose: bool = False
+    export_name: str, enabled: bool = False
 ) -> Optional[logging.FileHandler]:
     """Add a per-export log file handler to the root logger.
 
@@ -204,18 +198,18 @@ def add_export_log_handler(
 
     Args:
         export_name: Name of the export (used in log filename)
-        verbose: If True, create the log file. If False, skip per-export logging.
+        enabled: If True, create the log file. If False, skip per-export logging.
 
     Returns:
-        The created FileHandler, or None if verbose is False
+        The created FileHandler, or None if enabled is False
 
     Example:
-        >>> handler = add_export_log_handler("google-user-20250526", verbose=True)
+    >>> handler = add_export_log_handler("google-user-20250526", enabled=True)
         >>> # Process the export...
         >>> if handler:
         ...     remove_export_log_handler(handler)
     """
-    if not verbose:
+    if not enabled:
         return None
 
     # Create logs directory if it doesn't exist (uses configurable path)
@@ -251,7 +245,7 @@ def remove_export_log_handler(handler: logging.FileHandler) -> None:
         handler: The FileHandler to remove (returned by add_export_log_handler)
 
     Example:
-        >>> handler = add_export_log_handler("google-user-20250526", verbose=True)
+    >>> handler = add_export_log_handler("google-user-20250526", enabled=True)
         >>> # Process the export...
         >>> if handler:
         ...     remove_export_log_handler(handler)
@@ -301,9 +295,9 @@ def init_worker_logging(
     # Default application modules to enable DEBUG for
     if app_modules is None:
         app_modules = [
-            "common.overlay",
-            "common.video_encoder",
-            "common.exiftool_batch",
+            "common.media.overlay",
+            "common.media.encoder",
+            "common.media.exiftool",
         ]
 
     # Configure root logger

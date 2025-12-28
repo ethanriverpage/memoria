@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 import re
 
 from common.detection import DetectionResult
+from common.files.scanner import iter_files
 from common.preprocess.context_mergers import merge_snapchat_context
 from common.output.logging import get_processor_logger
 from common.processing import print_preprocessing_stats
@@ -58,20 +59,22 @@ class SnapchatPreprocessor(PreprocessorBase):
         self.set_context_merger(merge_snapchat_context)
 
         # Statistics specific to this preprocessor (preserves shared keys from base)
-        self.stats.update({
-            "total_files": 0,
-            "media_files": 0,
-            "overlay_files": 0,
-            "thumbnail_files": 0,
-            "system_files": 0,
-            "banned_files": 0,
-            "skipped_files": 0,
-            "conversations": 0,
-            "messages": 0,
-            "media_messages": 0,
-            "duplicate_files": 0,
-            "deduplicated_files": 0,
-        })
+        self.stats.update(
+            {
+                "total_files": 0,
+                "media_files": 0,
+                "overlay_files": 0,
+                "thumbnail_files": 0,
+                "system_files": 0,
+                "banned_files": 0,
+                "skipped_files": 0,
+                "conversations": 0,
+                "messages": 0,
+                "media_messages": 0,
+                "duplicate_files": 0,
+                "deduplicated_files": 0,
+            }
+        )
 
     def log_failure(
         self, category: str, filename: str, reason: str, details: str = ""
@@ -126,10 +129,10 @@ class SnapchatPreprocessor(PreprocessorBase):
             logger.info("Loaded chat_history.json")
             return chat_history
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse chat_history.json: {e}")
+            logger.error("Failed to parse chat_history.json: %s", e)
             return None
         except OSError as e:
-            logger.error(f"Error loading chat_history.json: {e}")
+            logger.error("Error loading chat_history.json: %s", e)
             return None
 
     def extract_username(self, chat_history: Dict) -> str:
@@ -266,91 +269,82 @@ class SnapchatPreprocessor(PreprocessorBase):
 
     def build_file_catalog(self) -> Dict[str, Dict]:
         """
-        Scan chat_media directory and build catalog of files
+        Scan chat_media directory and build catalog of files.
 
         Returns: Dict mapping filename -> file metadata
+
+        Uses shared iter_files utility for consistent file scanning
+        with automatic hidden file and banned pattern filtering.
         """
         catalog = {}
 
-        import os
+        # Use shared scanner for consistent filtering of hidden and banned files
+        for file_path in iter_files(
+            self.chat_media_dir,
+            banned_filter=self.banned_filter,
+            extensions=None,  # Accept all files, classify below
+            skip_hidden=True,
+        ):
+            self.stats["total_files"] += 1
+            filename = file_path.name
 
-        with os.scandir(self.chat_media_dir) as entries:
-            for entry in entries:
-                if not entry.is_file():
-                    continue
+            file_type = self.classify_file(filename)
 
-                file_path = Path(entry.path)
-                self.stats["total_files"] += 1
-                filename = entry.name
+            if file_type == "system":
+                self.stats["system_files"] += 1
+                continue
 
-                # Check if file is banned (NAS system files, etc.)
-                if self.banned_filter.is_banned(file_path):
-                    self.stats["banned_files"] += 1
-                    self.log_failure(
-                        "BANNED_FILE",
-                        filename,
-                        "File matches banned pattern (NAS/system file)",
-                        f"Patterns: {', '.join(self.banned_filter.get_patterns())}",
-                    )
-                    continue
+            if file_type == "thumbnail":
+                self.stats["thumbnail_files"] += 1
+                continue
 
-                file_type = self.classify_file(filename)
+            if file_type == "unknown":
+                self.stats["skipped_files"] += 1
+                self.log_failure(
+                    "UNKNOWN_FILE", filename, "File type could not be determined"
+                )
+                logger.warning("Unknown file type: %s", filename)
+                continue
 
-                if file_type == "system":
-                    self.stats["system_files"] += 1
-                    continue
+            # Get file modification time (key for matching media with overlays)
+            mtime = file_path.stat().st_mtime
 
-                if file_type == "thumbnail":
-                    self.stats["thumbnail_files"] += 1
-                    continue
+            # Extract metadata from filename
+            file_metadata = {
+                "original_path": str(file_path),
+                "filename": filename,
+                "type": file_type,
+                "date": self.extract_date_from_filename(filename),
+                "extension": file_path.suffix,
+                "mtime": mtime,
+            }
 
-                if file_type == "unknown":
-                    self.stats["skipped_files"] += 1
-                    self.log_failure(
-                        "UNKNOWN_FILE", filename, "File type could not be determined"
-                    )
-                    logger.warning("Unknown file type: %s", filename)
-                    continue
-
-                # Get file modification time (key for matching media with overlays)
-                mtime = file_path.stat().st_mtime
-
-                # Extract metadata from filename
-                file_metadata = {
-                    "original_path": str(file_path),
-                    "filename": filename,
-                    "type": file_type,
-                    "date": self.extract_date_from_filename(filename),
-                    "extension": file_path.suffix,
-                    "mtime": mtime,
-                }
-
-                if file_type == "media":
-                    # Try to extract media ID, UUID, or hash
-                    media_id = self.extract_media_id(filename)
-                    if media_id:
-                        file_metadata["media_id"] = media_id
-                    else:
-                        uuid = self.extract_uuid(filename)
-                        if uuid:
-                            file_metadata["uuid"] = uuid
-                        else:
-                            hash_id = self.extract_hash(filename)
-                            if hash_id:
-                                file_metadata["hash"] = hash_id
-
-                elif file_type == "overlay":
+            if file_type == "media":
+                # Try to extract media ID, UUID, or hash
+                media_id = self.extract_media_id(filename)
+                if media_id:
+                    file_metadata["media_id"] = media_id
+                else:
                     uuid = self.extract_uuid(filename)
                     if uuid:
                         file_metadata["uuid"] = uuid
+                    else:
+                        hash_id = self.extract_hash(filename)
+                        if hash_id:
+                            file_metadata["hash"] = hash_id
 
-                catalog[filename] = file_metadata
+            elif file_type == "overlay":
+                uuid = self.extract_uuid(filename)
+                if uuid:
+                    file_metadata["uuid"] = uuid
 
-                # Update stats
-                if file_type == "media":
-                    self.stats["media_files"] += 1
-                elif file_type == "overlay":
-                    self.stats["overlay_files"] += 1
+            catalog[filename] = file_metadata
+
+            # Update stats
+            if file_type == "media":
+                self.stats["media_files"] += 1
+            elif file_type == "overlay":
+                self.stats["overlay_files"] += 1
 
         return catalog
 
@@ -949,7 +943,7 @@ class SnapchatPreprocessor(PreprocessorBase):
         self, ambiguous_cases: List[Dict], export_username: str
     ) -> List[Dict]:
         """Prepare ambiguous matching cases for storage in metadata.json.
-        
+
         The processor will materialize these into output_dir/issues/needs_matching/
         using the source_path fields during processing.
         """
@@ -1008,13 +1002,13 @@ class SnapchatPreprocessor(PreprocessorBase):
         # Hash media files with deduplication (no file copying)
         # Files will be copied directly from source to final output during processing
         if copy_tasks:
-            logger.info(f"Hashing {len(copy_tasks)} media files with deduplication...")
+            logger.info("Hashing %d media files with deduplication...", len(copy_tasks))
             results = self.hash_with_dedup(copy_tasks)
 
             # Count unique vs duplicates
             unique = sum(1 for r in results.values() if not r.is_duplicate)
             duplicates = sum(1 for r in results.values() if r.is_duplicate)
-            logger.info(f"   Copied {unique} unique files, {duplicates} duplicates")
+            logger.info("   Copied %d unique files, %d duplicates", unique, duplicates)
 
         # Validate overlay files exist (no copying - uses source_path during processing)
         logger.info("Validating overlay files...")

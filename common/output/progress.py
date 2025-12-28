@@ -58,7 +58,6 @@ def progress_bar(
     phase: str,
     action: str,
     total: Optional[int] = None,
-    unit: str = "file",  # noqa: ARG001 - kept for API compatibility
 ) -> Generator[T, None, None]:
     """Wrap iterable with standardized progress bar.
 
@@ -67,7 +66,6 @@ def progress_bar(
         phase: Phase name (use PHASE_* constants)
         action: Action description (e.g., "Creating files")
         total: Total count if known
-        unit: Unit name for display (currently unused with Rich, kept for API compatibility)
 
     Yields:
         Items from the iterable with progress updates
@@ -92,7 +90,6 @@ def futures_progress(
     futures_dict: Dict[Future, Any],
     phase: str,
     action: str,
-    unit: str = "item",  # noqa: ARG001 - kept for API compatibility
 ) -> Generator[Future, None, None]:
     """Progress bar for concurrent.futures.as_completed pattern.
 
@@ -100,7 +97,6 @@ def futures_progress(
         futures_dict: Dictionary mapping futures to identifiers
         phase: Phase name (use PHASE_* constants)
         action: Action description (e.g., "Parsing albums")
-        unit: Unit name for display (currently unused with Rich, kept for API compatibility)
 
     Yields:
         Completed futures with progress updates
@@ -120,7 +116,6 @@ def chunked_progress(
     chunk_size: int,
     phase: str,
     action: str,
-    unit: str = "batch",  # noqa: ARG001 - kept for API compatibility
 ) -> Generator[List[T], None, None]:
     """Yield chunks with progress bar for batch processing.
 
@@ -129,7 +124,6 @@ def chunked_progress(
         chunk_size: Size of each chunk
         phase: Phase name (use PHASE_* constants)
         action: Action description (e.g., "Writing metadata")
-        unit: Unit name for display (currently unused with Rich, kept for API compatibility)
 
     Yields:
         Chunks of items with progress bar updates

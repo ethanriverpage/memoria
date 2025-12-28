@@ -23,6 +23,8 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from common.output.progress import PHASE_EXIF, chunked_progress
 from common.utils import get_media_type, get_gps_format
 from common.files.utils import short_path
+from common.validation.invariants import InvariantViolation, validate_gps
+from common.validation.invariants import InvariantViolation, validate_gps
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +158,31 @@ PREAMBLE_WITH_IGNORE_ERRORS = [
 ]
 
 
+@dataclass(frozen=True)
+class ExifWriteFailure:
+    """Represents a single file's EXIF write failure."""
+
+    file_path: str
+    reason_code: str
+    stderr_excerpt: str = ""
+
+
+@dataclass
+class BatchWriteOutcome:
+    """Outcome for a batch EXIF write invocation."""
+
+    successes: Set[str] = field(default_factory=set)
+    failures: List[ExifWriteFailure] = field(default_factory=list)
+
+
+@dataclass
+class BatchReadResult:
+    """Result of batch_read_existing_metadata."""
+
+    metadata_map: Dict[str, Dict[str, bool]]
+    missing_files: List[str]
+
+
 # =============================================================================
 # Unified Batch Executor
 # =============================================================================
@@ -166,7 +193,7 @@ def batch_write_metadata_requests(
     existing_metadata_map: Dict[str, Dict[str, bool]],
     dedup_manifest: Optional[Dict[str, Any]] = None,
     chunk_size: int = 500,
-) -> None:
+) -> BatchWriteOutcome:
     """Write metadata for files in batches using exiftool argfiles.
 
     When a dedup_manifest is provided, merged metadata from all sources
@@ -175,11 +202,45 @@ def batch_write_metadata_requests(
     - GPS coordinates from any source that has them
     - Description with cross-processor provenance
     """
+    outcome = BatchWriteOutcome()
     if not requests:
-        return
+        return outcome
 
     for chunk in chunked_progress(requests, chunk_size, PHASE_EXIF, "Writing metadata"):
         argfile_path: Optional[str] = None
+        filtered_chunk: List[MetadataWriteRequest] = []
+
+        # Pre-validate chunk (missing files, GPS invariants)
+        for request in chunk:
+            file_path = Path(request.file_path)
+            if not file_path.exists():
+                outcome.failures.append(
+                    ExifWriteFailure(
+                        file_path=request.file_path,
+                        reason_code="file_missing",
+                        stderr_excerpt="File missing before EXIF write",
+                    )
+                )
+                continue
+
+            # Validate GPS if present or merged later
+            merged_meta = _get_merged_metadata_for_request(
+                dedup_manifest, request.content_hash
+            )
+            gps_to_write = _get_gps_with_merged(request.gps, merged_meta)
+            if gps_to_write is not None:
+                validate_gps(
+                    gps_to_write.latitude,
+                    gps_to_write.longitude,
+                    processor=request.processor_name,
+                    file_path=request.file_path,
+                )
+
+            filtered_chunk.append(request)
+
+        if not filtered_chunk:
+            continue
+
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -189,20 +250,16 @@ def batch_write_metadata_requests(
             ) as argfile:
                 argfile_path = argfile.name
 
-                for request in chunk:
+                for request in filtered_chunk:
                     existing_fields = existing_metadata_map.get(request.file_path, {})
 
-                    # Get merged metadata from dedup manifest if available
                     merged_meta = _get_merged_metadata_for_request(
                         dedup_manifest, request.content_hash
                     )
 
-                    # Write preamble flags
                     for flag in request.arg_preamble:
                         argfile.write(f"{flag}\n")
 
-                    # Write datetime tags (only if field is missing)
-                    # Use merged timestamp if available (earliest from all sources)
                     datetime_tags = _get_datetime_tags_with_merged(
                         request.datetime_tags, merged_meta
                     )
@@ -210,7 +267,6 @@ def batch_write_metadata_requests(
                         if not existing_fields.get(tag_name, False):
                             argfile.write(f"-{tag_name}={tag_value}\n")
 
-                    # Write GPS data - use merged GPS if request doesn't have it
                     gps_to_write = _get_gps_with_merged(request.gps, merged_meta)
                     if gps_to_write and not existing_fields.get("GPSLatitude", False):
                         lat = gps_to_write.latitude
@@ -237,7 +293,6 @@ def batch_write_metadata_requests(
                         ):
                             argfile.write(f"-GPSAltitude={gps_to_write.altitude}\n")
 
-                    # Write original filename if provided and format supports XMP
                     if request.original_filename:
                         ext = Path(request.file_path).suffix.lower()
                         if ext in XMP_PRESERVED_FILENAME_EXTENSIONS:
@@ -245,11 +300,8 @@ def batch_write_metadata_requests(
                                 f"-XMP:PreservedFileName={request.original_filename}\n"
                             )
 
-                    # Write description if provided (always overwrites existing)
                     if request.description:
-                        # Apply dedup merged description enhancement
                         final_description = _get_description_for_file(
-                            request.file_path,
                             request.description.default_description,
                             dedup_manifest,
                             request.content_hash,
@@ -268,13 +320,11 @@ def batch_write_metadata_requests(
                         for tag in tags_to_write:
                             argfile.write(f"-{tag}={final_description}\n")
 
-                    # Add file path and execute separator
                     argfile.write(f"{request.file_path}\n")
                     argfile.write("-execute\n")
 
-            # Run exiftool with argfile
             cmd = ["exiftool", "-@", argfile_path]
-            subprocess.run(
+            result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -282,18 +332,42 @@ def batch_write_metadata_requests(
                 stdin=subprocess.DEVNULL,
             )
 
-            # Clean up argfile
+            stderr_excerpt = (result.stderr or "").strip()[:500]
+            if result.returncode != 0:
+                reason_code = "exiftool_write_failed"
+                if "File format error" in stderr_excerpt or "format error" in stderr_excerpt:
+                    reason_code = "format_error"
+                elif "moov atom not found" in stderr_excerpt:
+                    reason_code = "probe_error"
+
+                for request in filtered_chunk:
+                    outcome.failures.append(
+                        ExifWriteFailure(
+                            file_path=request.file_path,
+                            reason_code=reason_code,
+                            stderr_excerpt=stderr_excerpt,
+                        )
+                    )
+            else:
+                for request in filtered_chunk:
+                    outcome.successes.add(request.file_path)
+
             os.unlink(argfile_path)
 
+        except InvariantViolation:
+            # Hard-fail invariants bubble up
+            raise
         except Exception as e:
             logger.warning(
-                f"Failed to batch write metadata for {chunk[0].processor_name if chunk else 'unknown'} chunk: {e}"
+                f"Failed to batch write metadata for {filtered_chunk[0].processor_name if filtered_chunk else 'unknown'} chunk: {e}"
             )
             try:
                 if argfile_path is not None:
                     os.unlink(argfile_path)
             except Exception:
                 pass
+
+    return outcome
 
 
 def _get_merged_metadata_for_request(
@@ -418,7 +492,6 @@ def _get_gps_with_merged(
 
 
 def _get_description_for_file(
-    file_path: str,
     default_description: str,
     dedup_manifest: Optional[Dict[str, Any]] = None,
     content_hash: Optional[str] = None,
@@ -432,7 +505,6 @@ def _get_description_for_file(
     adding provenance from other platforms.
 
     Args:
-        file_path: Path to the file (unused, kept for API compatibility).
         default_description: The processor's rich description to enhance.
         dedup_manifest: Optional deduplication manifest.
         content_hash: Content hash for manifest lookup (more reliable than path).
@@ -626,12 +698,12 @@ def batch_rebuild_exif(file_paths: List[str]) -> None:
 
 def batch_read_existing_metadata(
     file_paths: Sequence[Optional[str]],
-) -> Dict[str, Dict[str, bool]]:
+) -> BatchReadResult:
     """Read existing metadata fields from files, returning presence map."""
     # Filter out None values first
     valid_paths = [p for p in file_paths if p is not None]
     if not valid_paths:
-        return {}
+        return BatchReadResult(metadata_map={}, missing_files=[])
 
     # Filter to only existing files
     existing_files = [fp for fp in valid_paths if Path(fp).exists()]
@@ -647,7 +719,7 @@ def batch_read_existing_metadata(
             logger.debug(f"  ... and {len(missing_files) - 5} more")
 
     if not existing_files:
-        return {}
+        return BatchReadResult(metadata_map={}, missing_files=missing_files)
 
     # Process in sub-batches to isolate problematic files while maximizing throughput
     # File paths are passed directly on command line, so limited by ARG_MAX
@@ -676,7 +748,7 @@ def batch_read_existing_metadata(
                     )
                     continue
 
-    return metadata_map
+    return BatchReadResult(metadata_map=metadata_map, missing_files=missing_files)
 
 
 def _read_metadata_batch(file_paths: List[str]) -> Dict[str, Dict[str, bool]]:

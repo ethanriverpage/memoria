@@ -8,16 +8,44 @@ from common.dedup.config import DedupConfig
 from common.dedup.service import (
     DeduplicationService,
     filter_primary_files,
-    is_file_primary,
     is_file_primary_by_hash,
-    get_primary_for_file,
     get_merged_description_for_file,
     get_merged_metadata_for_hash,
     get_secondary_reference,
     build_dedup_references,
-    get_skipped_secondary_files,
 )
 from common.dedup.database import HashDatabase
+
+
+def write_catalogs_to_db(db: HashDatabase, run_id: str, catalogs: list) -> None:
+    """Write catalog entries to the database for testing analyze_from_db.
+
+    This helper prepares catalog entries with the _processor field set
+    and writes them to the database in the format expected by analyze_from_db.
+
+    Args:
+        db: HashDatabase instance.
+        run_id: Run identifier for this test.
+        catalogs: List of catalog dictionaries (same format as analyze() took).
+    """
+    for catalog in catalogs:
+        processor = catalog.get("processor", "Unknown")
+        export_name = catalog.get("input_dir", "export")
+        entries = []
+        for file_entry in catalog.get("files", []):
+            entry = dict(file_entry)
+            entry["_processor"] = processor
+            # Preserve live_photo_video in metadata for database round-trip
+            if "live_photo_video" in entry:
+                metadata = entry.get("metadata", {})
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata = dict(metadata)
+                metadata["live_photo_video"] = entry["live_photo_video"]
+                entry["metadata"] = metadata
+            entries.append(entry)
+        if entries:
+            db.write_catalog_entries_batch(run_id, export_name, entries)
 
 
 @pytest.fixture
@@ -50,14 +78,16 @@ def service(temp_db, config):
 class TestDeduplicationService:
     """Tests for DeduplicationService class."""
 
-    def test_analyze_empty_catalogs(self, service):
+    def test_analyze_empty_catalogs(self, service, temp_db):
         """Test analyzing empty catalog list."""
-        manifest = service.analyze([])
+        run_id = "test_empty"
+        write_catalogs_to_db(temp_db, run_id, [])
+        manifest = service.analyze_from_db(run_id)
         assert manifest["version"] == "1.0"
         assert manifest["statistics"]["total_files_scanned"] == 0
         assert manifest["duplicates"] == {}
 
-    def test_analyze_single_file(self, service):
+    def test_analyze_single_file(self, service, temp_db):
         """Test analyzing a single file."""
         catalog = {
             "processor": "Google Photos",
@@ -70,13 +100,15 @@ class TestDeduplicationService:
                 }
             ],
         }
-        manifest = service.analyze([catalog])
+        run_id = "test_single"
+        write_catalogs_to_db(temp_db, run_id, [catalog])
+        manifest = service.analyze_from_db(run_id)
 
         assert manifest["statistics"]["total_files_scanned"] == 1
         assert manifest["statistics"]["unique_files"] == 1
         assert manifest["statistics"]["duplicates_found"] == 0
 
-    def test_analyze_finds_exact_duplicates(self, service):
+    def test_analyze_finds_exact_duplicates(self, service, temp_db):
         """Test that exact hash duplicates are found."""
         catalog1 = {
             "processor": "Google Photos",
@@ -103,7 +135,9 @@ class TestDeduplicationService:
             ],
         }
 
-        manifest = service.analyze([catalog1, catalog2])
+        run_id = "test_duplicates"
+        write_catalogs_to_db(temp_db, run_id, [catalog1, catalog2])
+        manifest = service.analyze_from_db(run_id)
 
         assert manifest["statistics"]["total_files_scanned"] == 2
         assert manifest["statistics"]["duplicates_found"] == 1
@@ -238,7 +272,7 @@ class TestDeduplicationService:
         assert "Google Photos" in sources
         assert "iMessage" in sources
 
-    def test_provenance_recorded(self, service):
+    def test_provenance_recorded(self, service, temp_db):
         """Test that provenance from all sources is recorded."""
         catalog1 = {
             "processor": "Google Photos",
@@ -263,7 +297,9 @@ class TestDeduplicationService:
             ],
         }
 
-        manifest = service.analyze([catalog1, catalog2])
+        run_id = "test_provenance"
+        write_catalogs_to_db(temp_db, run_id, [catalog1, catalog2])
+        manifest = service.analyze_from_db(run_id)
 
         dup = manifest["duplicates"]["hash1"]
         assert len(dup["merged_metadata"]["provenance"]) == 2
@@ -550,60 +586,6 @@ class TestValidateDuplicatePair:
         file2 = {"metadata": {}}
 
         assert service._validate_duplicate_pair(file1, file2) is True
-
-
-class TestManifestHelpers:
-    """Tests for manifest helper functions."""
-
-    def test_is_file_primary_true(self):
-        """Test is_file_primary returns True for primary file."""
-        manifest = {
-            "duplicates": {
-                "hash1": {
-                    "primary": {"source_path": "/primary.jpg"},
-                    "secondary": [{"source_path": "/secondary.jpg"}],
-                }
-            }
-        }
-
-        assert is_file_primary(manifest, "/primary.jpg") is True
-
-    def test_is_file_primary_false(self):
-        """Test is_file_primary returns False for secondary file."""
-        manifest = {
-            "duplicates": {
-                "hash1": {
-                    "primary": {"source_path": "/primary.jpg"},
-                    "secondary": [{"source_path": "/secondary.jpg"}],
-                }
-            }
-        }
-
-        assert is_file_primary(manifest, "/secondary.jpg") is False
-
-    def test_is_file_primary_not_in_manifest(self):
-        """Test is_file_primary returns True for file not in manifest."""
-        manifest = {"duplicates": {}}
-        assert is_file_primary(manifest, "/unknown.jpg") is True
-
-    def test_get_primary_for_file(self):
-        """Test get_primary_for_file returns correct primary path."""
-        manifest = {
-            "duplicates": {
-                "hash1": {
-                    "primary": {"source_path": "/primary.jpg"},
-                    "secondary": [{"source_path": "/secondary.jpg"}],
-                }
-            }
-        }
-
-        assert get_primary_for_file(manifest, "/secondary.jpg") == "/primary.jpg"
-        assert get_primary_for_file(manifest, "/primary.jpg") == "/primary.jpg"
-
-    def test_get_primary_for_file_not_found(self):
-        """Test get_primary_for_file returns None for unknown file."""
-        manifest = {"duplicates": {}}
-        assert get_primary_for_file(manifest, "/unknown.jpg") is None
 
 
 class TestIsFilePrimaryByHash:
@@ -1118,38 +1100,6 @@ class TestSecondaryReferences:
         assert all(r["skipped_by_processor"] == "Instagram" for r in refs)
         assert all(r["deduplicated"] is True for r in refs)
 
-    def test_get_skipped_secondary_files(self):
-        """Test getting list of secondary files for a processor."""
-        manifest = {
-            "duplicates": {
-                "hash1": {
-                    "primary": {
-                        "source_path": "/google/a.jpg",
-                        "processor": "Google Photos",
-                    },
-                    "secondary": [
-                        {"source_path": "/ig/a.jpg", "processor": "Instagram"},
-                        {"source_path": "/imsg/a.jpg", "processor": "iMessage"},
-                    ],
-                },
-                "hash2": {
-                    "primary": {"source_path": "/imsg/b.jpg", "processor": "iMessage"},
-                    "secondary": [
-                        {"source_path": "/ig/b.jpg", "processor": "Instagram"}
-                    ],
-                },
-            }
-        }
-
-        ig_skipped = get_skipped_secondary_files(manifest, "Instagram")
-        assert len(ig_skipped) == 2
-        assert "/ig/a.jpg" in ig_skipped
-        assert "/ig/b.jpg" in ig_skipped
-
-        imsg_skipped = get_skipped_secondary_files(manifest, "iMessage")
-        assert len(imsg_skipped) == 1
-        assert "/imsg/a.jpg" in imsg_skipped
-
 
 class TestFilterPrimaryFiles:
     """Tests for filter_primary_files() utility function."""
@@ -1366,7 +1316,7 @@ class TestLivePhotoVideoLinking:
         assert skipped == 1
 
     def test_manifest_includes_live_photo_video_map(self, temp_db, config):
-        """Test that analyze() includes live_photo_videos in manifest."""
+        """Test that analyze_from_db() includes live_photo_videos in manifest."""
         service = DeduplicationService(db=temp_db, config=config)
 
         catalog = {
@@ -1382,7 +1332,9 @@ class TestLivePhotoVideoLinking:
             ],
         }
 
-        manifest = service.analyze([catalog])
+        run_id = "test_live_photo"
+        write_catalogs_to_db(temp_db, run_id, [catalog])
+        manifest = service.analyze_from_db(run_id)
 
         assert "live_photo_videos" in manifest
         assert manifest["live_photo_videos"] == {

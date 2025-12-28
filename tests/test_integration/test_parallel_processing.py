@@ -122,7 +122,7 @@ class TestWorkerCountValidation:
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         result = GooglePhotosProcessor.process(
-            working_dir, str(output_dir), workers=1, verbose=False
+            working_dir, str(output_dir), workers=1
         )
 
         assert result is True
@@ -141,7 +141,7 @@ class TestWorkerCountValidation:
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         result = GooglePhotosProcessor.process(
-            working_dir, str(output_dir), workers=4, verbose=False
+            working_dir, str(output_dir), workers=4
         )
 
         assert result is True
@@ -160,7 +160,7 @@ class TestWorkerCountValidation:
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         result = GooglePhotosProcessor.process(
-            working_dir, str(output_dir), workers=None, verbose=False
+            working_dir, str(output_dir), workers=None
         )
 
         assert result is True
@@ -179,7 +179,7 @@ class TestWorkerCountValidation:
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         result = GooglePhotosProcessor.process(
-            working_dir, str(output_dir), workers=16, verbose=False
+            working_dir, str(output_dir), workers=16
         )
 
         assert result is True
@@ -205,12 +205,12 @@ class TestOutputConsistency:
 
         # Process with 1 worker
         GooglePhotosProcessor.process(
-            working_dir, str(output1), workers=1, verbose=False
+            working_dir, str(output1), workers=1
         )
 
         # Process with 4 workers
         GooglePhotosProcessor.process(
-            working_dir, str(output2), workers=4, verbose=False
+            working_dir, str(output2), workers=4
         )
 
         count1 = count_files(output1)
@@ -232,11 +232,11 @@ class TestOutputConsistency:
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         GooglePhotosProcessor.process(
-            working_dir, str(output1), workers=1, verbose=False
+            working_dir, str(output1), workers=1
         )
 
         GooglePhotosProcessor.process(
-            working_dir, str(output2), workers=4, verbose=False
+            working_dir, str(output2), workers=4
         )
 
         files1 = get_file_names(output1)
@@ -267,7 +267,7 @@ class TestRaceConditions:
 
         # Process with high parallelism
         GooglePhotosProcessor.process(
-            working_dir, str(output_dir), workers=8, verbose=False
+            working_dir, str(output_dir), workers=8
         )
 
         # No duplicate file names should exist in same directory
@@ -295,7 +295,7 @@ class TestRaceConditions:
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         GooglePhotosProcessor.process(
-            working_dir, str(output_dir), workers=4, verbose=False
+            working_dir, str(output_dir), workers=4
         )
 
         # Should have processed all input files
@@ -331,7 +331,7 @@ class TestResourceCleanup:
             working_dir,
             str(output_dir),
             workers=4,
-            verbose=False,
+            
         )
 
         # Check that output exists and has files
@@ -358,7 +358,7 @@ class TestResourceCleanup:
                 working_dir,
                 str(output_dir),
                 workers=2,
-                verbose=False,
+                
             )
             file_counts.append(count_files(output_dir))
 
@@ -388,7 +388,7 @@ class TestLargeExportProcessing:
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         result = GooglePhotosProcessor.process(
-            working_dir, str(output_dir), workers=4, verbose=False
+            working_dir, str(output_dir), workers=4
         )
 
         assert result is True
@@ -409,12 +409,12 @@ class TestLargeExportProcessing:
 
         # Sequential
         GooglePhotosProcessor.process(
-            working_dir, str(output_seq), workers=1, verbose=False
+            working_dir, str(output_seq), workers=1
         )
 
         # Parallel
         GooglePhotosProcessor.process(
-            working_dir, str(output_par), workers=4, verbose=False
+            working_dir, str(output_par), workers=4
         )
 
         seq_count = count_files(output_seq)

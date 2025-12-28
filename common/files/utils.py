@@ -242,20 +242,6 @@ def copy_file(
         shutil.copy(src, dst)
 
 
-def copy_file_safe(
-    src: Union[str, Path],
-    dst: Union[str, Path],
-    preserve_metadata: bool = True,
-) -> bool:
-    """Copy file with error handling, return True on success."""
-    try:
-        copy_file(src, dst, preserve_metadata)
-        return True
-    except Exception as e:
-        logger.error(f"Copy failed: {short_path(src)} -> {short_path(dst)}: {e}")
-        return False
-
-
 # MIME type to extension mapping
 # Comprehensive mapping covering images, videos, and audio formats
 MIME_TO_EXTENSION = {

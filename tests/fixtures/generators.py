@@ -44,6 +44,15 @@ def create_google_photos_export(
     photos_dir = base_path / "Google Photos"
     photos_dir.mkdir(parents=True, exist_ok=True)
 
+    # Create Profile/Profile.json for username detection
+    profile_dir = base_path / "Profile"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    profile_json = {
+        "name": {"givenName": username, "familyName": "Test"},
+        "emails": [{"value": f"{username}@gmail.com"}],
+    }
+    (profile_dir / "Profile.json").write_text(json.dumps(profile_json, indent=2))
+
     for album_name, files in albums.items():
         album_dir = photos_dir / album_name
         album_dir.mkdir(exist_ok=True)

@@ -38,6 +38,10 @@ from common.files.filter import BannedFilesFilter
 from common.metadata.schema import validate_metadata, CONTENT_KEYS
 from common.output.progress import PHASE_PREPROCESS, futures_progress
 from common.utils import default_worker_count
+from common.validation.invariants import (
+    InvariantViolation,
+    require_non_unknown_username,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -739,7 +743,7 @@ class PreprocessorBase(ABC):
 
             if show_progress:
                 iterator = futures_progress(
-                    futures, PHASE_PREPROCESS, "Hashing files", unit="file"
+                    futures, PHASE_PREPROCESS, "Hashing files"
                 )
             else:
                 from concurrent.futures import as_completed
@@ -951,6 +955,17 @@ class PreprocessorBase(ABC):
         )
 
         try:
+            require_non_unknown_username(
+                detection.username,
+                source=detection.source,
+                export_dir=self.export_path,
+                processor=self.processor_name,
+            )
+        except InvariantViolation as e:
+            logger.error(str(e))
+            return False
+
+        try:
             if not self.process_export():
                 return False
         except Exception as e:
@@ -1044,10 +1059,12 @@ class PreprocessorBase(ABC):
         # Use cached result (ensure_detection_result caches on first call)
         detection_result = self.ensure_detection_result()
 
+        # Note: detection_result.username is guaranteed non-None by invariant
+        # enforcement in run() - the hard-fail happens before this code is reached
         info: Dict[str, Any] = {
             "export_path": str(self.export_path),
             "export_name": self.export_path.name,
-            "export_username": detection_result.username or "unknown",
+            "export_username": detection_result.username,
             "username_source": detection_result.source,
             "processed_date": datetime.now().isoformat(),
         }

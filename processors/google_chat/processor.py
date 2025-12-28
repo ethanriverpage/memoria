@@ -10,14 +10,18 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.dedup.service import is_file_primary_by_hash
+from common.dedup.service import (
+    get_canonical_timestamp,
+    save_dedup_metadata,
+)
+from common.failure_tracker import FailureTracker
 from common.dedup.description import (
     SourceEntry,
     build_description,
     PLATFORM_GOOGLE,
     SERVICE_CHAT,
 )
-from common.files.utils import batch_correct_extensions, copy_file
+from common.files.utils import batch_correct_extensions, copy_file, short_path
 from common.media.exiftool import (
     DescriptionWriteSpec,
     MetadataWriteRequest,
@@ -33,7 +37,6 @@ from common.utils import (
     default_worker_count,
     FilenameGenerator,
     is_preprocessed_directory,
-    sanitize_filename,
     update_file_timestamps,
 )
 from common.output.paths import OutputInfo
@@ -160,7 +163,7 @@ class GoogleChatProcessor(ProcessorBase):
 
         Args:
             input_dir: Path to preprocessed input directory
-            **kwargs: Additional arguments (verbose, workers)
+            **kwargs: Additional arguments (workers)
 
         Yields:
             Catalog entries with processor name and file data.
@@ -206,7 +209,7 @@ class GoogleChatProcessor(ProcessorBase):
             input_dir: Path to input directory
             output_dir: Optional base output directory
             dedup_manifest: Optional deduplication manifest
-            **kwargs: Additional arguments (verbose, workers, temp_dir)
+            **kwargs: Additional arguments (workers, temp_dir)
 
         Returns:
             True if processing succeeded, False otherwise
@@ -232,7 +235,7 @@ class GoogleChatProcessor(ProcessorBase):
             return True
 
         except Exception as e:
-            logger.error(f"Error in GoogleChatProcessor: {e}")
+            logger.error("Error in GoogleChatProcessor: %s", e)
             return False
 
 
@@ -263,8 +266,8 @@ def _build_metadata_requests(
         content_hash,
         original_filename,
     ) in file_info:
-        # Build datetime tags
-        datetime_tags = build_datetime_tags(message_data["timestamp"])
+        # Build datetime tags (canonical timestamp already computed)
+        datetime_tags = build_datetime_tags(message_data["canonical_timestamp"])
 
         # Build description using unified format
         entry = SourceEntry(
@@ -333,7 +336,7 @@ def process_media_batch(batch_args):
         output_path = os.path.join(output_dir, output_filename)
 
         if not os.path.exists(media_path):
-            logger.warning(f"Media file not found: {media_path}")
+            logger.warning("Media file not found: %s", short_path(media_path))
             results.append((False, None, None))
             continue
 
@@ -351,7 +354,7 @@ def process_media_batch(batch_args):
                 )
             )
         except Exception as e:
-            logger.error(f"Failed to copy {media_file}: {e}")
+            logger.error("Failed to copy %s: %s", media_file, e)
             results.append((False, None, None))
 
     if not file_paths:
@@ -419,8 +422,7 @@ def process_logic(
     if not GoogleChatProcessor.check_dependencies():
         return
 
-    logger.info("Google Chat Messages Media Processor")
-    logger.info("=" * 50)
+    log.processor_start("Google Chat Messages Media Processor")
 
     # Require preprocessed input
     if not is_preprocessed_directory(input_dir):
@@ -431,7 +433,7 @@ def process_logic(
         )
         return False
 
-    logger.info(f"Processing preprocessed directory: {input_dir}")
+    logger.info("Processing preprocessed directory: %s", short_path(input_dir))
     _process_working_directory(input_dir, output_dir, workers, dedup_manifest)
 
 
@@ -454,13 +456,16 @@ def _process_working_directory(
 
     # Check for metadata file (should exist after preprocessing or if already preprocessed)
     if not os.path.exists(metadata_file):
-        logger.error(f"Metadata file not found: {metadata_file}")
+        logger.error("Metadata file not found: %s", short_path(metadata_file))
         return
 
     # Load metadata
-    logger.info(f"Loading metadata from {metadata_file}...")
+    log.loading_metadata(short_path(metadata_file))
     metadata_json = GoogleChatProcessor.load_metadata(
-        Path(metadata_file), validate=True, require_source_paths=True
+        Path(metadata_file),
+        validate=True,
+        require_source_paths=True,
+        processor_name="Google Chat",
     )
 
     export_info = metadata_json.get("export_info", {})
@@ -473,32 +478,50 @@ def _process_working_directory(
         for message in conversation.get("messages", [])
     )
 
-    logger.info(f"Found {len(conversations)} conversations")
-    logger.info(f"Found {total_media_files} media files to process")
+    log.found_items(len(conversations), "conversations")
+    log.found_files(total_media_files, "media")
 
-    # Extract export username from export_info
-    export_username = export_info.get("export_username", "unknown")
-    logger.info(f"Export username: {export_username}")
+    # Extract export username from export_info (validated in load_metadata)
+    export_username = export_info.get("export_username")
+    log.export_username(export_username)
+
+    # Initialize failure tracker for this export
+    failure_tracker = FailureTracker(
+        processor_name="Google Chat",
+        export_directory=str(working_dir),
+    )
+
+    # Check for no media files (export-level soft-fail)
+    if total_media_files == 0:
+        log.logger.warning("No media files found to process.")
+        failure_tracker.add_export_failure(
+            reason="no_media_files",
+            error_details="No media files found in export to process",
+        )
+        failure_tracker.handle_failures(Path(output_dir))
+        return False
 
     # Create output directory (including parents)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # Determine number of workers
     num_workers = workers if workers is not None else default_worker_count()
-    logger.debug(f"Using {num_workers} parallel workers")
+    log.using_workers(num_workers)
 
     # Pre-generate all output filenames to avoid race conditions
-    logger.debug("Pre-generating filenames...")
-    filename_gen = FilenameGenerator("gchat")
+    log.generating_filenames()
+    filename_gen = FilenameGenerator("google", export_username, service="chat")
     processing_tasks = []
 
     # Get file_hashes lookup table for dedup optimization
     file_hashes = metadata_json.get("file_hashes", {})
 
     skipped_dedup = 0
+    skipped_secondary_files: list[str] = []
+    missing_source_path = 0
+    missing_examples: list[str] = []
     for conversation in conversations:
         conversation_name = conversation.get("conversation_name", "unknown")
-        sanitized_name = sanitize_filename(conversation_name)
         messages = conversation.get("messages", [])
 
         for message in messages:
@@ -513,41 +536,32 @@ def _process_working_directory(
                 source_paths = message.get("source_paths", {})
                 full_source_path = source_paths.get(media_file)
                 if not full_source_path:
-                    logger.warning(f"No source_path for file: {media_file}")
+                    missing_source_path += 1
+                    if len(missing_examples) < 5:
+                        missing_examples.append(media_file)
                     continue
 
                 source_file_path = os.path.dirname(full_source_path)
                 source_file_name = os.path.basename(full_source_path)
 
-                if dedup_manifest:
-                    if content_hash:
-                        # Use cached hash from preprocessing (avoids re-hashing)
-                        if not is_file_primary_by_hash(
-                            dedup_manifest,
-                            content_hash,
-                            "Google Chat",
-                            full_source_path,
-                        ):
-                            skipped_dedup += 1
-                            continue
-                    else:
-                        # Fallback for files without cached hash
-                        if GoogleChatProcessor.should_skip_for_dedup(
-                            full_source_path, dedup_manifest, "Google Chat"
-                        ):
-                            skipped_dedup += 1
-                            continue
+                if GoogleChatProcessor.should_skip_for_dedup(
+                    dedup_manifest, content_hash, "Google Chat", full_source_path
+                ):
+                    skipped_dedup += 1
+                    skipped_secondary_files.append(full_source_path)
+                    continue
 
                 # Get file extension
                 file_ext = os.path.splitext(media_file)[1].lower()
 
-                # Generate output filename using shared FilenameGenerator
-                identifier = f"{export_username}-{sanitized_name}"
-                output_filename = filename_gen.generate(
-                    message.get("timestamp"),
-                    identifier,
-                    file_ext,
+                # Canonical timestamp (dedup merged earliest preferred)
+                canonical_ts = get_canonical_timestamp(
+                    dedup_manifest, content_hash, message.get("timestamp")
                 )
+                message["canonical_timestamp"] = canonical_ts
+
+                # Generate output filename using shared FilenameGenerator
+                output_filename = filename_gen.generate(canonical_ts, file_ext)
 
                 # Get original filename for XMP:PreservedFileName embedding
                 original_filename = source_file_name
@@ -568,11 +582,16 @@ def _process_working_directory(
                 )
 
     if skipped_dedup > 0:
-        logger.info(f"Skipped {skipped_dedup} secondary files (dedup)")
+        log.skipped_secondary(skipped_dedup)
+    if missing_source_path > 0:
+        logger.info(
+            "Missing source_path for %d files (e.g. %s)",
+            missing_source_path,
+            ", ".join(missing_examples),
+        )
 
     # Process media files in parallel
-    logger.info("Processing media files to %s/", output_dir)
-    logger.info("=" * 50)
+    log.processing_start(str(output_dir))
 
     # Use shared batch processing utility (copy files only)
     results = process_batches_parallel(
@@ -586,21 +605,58 @@ def _process_working_directory(
     # Collect successful files for EXIF processing
     collected = GoogleChatProcessor.collect_processing_results(results)
 
-    logger.info(
-        f"Copied {collected.success_count} files ({collected.failed_count} failed)"
-    )
+    log.copied_files(collected.success_count, collected.failed_count)
 
-    # Consolidated EXIF processing
+    # Consolidated EXIF processing with failure tracking
     exif_rebuilt_count = 0
     if collected.file_paths:
-        logger.info("Batch processing EXIF metadata...")
-        exif_rebuilt_count = GoogleChatProcessor.batch_process_exif(
-            collected.file_paths,
-            collected.file_info,
-            _build_metadata_requests,
-            dedup_manifest,
+        log.exif_batch_start()
+
+        # Build metadata lookup for failure tracking
+        file_info_map = {info[0]: info for info in collected.file_info}
+
+        def metadata_for_file(file_path: str) -> Optional[dict]:
+            info = file_info_map.get(file_path)
+            return info[1] if info else None  # info[1] is message
+
+        exif_rebuilt_count, write_outcome, missing_files = (
+            GoogleChatProcessor.batch_process_exif(
+                collected.file_paths,
+                collected.file_info,
+                _build_metadata_requests,
+                dedup_manifest,
+            )
         )
-        logger.info(f"EXIF metadata written for {len(collected.file_info)} files")
+
+        # Track EXIF failures
+        for missing_path in missing_files:
+            failure_tracker.add_processing_failure(
+                media_path=Path(missing_path),
+                metadata=metadata_for_file(missing_path),
+                reason="exif_target_missing",
+                error_details=f"Output file missing at EXIF write time: {missing_path}",
+            )
+        for failure in write_outcome.failures:
+            failure_tracker.add_processing_failure(
+                media_path=Path(failure.file_path),
+                metadata=metadata_for_file(failure.file_path),
+                reason=failure.reason_code,
+                error_details=failure.stderr_excerpt or "",
+            )
+
+        log.exif_written(len(collected.file_info))
+
+    # Handle failures - move failed outputs and generate report
+    failure_tracker.handle_failures(Path(output_dir))
+
+    # Save dedup references for skipped secondary files
+    if dedup_manifest and skipped_secondary_files:
+        save_dedup_metadata(
+            manifest=dedup_manifest,
+            skipped_files=skipped_secondary_files,
+            processor_name="Google Chat",
+            output_dir=Path(output_dir),
+        )
 
     # Print summary using shared utility
     print_processing_summary(

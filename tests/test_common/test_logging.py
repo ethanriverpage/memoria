@@ -83,16 +83,6 @@ class TestSetupLogging:
         if console_handler:
             assert console_handler.level == logging.DEBUG
 
-    def test_verbose_backwards_compatibility(self) -> None:
-        """Should treat verbose=True as verbosity=1."""
-        setup_logging(verbose=True)
-        root = logging.getLogger()
-        console_handler = next(
-            (h for h in root.handlers if hasattr(h, "console")), None
-        )
-        if console_handler:
-            assert console_handler.level == logging.INFO
-
     def test_clears_existing_handlers(self) -> None:
         """Should clear existing handlers to avoid duplicates."""
         root = logging.getLogger()
@@ -232,15 +222,15 @@ class TestLogsDirectory:
 class TestAddExportLogHandler:
     """Tests for add_export_log_handler function."""
 
-    def test_returns_none_when_not_verbose(self) -> None:
-        """Should return None when verbose=False."""
-        handler = add_export_log_handler("test-export", verbose=False)
+    def test_returns_none_when_disabled(self) -> None:
+        """Should return None when enabled=False."""
+        handler = add_export_log_handler("test-export", enabled=False)
         assert handler is None
 
     def test_creates_log_file(self, tmp_path: Path) -> None:
         """Should create log file in logs directory."""
         set_logs_dir(tmp_path)
-        handler = add_export_log_handler("test-export", verbose=True)
+        handler = add_export_log_handler("test-export", enabled=True)
 
         try:
             log_files = list(tmp_path.glob("log-test-export-*.log"))
@@ -255,7 +245,7 @@ class TestAddExportLogHandler:
         root = logging.getLogger()
         initial_count = len(root.handlers)
 
-        handler = add_export_log_handler("test-export", verbose=True)
+        handler = add_export_log_handler("test-export", enabled=True)
 
         try:
             assert len(root.handlers) == initial_count + 1
@@ -270,7 +260,7 @@ class TestRemoveExportLogHandler:
     def test_removes_handler_from_root(self, tmp_path: Path) -> None:
         """Should remove handler from root logger."""
         set_logs_dir(tmp_path)
-        handler = add_export_log_handler("test-export", verbose=True)
+        handler = add_export_log_handler("test-export", enabled=True)
 
         root = logging.getLogger()
         assert handler in root.handlers

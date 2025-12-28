@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from common.detection import DetectionResult
+from common.files.scanner import iter_files
 from common.output.logging import get_processor_logger
 from common.preprocess.context_mergers import merge_imessage_context
 from common.processing import print_preprocessing_stats
@@ -210,22 +211,19 @@ class ImazingPreprocessor(PreprocessorBase):
 
         Returns:
             List of paths to media files
+
+        Uses shared iter_files utility for consistent file scanning
+        with automatic hidden file and banned pattern filtering.
         """
         media_files = []
 
-        for file_path in self.export_path.iterdir():
-            if not file_path.is_file():
-                continue
-
-            # Skip banned files
-            if self.banned_filter.is_banned(file_path):
-                continue
-
-            # Check if it's a media file
-            ext = file_path.suffix.lower()
-            if ext not in ALL_MEDIA_EXTENSIONS:
-                continue
-
+        # Use shared scanner for consistent filtering
+        for file_path in iter_files(
+            self.export_path,
+            banned_filter=self.banned_filter,
+            extensions=ALL_MEDIA_EXTENSIONS,
+            skip_hidden=True,
+        ):
             # Check if filename matches iMazing pattern
             parsed = parse_imazing_filename(file_path.name)
             if parsed:
@@ -249,15 +247,15 @@ class ImazingPreprocessor(PreprocessorBase):
         csv_files = list(self.export_path.glob("Messages - *.csv"))
 
         for csv_file in progress_bar(
-            csv_files, PHASE_PREPROCESS, "Loading CSV files", unit="file"
+            csv_files, PHASE_PREPROCESS, "Loading CSV files"
         ):
             try:
                 self._parse_csv_file(csv_file)
             except Exception as e:
-                logger.warning(f"Failed to parse CSV {csv_file.name}: {e}")
+                logger.warning("Failed to parse CSV %s: %s", csv_file.name, e)
 
         self.stats["csv_messages_loaded"] = len(self.csv_message_cache)
-        logger.info(f"Loaded {len(self.csv_message_cache)} message records from CSV")
+        logger.info("Loaded %d message records from CSV", len(self.csv_message_cache))
 
     def _parse_csv_file(self, csv_file: Path) -> None:
         """Parse a single CSV message file.
@@ -353,7 +351,7 @@ class ImazingPreprocessor(PreprocessorBase):
                 )
 
         if orphaned_count > 0:
-            logger.info(f"Found {orphaned_count} orphaned CSV metadata entries")
+            logger.info("Found %d orphaned CSV metadata entries", orphaned_count)
 
     def validate_export(self) -> bool:
         """Validate that export directory exists.
@@ -585,10 +583,14 @@ class ImazingPreprocessor(PreprocessorBase):
 
         if not media_files:
             log.logger.warning("No media files found to process")
-            # Still create output structure (no media directory needed - files read from source)
+            # Export-level soft-fail per policy A
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            self.save_metadata({}, extra_export_info=extra_export_info)
-            return True
+            self.failure_tracker.add_export_failure(
+                reason="no_media_files",
+                error_details="No media files found in export to process",
+            )
+            self.failure_tracker.handle_failures(self.output_dir)
+            return False
 
         # Phase 3: Build conversations and copy files (with deduplication)
         log.logger.info("Building conversations and copying files...")

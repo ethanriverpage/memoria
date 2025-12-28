@@ -91,16 +91,32 @@ class DeduplicationService:
         """
         self.config = config or get_dedup_config()
         self.db = db or HashDatabase(self.config.database_path)
+        self._reset_validation_stats()
 
-    def analyze(self, catalogs: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Analyze catalogs to identify duplicates and build manifest.
+    def _reset_validation_stats(self) -> None:
+        """Reset counters for validation rejections."""
+        self._validation_stats: Dict[str, int] = {
+            "gps_rejects": 0,
+            "aspect_rejects": 0,
+        }
 
-        Main entry point for deduplication analysis. Processes all files
-        from all catalogs and produces a manifest describing duplicates
-        and their relationships.
+    def _log_validation_stats(self) -> None:
+        """Log aggregated validation rejection stats."""
+        gps = self._validation_stats.get("gps_rejects", 0)
+        aspect = self._validation_stats.get("aspect_rejects", 0)
+        if gps or aspect:
+            logger.info("Dedup validation rejects: gps=%d aspect=%d", gps, aspect)
+
+    def analyze_from_db(self, run_id: str) -> Dict[str, Any]:
+        """Analyze catalog entries from database to identify duplicates.
+
+        Reads entries from the database instead of in-memory catalogs,
+        enabling memory-efficient deduplication for large export sets.
+        Catalog entries should be written to the database via streaming
+        before calling this method.
 
         Args:
-            catalogs: List of catalog dictionaries from processor.build_catalog()
+            run_id: Processing run identifier used when writing catalog entries.
 
         Returns:
             Deduplication manifest with structure:
@@ -111,81 +127,16 @@ class DeduplicationService:
                 "duplicates": {
                     content_hash: {
                         "primary": {...},
+                        "best_quality": {...},
                         "secondary": [...],
                         "merged_metadata": {...}
                     }
-                }
+                },
+                "live_photo_videos": {...}
             }
         """
-        logger.info(f"Analyzing {len(catalogs)} catalog(s) for duplicates")
-
-        # Collect all files from all catalogs
-        all_files = []
-        for catalog in catalogs:
-            processor = catalog.get("processor", "Unknown")
-            for file_entry in catalog.get("files", []):
-                file_entry["_processor"] = processor
-                all_files.append(file_entry)
-
-        logger.info(f"Total files to analyze: {len(all_files)}")
-
-        # Register files in database
-        self._register_files(all_files)
-
-        # Group by exact hash
-        exact_groups = self._group_by_exact_hash(all_files)
-        logger.info(f"Exact hash groups with duplicates: {len(exact_groups)}")
-
-        # Group remaining by perceptual hash (if enabled)
-        perceptual_groups = {}
-        if self.config.use_perceptual:
-            # Get ungrouped files PLUS one representative from each exact group
-            # This allows perceptual matching between ungrouped files and exact groups
-            ungrouped = self._get_ungrouped_files(all_files, exact_groups)
-            representatives = self._get_exact_group_representatives(exact_groups)
-            # Filter to only files with perceptual hashes
-            representatives = [r for r in representatives if r.get("perceptual_hash")]
-            perceptual_candidates = ungrouped + representatives
-            logger.info(
-                f"Perceptual candidates: {len(ungrouped)} ungrouped + "
-                f"{len(representatives)} exact group reps"
-            )
-            if not perceptual_candidates:
-                logger.info("No files with perceptual hashes to compare")
-            else:
-                perceptual_groups = self._group_by_perceptual_hash(
-                    perceptual_candidates
-                )
-            # Expand perceptual groups to include full exact groups
-            perceptual_groups = self._expand_perceptual_groups(
-                perceptual_groups, exact_groups
-            )
-            logger.info(
-                f"Perceptual hash groups with duplicates: {len(perceptual_groups)}"
-            )
-
-        # Merge groups and build manifest
-        manifest = self._build_manifest(all_files, exact_groups, perceptual_groups)
-
-        # Add Live Photo video mapping for atomic pair deduplication
-        manifest["live_photo_videos"] = self._build_live_photo_video_map(all_files)
-
-        return manifest
-
-    def analyze_from_db(self, run_id: str) -> Dict[str, Any]:
-        """Analyze catalog entries from database to identify duplicates.
-
-        Memory-efficient alternative to analyze() that reads entries from
-        the database instead of in-memory catalogs. Use this when catalog
-        entries have been written to the database via streaming.
-
-        Args:
-            run_id: Processing run identifier used when writing catalog entries.
-
-        Returns:
-            Deduplication manifest with same structure as analyze().
-        """
         # Get run statistics
+        self._reset_validation_stats()
         stats = self.db.get_run_statistics(run_id)
         total_files = stats.get("total_files", 0)
 
@@ -198,7 +149,7 @@ class DeduplicationService:
         # Build exact groups by fetching entries for each duplicate hash
         exact_groups: Dict[str, List[Dict[str, Any]]] = {}
         for content_hash in progress_bar(
-            duplicate_hashes, PHASE_DEDUP, "Loading duplicate groups", unit="group"
+            duplicate_hashes, PHASE_DEDUP, "Loading duplicate groups"
         ):
             entries = self.db.get_entries_by_hash(run_id, content_hash)
             if len(entries) > 1:
@@ -211,7 +162,6 @@ class DeduplicationService:
             PHASE_DEDUP,
             "Registering files",
             total=total_files,
-            unit="file",
         ):
             self.db.register(
                 content_hash=entry.get("content_hash", ""),
@@ -235,7 +185,6 @@ class DeduplicationService:
                     ),
                     PHASE_DEDUP,
                     "Loading perceptual hashes",
-                    unit="file",
                 )
             )
             # Add representatives from exact groups for cross-group perceptual matching
@@ -276,6 +225,7 @@ class DeduplicationService:
                 video_map[video_path] = entry["content_hash"]
         manifest["live_photo_videos"] = video_map
 
+        self._log_validation_stats()
         return manifest
 
     def _build_manifest_from_groups(
@@ -284,10 +234,10 @@ class DeduplicationService:
         exact_groups: Dict[str, List[Dict[str, Any]]],
         perceptual_groups: Dict[str, List[Dict[str, Any]]],
     ) -> Dict[str, Any]:
-        """Build manifest from pre-computed groups without all_files list.
+        """Build manifest from pre-computed groups.
 
-        Memory-efficient version of _build_manifest that doesn't require
-        holding all files in memory.
+        Constructs the deduplication manifest from exact and perceptual
+        hash groups, computing statistics and organizing duplicate entries.
 
         Args:
             total_files: Total number of files in the run.
@@ -307,7 +257,6 @@ class DeduplicationService:
             PHASE_DEDUP,
             "Building manifest (exact)",
             total=len(exact_groups),
-            unit="group",
         ):
             entry, count, saved = self._build_duplicate_entry(
                 files, "exact", content_hash
@@ -322,7 +271,6 @@ class DeduplicationService:
             PHASE_DEDUP,
             "Building manifest (perceptual)",
             total=len(perceptual_groups),
-            unit="group",
         ):
             entry, count, saved = self._build_duplicate_entry(files, "perceptual")
             # Use best file's content hash as key, with UUID fallback to prevent collision
@@ -431,50 +379,6 @@ class DeduplicationService:
 
         return entry, duplicate_count, space_saved
 
-    def _register_files(self, files: List[Dict[str, Any]]) -> None:
-        """Register all files in the hash database.
-
-        Args:
-            files: List of file entries to register.
-        """
-        for file_entry in progress_bar(
-            files, PHASE_DEDUP, "Registering files", unit="file"
-        ):
-            self.db.register(
-                content_hash=file_entry.get("content_hash", ""),
-                processor=file_entry.get("_processor", "Unknown"),
-                source_path=file_entry.get("source_path", ""),
-                perceptual_hash=file_entry.get("perceptual_hash"),
-                file_size=file_entry.get("file_size"),
-                dimensions=file_entry.get("dimensions"),
-                metadata=file_entry.get("metadata"),
-            )
-
-    def _group_by_exact_hash(
-        self,
-        files: List[Dict[str, Any]],
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        """Group files by exact content hash.
-
-        Args:
-            files: List of file entries.
-
-        Returns:
-            Dict mapping content hash to list of file entries.
-            Only includes hashes with 2+ files.
-        """
-        groups = defaultdict(list)
-
-        for file_entry in progress_bar(
-            files, PHASE_DEDUP, "Grouping by exact hash", unit="file"
-        ):
-            content_hash = file_entry.get("content_hash")
-            if content_hash:
-                groups[content_hash].append(file_entry)
-
-        # Filter to groups with duplicates
-        return {h: files for h, files in groups.items() if len(files) > 1}
-
     def _group_by_perceptual_hash(
         self,
         files: List[Dict[str, Any]],
@@ -546,7 +450,6 @@ class DeduplicationService:
             list(enumerate(hashable)),
             PHASE_DEDUP,
             "Comparing perceptual hashes",
-            unit="file",
         ):
             if i in assigned:
                 continue
@@ -724,7 +627,6 @@ class DeduplicationService:
                 range(total_chunks),
                 PHASE_DEDUP,
                 "Comparing perceptual hashes",
-                unit="chunk",
             ):
                 if not pending_futures:
                     break
@@ -776,23 +678,6 @@ class DeduplicationService:
 
         logger.info(f"Created {len(groups)} perceptual duplicate groups")
         return groups
-
-    def _get_ungrouped_files(
-        self,
-        all_files: List[Dict[str, Any]],
-        exact_groups: Dict[str, List[Dict[str, Any]]],
-    ) -> List[Dict[str, Any]]:
-        """Get files not in any exact hash group.
-
-        Args:
-            all_files: All file entries.
-            exact_groups: Exact hash groups.
-
-        Returns:
-            List of files without exact hash matches.
-        """
-        grouped_hashes = set(exact_groups.keys())
-        return [f for f in all_files if f.get("content_hash") not in grouped_hashes]
 
     def _get_exact_group_representatives(
         self,
@@ -860,9 +745,7 @@ class DeduplicationService:
         for content_hash in absorbed_exact_hashes:
             if content_hash in exact_groups:
                 del exact_groups[content_hash]
-                logger.debug(
-                    f"Absorbed exact group {content_hash} into perceptual group"
-                )
+                # High-cardinality detail omitted; summary logged below.
 
         if absorbed_exact_hashes:
             logger.info(
@@ -900,10 +783,7 @@ class DeduplicationService:
         if gps1 and gps2:
             distance = self._haversine_distance(gps1, gps2)
             if distance > self.config.validate_gps_distance:
-                logger.debug(
-                    f"GPS distance too large: {distance:.0f}m > "
-                    f"{self.config.validate_gps_distance}m"
-                )
+                self._validation_stats["gps_rejects"] += 1
                 return False
 
         # NOTE: Timestamp validation intentionally removed.
@@ -928,8 +808,7 @@ class DeduplicationService:
         if ratio1 and ratio2:
             ratio_diff = abs(ratio1 - ratio2) / max(ratio1, ratio2)
             if ratio_diff > self.config.validate_aspect_ratio:
-                # Aspect ratio mismatch is expected behavior during dedup validation
-                # Not logged to avoid noise (thousands of comparisons per run)
+                self._validation_stats["aspect_rejects"] += 1
                 return False
 
         return True
@@ -1023,105 +902,6 @@ class DeduplicationService:
         c = 2 * math.asin(math.sqrt(a))
 
         return R * c
-
-    def _build_live_photo_video_map(
-        self,
-        all_files: List[Dict[str, Any]],
-    ) -> Dict[str, str]:
-        """Build mapping of Live Photo video paths to their image content hash.
-
-        Creates a lookup table that maps video source paths to the content hash
-        of their associated image. This enables Live Photo video components to
-        follow the same deduplication decision as their image.
-
-        Args:
-            all_files: All file entries from catalogs.
-
-        Returns:
-            Dict mapping video source_path -> image content_hash.
-        """
-        video_map = {}
-        for file_entry in all_files:
-            video_path = file_entry.get("live_photo_video")
-            if video_path and file_entry.get("content_hash"):
-                video_map[video_path] = file_entry["content_hash"]
-        return video_map
-
-    def _build_manifest(
-        self,
-        all_files: List[Dict[str, Any]],
-        exact_groups: Dict[str, List[Dict[str, Any]]],
-        perceptual_groups: Dict[str, List[Dict[str, Any]]],
-    ) -> Dict[str, Any]:
-        """Build the deduplication manifest.
-
-        Args:
-            all_files: All analyzed files.
-            exact_groups: Groups from exact hash matching.
-            perceptual_groups: Groups from perceptual hash matching.
-
-        Returns:
-            Complete manifest dictionary.
-        """
-        duplicates = {}
-        total_duplicates = 0
-        space_saved = 0
-
-        # Process exact hash groups
-        for content_hash, files in progress_bar(
-            exact_groups.items(),
-            PHASE_DEDUP,
-            "Building manifest (exact)",
-            total=len(exact_groups),
-            unit="group",
-        ):
-            entry, count, saved = self._build_duplicate_entry(
-                files, "exact", content_hash
-            )
-            duplicates[content_hash] = entry
-            total_duplicates += count
-            space_saved += saved
-
-        # Process perceptual hash groups
-        for group_id, files in progress_bar(
-            perceptual_groups.items(),
-            PHASE_DEDUP,
-            "Building manifest (perceptual)",
-            total=len(perceptual_groups),
-            unit="group",
-        ):
-            entry, count, saved = self._build_duplicate_entry(files, "perceptual")
-            # Use best file's content hash as key, with UUID fallback to prevent collision
-            best = self._select_best_file(files)
-            content_hash = best.get("content_hash")
-            key = f"perceptual_{content_hash or f'{group_id}_{uuid4().hex[:8]}'}"
-            duplicates[key] = entry
-            total_duplicates += count
-            space_saved += saved
-
-        # Build statistics
-        unique_files = len(all_files) - total_duplicates
-
-        manifest = {
-            "version": "1.0",
-            "created": datetime.now(timezone.utc).isoformat(),
-            "statistics": {
-                "total_files_scanned": len(all_files),
-                "unique_files": unique_files,
-                "duplicate_groups": len(duplicates),
-                "duplicates_found": total_duplicates,
-                "space_saved_bytes": space_saved,
-            },
-            "duplicates": duplicates,
-        }
-
-        logger.info(
-            f"Manifest built: {unique_files} unique, "
-            f"{total_duplicates} duplicates, "
-            f"{space_saved / (1024 * 1024):.1f} MB saved"
-        )
-
-        return manifest
 
     def _select_best_file(
         self,
@@ -1297,49 +1077,6 @@ def save_manifest(manifest: Dict[str, Any], output_path: Path) -> None:
     logger.info(f"Saved deduplication manifest to {output_path}")
 
 
-def load_manifest(manifest_path: Path) -> Dict[str, Any]:
-    """Load deduplication manifest from JSON file.
-
-    Args:
-        manifest_path: Path to manifest JSON file.
-
-    Returns:
-        Manifest dictionary.
-
-    Raises:
-        FileNotFoundError: If manifest file doesn't exist.
-        json.JSONDecodeError: If manifest is invalid JSON.
-    """
-    with open(manifest_path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def is_file_primary(
-    manifest: Dict[str, Any],
-    source_path: str,
-) -> bool:
-    """Check if a file is marked as primary in the manifest.
-
-    Args:
-        manifest: Deduplication manifest.
-        source_path: Path to check.
-
-    Returns:
-        True if file is primary or not in manifest.
-    """
-    for group in manifest.get("duplicates", {}).values():
-        primary = group.get("primary", {})
-        if primary.get("source_path") == source_path:
-            return True
-
-        for secondary in group.get("secondary", []):
-            if secondary.get("source_path") == source_path:
-                return False
-
-    # Not in manifest = treat as primary
-    return True
-
-
 def is_file_primary_by_hash(
     manifest: Dict[str, Any],
     content_hash: str,
@@ -1362,7 +1099,7 @@ def is_file_primary_by_hash(
     source_path, only cross-processor deduplication is checked.
 
     Args:
-        manifest: Deduplication manifest from analyze().
+        manifest: Deduplication manifest from analyze_from_db().
         content_hash: xxHash64 content hash of the file to check.
         processor_name: Name of the processor checking the file.
         source_path: Optional path to the source file. When provided, enables
@@ -1444,7 +1181,7 @@ def _is_live_photo_video_primary(
     """Check if a Live Photo video should be processed based on its image's status.
 
     Args:
-        manifest: Deduplication manifest from analyze().
+        manifest: Deduplication manifest from analyze_from_db().
         file_path: Path to the video file.
         processor_name: Name of the processor checking the file.
 
@@ -1477,7 +1214,7 @@ def filter_primary_files(
 
     Args:
         files: List of file paths to filter.
-        dedup_manifest: Deduplication manifest from analyze(). If None, all files
+        dedup_manifest: Deduplication manifest from analyze_from_db(). If None, all files
             are returned as primary.
         processor_name: Name of the calling processor (e.g., "Google Chat").
 
@@ -1494,7 +1231,7 @@ def filter_primary_files(
         return files, 0
 
     filtered = []
-    for f in progress_bar(files, PHASE_DEDUP, "Filtering duplicates", unit="file"):
+    for f in progress_bar(files, PHASE_DEDUP, "Filtering duplicates"):
         # First check if this is a Live Photo video component
         live_photo_result = _is_live_photo_video_primary(
             dedup_manifest, f, processor_name
@@ -1518,33 +1255,6 @@ def filter_primary_files(
         logger.info(f"Skipped {skipped} secondary files (dedup)")
 
     return filtered, skipped
-
-
-def get_primary_for_file(
-    manifest: Dict[str, Any],
-    source_path: str,
-) -> Optional[str]:
-    """Get the primary source path for a file.
-
-    Args:
-        manifest: Deduplication manifest.
-        source_path: Path to check.
-
-    Returns:
-        Primary source path, or None if not in manifest.
-    """
-    for group in manifest.get("duplicates", {}).values():
-        primary = group.get("primary", {})
-        primary_path = primary.get("source_path")
-
-        if primary_path == source_path:
-            return primary_path
-
-        for secondary in group.get("secondary", []):
-            if secondary.get("source_path") == source_path:
-                return primary_path
-
-    return None
 
 
 def get_merged_description_for_file(
@@ -1756,29 +1466,29 @@ def get_merged_metadata_for_hash(
     return group.get("merged_metadata")
 
 
-def get_duplicate_group_for_file(
-    manifest: Dict[str, Any],
-    source_path: str,
-) -> Optional[Dict[str, Any]]:
-    """Get the duplicate group containing a file.
+def get_canonical_timestamp(
+    dedup_manifest: Optional[Dict[str, Any]],
+    content_hash: Optional[str],
+    local_timestamp: Optional[str],
+) -> Optional[str]:
+    """
+    Resolve canonical timestamp, preferring merged earliest from dedup manifest.
 
     Args:
-        manifest: Deduplication manifest.
-        source_path: Path to check.
+        dedup_manifest: Dedup manifest (may be None).
+        content_hash: Content hash of the file (may be None if unavailable).
+        local_timestamp: Processor-provided timestamp.
 
     Returns:
-        Duplicate group dictionary if file is in a group, None otherwise.
+        Canonical timestamp string or None.
     """
-    for group in manifest.get("duplicates", {}).values():
-        primary = group.get("primary", {})
-        if primary.get("source_path") == source_path:
-            return group
-
-        for secondary in group.get("secondary", []):
-            if secondary.get("source_path") == source_path:
-                return group
-
-    return None
+    if dedup_manifest and content_hash:
+        merged = get_merged_metadata_for_hash(dedup_manifest, content_hash)
+        if merged:
+            merged_ts = merged.get("timestamp")
+            if merged_ts:
+                return merged_ts
+    return local_timestamp
 
 
 def get_secondary_reference(
@@ -1872,31 +1582,6 @@ def build_dedup_references(
             references.append(ref)
 
     return references
-
-
-def get_skipped_secondary_files(
-    manifest: Dict[str, Any],
-    processor_name: str,
-) -> List[str]:
-    """Get list of secondary file paths for a specific processor.
-
-    Args:
-        manifest: Deduplication manifest.
-        processor_name: Name of the processor to filter by.
-
-    Returns:
-        List of source paths that are secondaries for this processor.
-    """
-    skipped = []
-
-    for group in manifest.get("duplicates", {}).values():
-        for secondary in group.get("secondary", []):
-            if secondary.get("processor") == processor_name:
-                source_path = secondary.get("source_path")
-                if source_path:
-                    skipped.append(source_path)
-
-    return skipped
 
 
 def save_dedup_metadata(

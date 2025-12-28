@@ -306,6 +306,10 @@ class TestInstaloaderOrphanDetection:
 
         # Create a valid media file so preprocessor doesn't exit early
         write_media_file(temp_export_dir / "2021-01-02_12-00-00_UTC.jpg", "jpeg")
+        # Add JSON with username for username detection
+        (temp_export_dir / "2021-01-02_12-00-00_UTC.json").write_text(
+            '{"taken_at": "2021-01-02T12:00:00", "owner": {"username": "testuser"}}'
+        )
 
         # Create a .txt file without corresponding media file (orphaned)
         (temp_export_dir / "2021-01-01_12-00-00_UTC.txt").write_text("Orphaned caption")
@@ -334,10 +338,14 @@ class TestInstaloaderOrphanDetection:
 
         # Create a valid media file so preprocessor doesn't exit early
         write_media_file(temp_export_dir / "2021-01-02_12-00-00_UTC.jpg", "jpeg")
+        # Add JSON with username for username detection
+        (temp_export_dir / "2021-01-02_12-00-00_UTC.json").write_text(
+            '{"taken_at": "2021-01-02T12:00:00", "owner": {"username": "testuser"}}'
+        )
 
         # Create a .json file without corresponding media file (orphaned)
         (temp_export_dir / "2021-01-01_12-00-00_UTC.json").write_text(
-            '{"taken_at": "2021-01-01T12:00:00"}'
+            '{"taken_at": "2021-01-01T12:00:00", "owner": {"username": "testuser"}}'
         )
 
         # Run preprocessor
@@ -380,3 +388,40 @@ class TestInstaloaderOrphanDetection:
 
         # No orphaned metadata should be tracked
         assert len(preprocessor.failure_tracker.orphaned_metadata) == 0
+
+
+class TestInstaloaderEmptyExport:
+    """Tests for empty export handling (Policy A: export-level soft-fail)."""
+
+    def test_empty_export_produces_failure_report(
+        self, instaloader_processor, temp_export_dir, temp_output_dir
+    ):
+        """Empty export should produce failure-report.json with export_failures."""
+        from processors.instaloader.preprocess import InstaloaderPreprocessor
+
+        # Create empty export directory (no media files)
+        temp_export_dir.mkdir(parents=True, exist_ok=True)
+        # Create a non-media file so directory isn't completely empty
+        (temp_export_dir / "profile_pic.txt").write_text("not a media file")
+
+        # Run preprocessor
+        preprocessor = InstaloaderPreprocessor(
+            export_path=temp_export_dir,
+            output_dir=temp_output_dir,
+            final_output_dir=temp_output_dir,
+        )
+        result = preprocessor.run()
+
+        # Should return False (FAILED)
+        assert result is False
+
+        # Should produce failure-report.json with export_failures
+        report_path = temp_output_dir / "issues" / "failure-report.json"
+        assert report_path.exists(), "failure-report.json should be created"
+
+        import json
+
+        report = json.loads(report_path.read_text())
+        assert "export_failures" in report
+        assert len(report["export_failures"]) > 0
+        assert report["export_failures"][0]["reason"] == "no_media_files"

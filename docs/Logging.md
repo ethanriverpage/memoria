@@ -43,7 +43,33 @@ Memoria supports tiered verbosity with `-v` flags:
 
 ## Standardized Logging with ProcessorLogger
 
-All processors and preprocessors use the `ProcessorLogger` class for consistent logging output. This ensures uniform log messages across the codebase.
+Processors use the `ProcessorLogger` class for consistent, single-line events (starts, counts, copies, EXIF). Preprocessors may emit their own report logs, but they follow the same one-event/one-line rules.
+
+## Noise-Reduction Rules (applied across all processors)
+
+- One file event → one line (copy/transform/skip).
+- Use `short_path()` for any path in per-file logs; avoid absolute paths.
+- Never log temp filenames on success.
+- ffmpeg/ffprobe commands are logged **only on failure** (with return code + trimmed stderr).
+- Aggregate high-cardinality loops into counters (optional tiny DEBUG sample).
+- Human-readable one-liners (no strict key=value), stable identifiers (export + filename).
+
+### Examples (DEBUG)
+
+- Instaloader copy:
+  - `proc=instaloader src=2018-08-01_18-08-04_UTC.mp4 dest=insta-posts-ethantastic_-20180801.mp4 type=posts`
+- Overlay decision:
+  - `proc=overlay video=2021-03-11_19-50-55.mp4 rotate=90 dims=1232x656->656x1232 bitrate=6.6Mbps encoder=hevc_vaapi overlay=memories_overlay.png out=snap-memories-ethriverpage-20110311.mkv`
+- Dedup validation summary:
+  - `Dedup validation rejects: gps=1234 aspect=456`
+
+### Processor audit (all 11)
+
+- High-cardinality per-item logs collapsed to one-line summaries:
+  - Instaloader, Instagram Messages, Instagram Public Media preprocessors.
+- Shared noise hotspots updated:
+  - `common/media/probe.py` (quiet on success), `common/media/overlay.py` (one decision line; commands on failure), `common/dedup/service.py` (aggregated rejects).
+- Path shortening and banner cleanup applied to Discord, Google Chat, Google Voice, iMessage, iMessage iMazing, Snapchat Memories, Snapchat Messages.
 
 ### Using ProcessorLogger
 

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from common.utils import extract_username_from_export_dir
+from common.detection import detect_from_dirname
 
 
 @dataclass(frozen=True)
@@ -54,5 +54,5 @@ def build_processor_output_path(
         >>> build_processor_output_path(info, "iph13p-messages-20220426", "/output")
         '/output/iMessage/iph13p'
     """
-    username = extract_username_from_export_dir(input_dir, output_info.username_prefix)
+    username = detect_from_dirname(Path(input_dir), output_info.username_prefix) or "unknown"
     return str(Path(base_output_dir) / output_info.platform / username)

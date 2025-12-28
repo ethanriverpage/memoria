@@ -17,10 +17,19 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, Dict, Generator, List, Optional, TypeVar
 
 from common.output.console import console, is_subprocess
-from common.output.progress import PHASE_PROCESS, progress_bar
+from common.output.progress import (
+    PHASE_PREPROCESS,
+    PHASE_PROCESS,
+    futures_progress,
+    progress_bar,
+)
+
+T = TypeVar("T")
+R = TypeVar("R")
 from common.utils import should_cleanup_temp
 
 
@@ -48,14 +57,16 @@ def get_preprocessing_cache_path(input_dir: Path, processor_name: str) -> Path:
 
 
 def is_preprocessing_cache_valid(cache_path: Path) -> bool:
-    """Return True if cache has metadata.json and media/ directory."""
+    """Return True if cache has metadata.json.
+
+    The preprocessed cache uses source_path entries in metadata.json that
+    point to original files. There is no media/ directory in the cache.
+    """
     if not cache_path.exists():
         return False
 
     metadata_file = cache_path / "metadata.json"
-    media_dir = cache_path / "media"
-
-    return metadata_file.exists() and media_dir.exists()
+    return metadata_file.exists()
 
 
 def cleanup_preprocessing_cache() -> None:
@@ -135,6 +146,80 @@ def process_batches_parallel(
     results = []
     for batch_result in batch_results:
         results.extend(batch_result)
+
+    return results
+
+
+def process_parallel_threaded(
+    tasks: List[T],
+    worker_fn: Callable[[T], R],
+    workers: int,
+    phase: str = PHASE_PREPROCESS,
+    description: str = "Processing",
+    task_id_fn: Optional[Callable[[T], Any]] = None,
+    on_error: Optional[Callable[[Any, Exception], None]] = None,
+) -> List[R]:
+    """Process tasks in parallel using ThreadPoolExecutor with progress bar.
+
+    Provides a unified pattern for parallel task processing with:
+    - ThreadPoolExecutor management
+    - Progress bar display via futures_progress
+    - Exception handling with optional callback
+    - Result collection
+
+    Args:
+        tasks: List of tasks to process.
+        worker_fn: Function to call for each task. Should accept a single task
+            and return a result (or None to skip).
+        workers: Number of parallel workers.
+        phase: Phase name for progress bar (use PHASE_* constants).
+        description: Action description for progress bar.
+        task_id_fn: Optional function to extract task ID for error messages.
+            If not provided, uses str(task).
+        on_error: Optional callback for errors, receives (task_id, exception).
+            If not provided, errors are logged and the task is skipped.
+
+    Returns:
+        List of non-None results from successful worker calls.
+
+    Example:
+        def process_conversation(conv_tuple):
+            conv_path, conv_id = conv_tuple
+            # ... process and return conversation data
+            return conversation_data
+
+        results = process_parallel_threaded(
+            tasks=conversation_list,
+            worker_fn=self._process_single_conversation,
+            workers=self.workers,
+            phase=PHASE_PREPROCESS,
+            description="Parsing conversations",
+            task_id_fn=lambda t: t[1],  # Extract conversation ID
+            on_error=lambda tid, e: self.log_message(
+                "PROCESSING_ERROR", f"Failed: {tid}", str(e)
+            ),
+        )
+    """
+    if not tasks:
+        return []
+
+    results: List[R] = []
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_task = {executor.submit(worker_fn, task): task for task in tasks}
+
+        for future in futures_progress(future_to_task, phase, description):
+            task = future_to_task[future]
+            task_id = task_id_fn(task) if task_id_fn else str(task)
+
+            try:
+                result = future.result()
+                if result is not None:
+                    results.append(result)
+            except Exception as e:
+                if on_error:
+                    on_error(task_id, e)
+                # If no error handler, silently skip failed tasks
 
     return results
 

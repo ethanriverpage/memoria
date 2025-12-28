@@ -10,7 +10,6 @@ Tests cover:
 - Software fallback encoding
 """
 
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 
@@ -20,62 +19,9 @@ from common.media.encoder import (
     get_encoder_input_args,
     get_encoder_name,
     get_software_encoder_args,
-    get_video_bitrate,
     is_hardware_accelerated,
     is_hardware_acceleration_error,
 )
-
-
-class TestGetVideoBitrate:
-    """Tests for get_video_bitrate function."""
-
-    def test_returns_none_for_missing_file(self, tmp_path: Path) -> None:
-        """Should return None for non-existent file."""
-        missing = tmp_path / "missing.mp4"
-        result = get_video_bitrate(missing)
-        assert result is None
-
-    def test_returns_none_on_ffprobe_failure(self, tmp_path: Path) -> None:
-        """Should return None when ffprobe fails."""
-        test_file = tmp_path / "test.mp4"
-        test_file.write_bytes(b"not a video")
-
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-        mock_result.stdout = ""
-
-        with patch("common.media.encoder.subprocess.run", return_value=mock_result):
-            result = get_video_bitrate(test_file)
-
-        assert result is None
-
-    def test_returns_bitrate_on_success(self, tmp_path: Path) -> None:
-        """Should return bitrate when ffprobe succeeds."""
-        test_file = tmp_path / "test.mp4"
-        test_file.write_bytes(b"video content")
-
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "5000000\n"  # 5 Mbps
-
-        with patch("common.media.encoder.subprocess.run", return_value=mock_result):
-            result = get_video_bitrate(test_file)
-
-        assert result == 5000000
-
-    def test_handles_non_numeric_output(self, tmp_path: Path) -> None:
-        """Should return None for non-numeric ffprobe output."""
-        test_file = tmp_path / "test.mp4"
-        test_file.write_bytes(b"content")
-
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "N/A\n"
-
-        with patch("common.media.encoder.subprocess.run", return_value=mock_result):
-            result = get_video_bitrate(test_file)
-
-        assert result is None
 
 
 class TestVideoEncoder:

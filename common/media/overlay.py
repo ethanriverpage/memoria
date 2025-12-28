@@ -25,17 +25,13 @@ Performance Optimizations:
 
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from typing import Optional
 import logging
+from common.files.utils import copy_file
 
-try:
-    from PIL import Image  # type: ignore
-except ImportError:
-    print("Error: PIL (Pillow) is required. Install it with: pip install Pillow")
-    sys.exit(1)
+from PIL import Image  # type: ignore
 
 # Import video encoder detection
 from common.media.encoder import (
@@ -61,6 +57,9 @@ from common.dedup.description import (
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+class OverlayProcessingError(RuntimeError):
+    """Raised when an overlay exists but cannot be processed (corrupt/unreadable)."""
 
 # Detect encoder once at module load time
 _ENCODER_NAME = get_encoder_name()
@@ -122,8 +121,6 @@ def _pass1_rotate_video_impl_with_metadata(
     Raises:
         RuntimeError: If video processing fails
     """
-    logger.debug(f"[{video_path.name}] PASS 1: Rotating with pre-fetched metadata")
-
     # Use pre-fetched metadata - validate dimensions are present
     if video_meta.width is None or video_meta.height is None:
         raise RuntimeError(
@@ -135,33 +132,19 @@ def _pass1_rotate_video_impl_with_metadata(
     rotation = video_meta.rotation
     original_bitrate = video_meta.bitrate
 
-    if original_bitrate:
-        logger.debug(
-            f"[{video_path.name}] Using pre-fetched bitrate: {original_bitrate / 1_000_000:.2f} Mbps"
-        )
-
     # Ensure dimensions are even for libx265
     if orig_width % 2 != 0:
         orig_width += 1
     if orig_height % 2 != 0:
         orig_height += 1
 
-    logger.debug(
-        f"[{video_path.name}] Original video dimensions: {orig_width}x{orig_height}"
-    )
-
     # Calculate target dimensions after rotation
     if rotation and rotation in [90, 270]:
         target_width, target_height = orig_height, orig_width
-        logger.debug(
-            f"[{video_path.name}] Target dimensions after {rotation} rotation: {target_width}x{target_height}"
-        )
     else:
         target_width, target_height = orig_width, orig_height
 
     if rotation:
-        logger.debug(f"[{video_path.name}] Applying {rotation} rotation")
-
         # Create temp file for rotated output
         temp_rotated = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
         temp_rotated.close()
@@ -217,9 +200,6 @@ def _pass1_rotate_video_impl_with_metadata(
                 str(temp_rotated_path),
             ]
 
-            logger.debug(
-                f"[{video_path.name}] Pass 1 ffmpeg command: {' '.join(cmd_rotate)}"
-            )
             result = subprocess.run(
                 cmd_rotate,
                 capture_output=True,
@@ -238,14 +218,20 @@ def _pass1_rotate_video_impl_with_metadata(
                     and is_hardware_acceleration_error(result.stderr)
                 ):
                     logger.warning(
-                        f"[{video_path.name}] Hardware encoding failed, retrying with software"
+                        "[%s] Hardware encoding failed, retrying with software",
+                        video_path.name,
                     )
                     return _pass1_rotate_video_impl_with_metadata(
                         video_path, video_meta, use_hardware=False
                     )
-                raise RuntimeError(f"Pass 1 rotation failed: {result.stderr}")
-
-            logger.debug(f"[{video_path.name}] Pass 1 complete - video rotated")
+                logger.error(
+                    "[%s] Pass 1 rotation failed (rc=%s): %s",
+                    video_path.name,
+                    result.returncode,
+                    result.stderr.strip(),
+                )
+                logger.debug("Pass 1 command: %s", " ".join(cmd_rotate))
+                raise RuntimeError("Pass 1 rotation failed")
             return (
                 temp_rotated_path,
                 target_width,
@@ -255,9 +241,6 @@ def _pass1_rotate_video_impl_with_metadata(
             )
         else:
             shutil.copy2(video_path, temp_rotated_path)
-            logger.debug(
-                f"[{video_path.name}] Pass 1 complete - copied without rotation"
-            )
             return (
                 temp_rotated_path,
                 target_width,
@@ -267,7 +250,6 @@ def _pass1_rotate_video_impl_with_metadata(
             )
     else:
         # No rotation needed - return original path directly to avoid unnecessary I/O
-        logger.debug(f"[{video_path.name}] Pass 1 complete - no rotation needed")
         return video_path, target_width, target_height, original_bitrate, False
 
 
@@ -314,8 +296,9 @@ def _pass2_apply_overlay(
         # Check if this is a hardware acceleration error
         if is_hardware_accelerated() and is_hardware_acceleration_error(error_msg):
             logger.warning(
-                f"[{rotated_video_path.name}] Hardware encoding failed in Pass 2, "
-                f"falling back to software encoding: {error_msg[:100]}"
+                "[%s] Hardware encoding failed in Pass 2, falling back to software encoding: %s",
+                rotated_video_path.name,
+                error_msg[:100],
             )
             try:
                 return _pass2_apply_overlay_impl(
@@ -364,22 +347,19 @@ def _pass2_apply_overlay_impl(
     Raises:
         RuntimeError: If video processing fails
     """
-    logger.debug(
-        f"[{rotated_video_path.name}] PASS 2: Applying overlay to rotated video"
-    )
-
     # Check if overlay file exists before attempting to open
     if not overlay_path.exists():
-        logger.error(f"Overlay file does not exist: {overlay_path}")
-        raise RuntimeError(f"Overlay file does not exist: {overlay_path}")
+        logger.warning(
+            f"[{rotated_video_path.name}] Overlay file missing: {overlay_path} "
+            "- continuing without overlay"
+        )
+        # Return original rotated video (no overlay applied)
+        return rotated_video_path
 
     # Scale overlay to match video dimensions using PIL
     try:
         with Image.open(overlay_path) as overlay_img:
             orig_width, orig_height = overlay_img.size
-            logger.debug(
-                f"[{overlay_path.name}] Original overlay dimensions: {orig_width}x{orig_height}"
-            )
 
             # Convert to RGBA if not already (for transparency support)
             if overlay_img.mode != "RGBA":
@@ -389,17 +369,11 @@ def _pass2_apply_overlay_impl(
 
             # Resize using high-quality Lanczos resampling if needed
             if orig_width != target_width or orig_height != target_height:
-                logger.debug(
-                    f"[{overlay_path.name}] Scaling overlay from {orig_width}x{orig_height} to {target_width}x{target_height}"
-                )
                 scaled_overlay = overlay_img.resize(
                     (target_width, target_height), Image.Resampling.LANCZOS
                 )
                 overlay_img.close()  # Close pre-resize image
             else:
-                logger.debug(
-                    f"[{overlay_path.name}] Overlay already matches target dimensions"
-                )
                 scaled_overlay = overlay_img
 
             # Save scaled overlay to temp file
@@ -408,16 +382,15 @@ def _pass2_apply_overlay_impl(
             temp_overlay_path = Path(temp_overlay.name)
             scaled_overlay.save(temp_overlay_path, format="PNG", optimize=True)
             scaled_overlay.close()  # Close after saving
-            logger.debug(
-                f"[{overlay_path.name}] Scaled overlay saved to {temp_overlay_path.name}"
-            )
 
     except Exception as e:
         # Provide clear error message for corrupted overlays
         logger.error(
             f"Cannot open overlay file (possibly corrupted): {overlay_path}: {e}"
         )
-        raise RuntimeError(f"Pass 2 overlay scaling failed - corrupted overlay: {e}")
+        raise OverlayProcessingError(
+            f"Pass 2 overlay scaling failed - corrupted overlay: {e}"
+        )
 
     temp_with_overlay = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
     temp_with_overlay.close()
@@ -433,17 +406,11 @@ def _pass2_apply_overlay_impl(
                 original_bitrate
             )  # Output args (codec, bitrate, etc)
             encoder_name = get_encoder_name()
-            logger.debug(
-                f"[{rotated_video_path.name}] Pass 2 using hardware encoder: {encoder_name}"
-            )
         else:
             # Software encoding fallback
             encoder_input_args = []
             encoder_output_args = get_software_encoder_args(original_bitrate)
             encoder_name = "libx265"
-            logger.debug(
-                f"[{rotated_video_path.name}] Pass 2 using software encoder: {encoder_name}"
-            )
 
         # For VAAPI, we need to handle overlay filter differently:
         # Hardware surfaces need to be downloaded to CPU, filtered, then uploaded
@@ -476,9 +443,6 @@ def _pass2_apply_overlay_impl(
             str(temp_with_overlay_path),
         ]
 
-        logger.debug(
-            f"[{rotated_video_path.name}] Pass 2 ffmpeg command: {' '.join(cmd_overlay)}"
-        )
         result = subprocess.run(
             cmd_overlay,
             capture_output=True,
@@ -490,17 +454,20 @@ def _pass2_apply_overlay_impl(
 
         if result.returncode != 0:
             temp_with_overlay_path.unlink(missing_ok=True)
-            raise RuntimeError(f"Pass 2 overlay application failed: {result.stderr}")
+            logger.error(
+                "[%s] Pass 2 overlay failed (rc=%s): %s",
+                rotated_video_path.name,
+                result.returncode,
+                result.stderr.strip(),
+            )
+            logger.debug("Pass 2 command: %s", " ".join(cmd_overlay))
+            raise OverlayProcessingError("Pass 2 overlay application failed")
 
-        logger.debug(f"[{rotated_video_path.name}] Pass 2 complete")
         return temp_with_overlay_path
 
     finally:
         try:
             temp_overlay_path.unlink()
-            logger.debug(
-                f"[{overlay_path.name}] Cleaned up scaled overlay: {temp_overlay_path.name}"
-            )
         except Exception as e:
             logger.warning(
                 f"[{overlay_path.name}] Failed to clean up scaled overlay: {e}"
@@ -606,10 +573,6 @@ def _pass3_combine_and_embed(
     Raises:
         RuntimeError: If video processing fails
     """
-    logger.debug(
-        f"[{with_overlay_path.name}] PASS 3: Combining tracks and embedding metadata"
-    )
-
     # Build FFmpeg command for combining tracks and embedding metadata
     cmd = [
         "ffmpeg",
@@ -657,7 +620,6 @@ def _pass3_combine_and_embed(
             # Format: "2021-01-04 23:08:30 UTC" -> "2021-01-04T23:08:30Z"
             date_str = metadata["date"].replace(" UTC", "").replace(" ", "T") + "Z"
             cmd.extend(["-metadata", f"creation_time={date_str}"])
-            logger.debug(f"[{with_overlay_path.name}] Adding creation time: {date_str}")
 
         # Add GPS coordinates as metadata tags
         if "latitude" in metadata and "longitude" in metadata:
@@ -670,20 +632,15 @@ def _pass3_combine_and_embed(
                     f"location-eng={location_value}",
                 ]
             )
-            logger.debug(f"[{with_overlay_path.name}] Adding GPS: {location_value}")
 
     # Add original filename as Matroska tag (MKV doesn't support XMP)
     if original_filename:
         cmd.extend(["-metadata", f"ORIGINAL_FILENAME={original_filename}"])
-        logger.debug(
-            f"[{with_overlay_path.name}] Adding original filename: {original_filename}"
-        )
 
     # Add source description metadata
     if description:
         # Use pre-built description (from processor with full message context)
         final_description = description
-        logger.debug(f"[{with_overlay_path.name}] Using provided description")
     elif export_username:
         # Auto-detect: if metadata has conversation fields, use rich format
         has_conversation_data = (
@@ -695,21 +652,13 @@ def _pass3_combine_and_embed(
         if has_conversation_data:
             # Rich format for messages
             final_description = _build_message_description(metadata, export_username)
-            logger.debug(f"[{with_overlay_path.name}] Using rich message description")
         else:
             # Simple format for memories
             final_description = f"Source: Snapchat/{export_username}/memories"
-            logger.debug(
-                f"[{with_overlay_path.name}] Using simple memories description"
-            )
     else:
         final_description = None
 
     if final_description:
-        logger.debug(
-            f"[{with_overlay_path.name}] Final description: {repr(final_description)}"
-        )
-
         cmd.extend(
             [
                 "-metadata",
@@ -722,7 +671,6 @@ def _pass3_combine_and_embed(
     # Add output path and overwrite flag
     cmd.extend(["-y", str(output_path)])
 
-    logger.debug(f"[{with_overlay_path.name}] Pass 3 ffmpeg command: {' '.join(cmd)}")
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -734,8 +682,12 @@ def _pass3_combine_and_embed(
 
     if result.returncode != 0:
         logger.error(
-            f"[{with_overlay_path.name}] Pass 3 combine and embed failed: {result.stderr}"
+            "[%s] Pass 3 combine/embed failed (rc=%s): %s",
+            with_overlay_path.name,
+            result.returncode,
+            result.stderr.strip(),
         )
+        logger.debug("Pass 3 command: %s", " ".join(cmd))
         return False
 
     # Verify final output exists
@@ -770,23 +722,11 @@ def _pass3_combine_and_embed(
     if verify_result.returncode == 0:
         streams = verify_result.stdout.strip().split("\n")
         stream_count = len(streams)
-        logger.debug(
-            f"[{with_overlay_path.name}] Final output has {stream_count} video streams"
-        )
-        for idx, stream_info in enumerate(streams):
-            track_label = "With Overlay (default)" if idx == 0 else "Original"
-            logger.debug(
-                f"[{with_overlay_path.name}]   Stream {idx} ({track_label}): {stream_info}"
-            )
-
         if stream_count != 2:
             logger.warning(
-                f"[{with_overlay_path.name}] Expected 2 video streams, got {stream_count}"
+                "[%s] Expected 2 video streams, got %s", with_overlay_path.name, stream_count
             )
 
-    logger.debug(
-        f"[{with_overlay_path.name}] Pass 3 complete - saved to {output_path.name}"
-    )
     return True
 
 
@@ -808,8 +748,11 @@ def create_image_with_overlay(
     try:
         # Check if overlay file exists before attempting to open
         if not overlay_path.exists():
-            logger.warning(f"Overlay file does not exist: {overlay_path}")
-            return False
+            logger.warning(
+                f"Overlay file missing: {overlay_path} - emitting base image only"
+            )
+            copy_file(image_path, output_path)
+            return True
 
         # Open the base image
         with Image.open(image_path) as base_img:
@@ -858,11 +801,15 @@ def create_image_with_overlay(
                 logger.error(
                     f"Cannot open overlay file (possibly corrupted): {overlay_path}: {e}"
                 )
-                return False
+                raise OverlayProcessingError(
+                    f"Overlay decode failed for {overlay_path}: {e}"
+                )
 
+    except OverlayProcessingError:
+        raise
     except Exception as e:  # noqa: BLE001
         logger.error(f"Error creating image with overlay: {e}")
-        return False
+        raise OverlayProcessingError(str(e))
 
 
 def create_video_with_overlay(
@@ -908,8 +855,6 @@ def create_video_with_overlay(
     temp_files = []  # Track all temp files for cleanup
 
     try:
-        logger.debug(f"[{video_path.name}] Starting multi-pass video processing")
-
         # Get all video metadata in single FFprobe call (rotation, dimensions, bitrate)
         video_meta = get_video_metadata(video_path)
         if video_meta is None:
@@ -939,6 +884,9 @@ def create_video_with_overlay(
                 original_bitrate,
             )
             temp_files.append(with_overlay_path)
+        except OverlayProcessingError:
+            # Re-raise overlay errors for soft-fail tracking per policy G
+            raise
         except Exception as e:
             logger.error(f"[{video_path.name}] Pass 2 failed: {e}")
             return False
@@ -960,9 +908,25 @@ def create_video_with_overlay(
             logger.error(f"[{video_path.name}] Pass 3 failed: {e}")
             return False
 
-        logger.debug(f"[{video_path.name}] Multi-pass processing complete")
+        summary_bitrate = original_bitrate or video_meta.bitrate
+        logger.debug(
+            "proc=overlay video=%s rotate=%s dims=%sx%s->%sx%s bitrate=%s encoder=%s overlay=%s out=%s",
+            video_path.name,
+            video_meta.rotation or 0,
+            video_meta.width or "?",
+            video_meta.height or "?",
+            final_width,
+            final_height,
+            summary_bitrate if summary_bitrate is not None else "n/a",
+            get_encoder_name(),
+            overlay_path.name,
+            output_path.name,
+        )
         return True
 
+    except OverlayProcessingError:
+        # Re-raise overlay errors for soft-fail tracking per policy G
+        raise
     except Exception as e:
         logger.error(f"[{video_path.name}] Unexpected error during processing: {e}")
         return False
@@ -972,9 +936,6 @@ def create_video_with_overlay(
             try:
                 if temp_file.exists():
                     temp_file.unlink()
-                    logger.debug(
-                        f"[{video_path.name}] Cleaned up temp file: {temp_file.name}"
-                    )
             except Exception as e:
                 logger.warning(
                     f"[{video_path.name}] Failed to clean up {temp_file.name}: {e}"

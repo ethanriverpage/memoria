@@ -12,7 +12,11 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.dedup.service import is_file_primary_by_hash
+from common.dedup.service import (
+    get_canonical_timestamp,
+    save_dedup_metadata,
+)
+from common.failure_tracker import FailureTracker
 from common.dedup.description import (
     SourceEntry,
     build_source_line,
@@ -33,11 +37,11 @@ from common.output.progress import PHASE_PROCESS, progress_bar
 from common.utils import (
     default_worker_count,
     FilenameGenerator,
-    sanitize_filename,
     update_file_timestamps,
 )
 from common.output.logging import get_processor_logger
 from common.output.paths import OutputInfo
+from common.files.utils import short_path
 from processors.base import ProcessorBase
 from processors.imessage.preprocess import IMessagePreprocessor
 
@@ -182,7 +186,7 @@ class IMessageProcessor(ProcessorBase):
 
         Args:
             input_dir: Path to preprocessed input directory
-            **kwargs: Additional arguments (verbose, workers)
+            **kwargs: Additional arguments (workers)
 
         Yields:
             Catalog entries with processor name and file data.
@@ -233,7 +237,7 @@ class IMessageProcessor(ProcessorBase):
             input_dirs: List of paths to iMessage export directories
             output_dir: Base output directory
             dedup_manifest: Optional deduplication manifest
-            **kwargs: Additional arguments (verbose, workers, temp_dir)
+            **kwargs: Additional arguments (workers, temp_dir)
 
         Returns:
             True if processing succeeded, False otherwise
@@ -247,7 +251,6 @@ class IMessageProcessor(ProcessorBase):
         return process_logic(
             input_dirs=input_dirs,
             output_dir=processor_output,
-            verbose=kwargs.get("verbose", False),
             workers=kwargs.get("workers"),
             dedup_manifest=dedup_manifest,
         )
@@ -269,7 +272,7 @@ class IMessageProcessor(ProcessorBase):
             input_dir: Path to input directory
             output_dir: Optional base output directory
             dedup_manifest: Optional deduplication manifest
-            **kwargs: Additional arguments (verbose, workers, temp_dir)
+            **kwargs: Additional arguments (workers, temp_dir)
 
         Returns:
             True if processing succeeded, False otherwise
@@ -488,7 +491,8 @@ def _build_metadata_requests(
 
         # Build datetime tags (iMessage format: "YYYY-MM-DD HH:MM:SS UTC")
         date_str = (
-            message.get("primary_created") if is_merged else message.get("created")
+            message.get("canonical_timestamp")
+            or (message.get("primary_created") if is_merged else message.get("created"))
         )
         datetime_tags = build_datetime_tags(date_str, strip_utc=True)
 
@@ -564,45 +568,6 @@ def build_filename_index(metadata: dict) -> dict:
     )
 
 
-def _build_imessage_identifier(message: dict) -> str:
-    """Build identifier for iMessage filename (policy only).
-
-    Determines the conversation part of the filename:
-    - Merged: "merged"
-    - Group: sanitized group title
-    - DM: sanitized contact ID
-    - Unknown: "unknown"
-
-    Args:
-        message: Message metadata dict
-
-    Returns:
-        Identifier string for use in filename (truncated to 30 chars)
-    """
-    is_merged = "messages" in message and isinstance(message["messages"], list)
-
-    if is_merged:
-        return "merged"
-
-    conv_type = message.get("conversation_type")
-    conv_id = message.get("conversation_id", "")
-    conv_title = message.get("conversation_title")
-
-    if conv_type == "group" and conv_title:
-        conv_prefix = sanitize_filename(conv_title)
-    elif conv_id:
-        # For DMs, use the contact identifier
-        conv_prefix = sanitize_filename(conv_id)
-    else:
-        conv_prefix = "unknown"
-
-    # Truncate if too long
-    if len(conv_prefix) > 30:
-        conv_prefix = conv_prefix[:30]
-
-    return conv_prefix
-
-
 def _extract_message_timestamp(message: dict) -> str | None:
     """Extract timestamp string from iMessage message metadata.
 
@@ -661,7 +626,7 @@ def _process_file_worker(args_tuple):
         )
 
     except Exception as e:
-        logger.error(f"Error processing {media_path.name}: {e}")
+        logger.error("Error processing %s: %s", media_path.name, e)
         return (
             False,
             None,
@@ -680,7 +645,6 @@ def _process_file_worker(args_tuple):
 def process_logic(
     input_dirs: List[str],
     output_dir: Optional[str] = None,
-    verbose: bool = False,  # noqa: ARG001 - Reserved for future detailed logging
     workers: Optional[int] = None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ) -> bool:
@@ -692,7 +656,6 @@ def process_logic(
     Args:
         input_dirs: List containing a single preprocessed input directory
         output_dir: Output directory for processed files (final path, no subdirs created)
-        verbose: Enable verbose logging
         workers: Number of parallel workers
         dedup_manifest: Optional deduplication manifest for filtering secondary files
 
@@ -703,8 +666,7 @@ def process_logic(
     if not IMessageProcessor.check_dependencies():
         return False
 
-    logger.info("iMessage Processor")
-    logger.info("=" * 50)
+    log.processor_start("iMessage Processor")
 
     # Convert to paths
     input_paths = [Path(d) for d in input_dirs]
@@ -728,7 +690,7 @@ def process_logic(
         )
         return False
 
-    logger.info(f"Processing preprocessed export: {working_dir}")
+    logger.info("Processing preprocessed export: %s", short_path(working_dir))
 
     # Determine output directory (use as-is, subdirectory created by caller)
     if output_dir:
@@ -764,30 +726,47 @@ def _process_working_directory(
     metadata_file = working_dir / "metadata.json"
 
     if not metadata_file.exists():
-        logger.error(f"Metadata file not found: {metadata_file}")
+        logger.error("Metadata file not found: %s", short_path(metadata_file))
         return False
 
-    logger.info(f"Loading metadata from {metadata_file}...")
+    log.loading_metadata(short_path(metadata_file))
     metadata = IMessageProcessor.load_metadata(
-        metadata_file, validate=True, require_source_paths=True
+        metadata_file,
+        validate=True,
+        require_source_paths=True,
+        processor_name="iMessage",
     )
 
-    export_username = metadata.get("export_info", {}).get("export_username", "unknown")
-    logger.info(f"Export identifier: {export_username}")
+    export_info = metadata.get("export_info", {})
+    export_username = export_info.get("export_username")
+    log.export_username(export_username)
+
+    # Initialize failure tracker for this export
+    failure_tracker = FailureTracker(
+        processor_name="iMessage",
+        export_directory=str(working_dir),
+    )
 
     # Build filename index
     filename_index = build_filename_index(metadata)
-    logger.info(f"Found {len(filename_index)} media files to process")
+    log.found_files(len(filename_index), "media")
 
     # Filter out secondary files based on dedup manifest (using hash-based lookup)
     # Use cached file_hashes from preprocessing when available to avoid re-hashing
     file_hashes = metadata.get("file_hashes", {})
     skipped_dedup = 0
+    skipped_secondary_files: list[str] = []
+    missing_source_path = 0
+    missing_path_examples: list[str] = []
+    missing_file_count = 0
+    missing_file_examples: list[str] = []
 
     # Match files to messages and pre-generate filenames
-    logger.info("Matching files and generating filenames...")
+    log.generating_filenames()
     filename_gen = FilenameGenerator(
-        "imessage", timestamp_format="%Y-%m-%d %H:%M:%S UTC"
+        "imessage",
+        export_username,
+        timestamp_format="%Y-%m-%d %H:%M:%S UTC",
     )
     matched_files = []
 
@@ -797,51 +776,66 @@ def _process_working_directory(
         source_paths = message.get("source_paths", {})
         source_path_str = source_paths.get(media_filename)
         if not source_path_str:
-            logger.warning(f"No source_path for file: {media_filename}")
+            missing_source_path += 1
+            if len(missing_path_examples) < 5:
+                missing_path_examples.append(media_filename)
             continue
 
         source_path = Path(source_path_str)
         if not source_path.exists():
-            logger.warning(f"Source file not found: {source_path}")
+            missing_file_count += 1
+            if len(missing_file_examples) < 5:
+                missing_file_examples.append(short_path(source_path))
             continue
 
         # Dedup filtering
-        if dedup_manifest:
-            content_hash = file_hashes.get(media_filename)
-            if content_hash:
-                # Pass source_path for within-processor dedup (e.g., same file
-                # in multiple iMessage exports from different devices)
-                if not is_file_primary_by_hash(
-                    dedup_manifest, content_hash, "iMessage", source_path_str
-                ):
-                    skipped_dedup += 1
-                    continue
-            else:
-                if IMessageProcessor.should_skip_for_dedup(
-                    str(source_path), dedup_manifest, "iMessage"
-                ):
-                    skipped_dedup += 1
-                    continue
+        content_hash = file_hashes.get(media_filename)
+        if IMessageProcessor.should_skip_for_dedup(
+            dedup_manifest, content_hash, "iMessage", source_path_str
+        ):
+            skipped_dedup += 1
+            skipped_secondary_files.append(source_path_str)
+            continue
 
         file_ext = source_path.suffix.lower()
-        identifier = _build_imessage_identifier(message)
         timestamp = _extract_message_timestamp(message)
-        output_filename = filename_gen.generate(timestamp, identifier, file_ext)
-        # Get content_hash for EXIF metadata
-        content_hash = file_hashes.get(media_filename)
+        canonical_ts = get_canonical_timestamp(dedup_manifest, content_hash, timestamp)
+        message["canonical_timestamp"] = canonical_ts
+        output_filename = filename_gen.generate(canonical_ts, file_ext)
         matched_files.append((source_path, message, output_filename, content_hash))
 
     if skipped_dedup > 0:
-        logger.info(f"Skipped {skipped_dedup} secondary files (dedup)")
+        log.skipped_secondary(skipped_dedup)
+    if missing_source_path > 0:
+        logger.info(
+            "Missing source_path for %d files (e.g. %s)",
+            missing_source_path,
+            ", ".join(missing_path_examples),
+        )
+    if missing_file_count > 0:
+        logger.info(
+            "Source file not found for %d files (e.g. %s)",
+            missing_file_count,
+            ", ".join(missing_file_examples),
+        )
 
-    logger.info(f"Matched {len(matched_files)} files")
+    log.matched_files(len(matched_files))
+
+    # Check for no media files (export-level soft-fail)
+    if not matched_files:
+        log.logger.warning("No media files found to process.")
+        failure_tracker.add_export_failure(
+            reason="no_media_files",
+            error_details="No media files found in export to process",
+        )
+        failure_tracker.handle_failures(output_dir)
+        return False
 
     # Process files
-    logger.info("Processing files to %s/", output_dir)
-    logger.info("=" * 50)
+    log.processing_start(str(output_dir))
 
     num_workers = workers if workers is not None else default_worker_count()
-    logger.info(f"Using {num_workers} workers")
+    log.using_workers(num_workers)
 
     # Prepare arguments (include content_hash and original_filename for EXIF)
     process_args = [
@@ -886,21 +880,41 @@ def _process_working_directory(
 
     collected = IMessageProcessor.collect_processing_results(results, extract_info)
 
-    logger.info(
-        f"Copied {collected.success_count} files ({collected.failed_count} failed)"
-    )
+    log.copied_files(collected.success_count, collected.failed_count)
 
     # Phase 2: Correct file extensions and batch process EXIF metadata
-    logger.info("Batch processing EXIF metadata...")
+    log.exif_batch_start()
+
+    # Build metadata lookup for failure tracking
+    file_info_map = {info[0]: info for info in collected.file_info}
+
+    def metadata_for_file(file_path: str) -> Optional[dict]:
+        info = file_info_map.get(file_path)
+        return info[1] if info else None  # info[1] is message
+
     file_paths, file_info, exif_rebuilt_count = IMessageProcessor.finalize_files(
         collected.file_paths,
         collected.file_info,
         _build_metadata_requests,
         dedup_manifest,
         path_index=0,
+        failure_tracker=failure_tracker,
+        metadata_for_file=metadata_for_file,
     )
     if file_paths:
-        logger.info(f"EXIF metadata written for {len(file_info)} files")
+        log.exif_written(len(file_info))
+
+    # Handle failures - move failed outputs and generate report
+    failure_tracker.handle_failures(output_dir)
+
+    # Save dedup references for skipped secondary files
+    if dedup_manifest and skipped_secondary_files:
+        save_dedup_metadata(
+            manifest=dedup_manifest,
+            skipped_files=skipped_secondary_files,
+            processor_name="iMessage",
+            output_dir=output_dir,
+        )
 
     # Print summary using shared utility
     print_processing_summary(

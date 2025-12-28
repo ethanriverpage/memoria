@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 from common.detection import resolve_username, DetectionResult
+from common.files.scanner import iter_media_files
 from common.preprocess.context_mergers import merge_imessage_context
-from common.processing import print_preprocessing_stats
+from common.processing import print_preprocessing_stats, process_parallel_threaded
 from common.output.progress import PHASE_PREPROCESS, progress_bar
 from common.utils import get_media_type
 from common.output.logging import get_processor_logger
@@ -701,7 +702,7 @@ class IMessagePreprocessor(PreprocessorBase):
         conn.close()
 
         if attachments_not_found > 0:
-            logger.debug(f"Attachments not found: {attachments_not_found}")
+            logger.debug("Attachments not found: %d", attachments_not_found)
 
         return attachments
 
@@ -902,19 +903,15 @@ class IMessagePreprocessor(PreprocessorBase):
             if not attachments_dir:
                 continue
 
-            # Scan for all media files
-            for file_path in attachments_dir.rglob("*"):
-                if not file_path.is_file():
-                    continue
-
-                # Skip non-media files
-                if not get_media_type(str(file_path)):
-                    continue
-
-                # Skip banned files
-                if self.banned_filter.is_banned(file_path):
-                    continue
-
+            # Scan for all media files using shared scanner
+            for file_path in iter_media_files(
+                attachments_dir,
+                banned_filter=self.banned_filter,
+                skip_hidden=True,
+                skip_overlays=False,  # iMessage doesn't have overlay concept
+                skip_thumbnails=False,  # iMessage doesn't have thumbnail files
+                recursive=True,
+            ):
                 # Check if this file was processed from the database
                 resolved_path = file_path.resolve()
                 if resolved_path not in processed_paths:
@@ -946,7 +943,7 @@ class IMessagePreprocessor(PreprocessorBase):
                     orphaned_media.append(orphaned_entry)
 
         if orphaned_count > 0:
-            logger.info(f"Found {orphaned_count} orphaned media files")
+            logger.info("Found %d orphaned media files", orphaned_count)
 
         return orphaned_media
 
@@ -976,31 +973,47 @@ class IMessagePreprocessor(PreprocessorBase):
         Returns:
             True if processing succeeded, False otherwise
         """
-        # Phase 1: Load all contacts
+        # Phase 1: Load all contacts (sequential - fast, shared state)
         for export_path in progress_bar(
-            self.export_paths, PHASE_PREPROCESS, "Loading contacts", unit="export"
+            self.export_paths, PHASE_PREPROCESS, "Loading contacts"
         ):
             vcf_path = self._find_contacts_vcf(export_path)
             if vcf_path:
                 self._merge_contacts(vcf_path)
 
-        logger.info(f"Loaded {self.stats['contacts_loaded']} contact handles")
+        logger.info("Loaded %d contact handles", self.stats["contacts_loaded"])
 
-        # Phase 2: Query all databases
+        # Phase 2: Query all databases in parallel
+        logger.info(
+            "Querying %d databases (using %d workers)...",
+            len(self.export_paths),
+            self.workers,
+        )
+
+        def query_with_path(export_path: Path) -> Tuple[Path, List[Dict]]:
+            """Wrapper to include export_path in result for tracking."""
+            attachments = self._query_attachments(export_path)
+            return (export_path, attachments)
+
+        results = process_parallel_threaded(
+            tasks=list(self.export_paths),
+            worker_fn=query_with_path,
+            workers=self.workers,
+            phase=PHASE_PREPROCESS,
+            description="Querying databases",
+            task_id_fn=lambda p: p.name,
+            on_error=lambda tid, e: logger.error("Failed to query %s: %s", tid, e),
+        )
+
+        # Collect attachments from successful queries
         all_attachments = []
-        for export_path in progress_bar(
-            self.export_paths, PHASE_PREPROCESS, "Querying databases", unit="export"
-        ):
-            try:
-                attachments = self._query_attachments(export_path)
-                all_attachments.extend(attachments)
+        for export_path, attachments in results:
+            all_attachments.extend(attachments)
+            with self.stats_lock:
                 self.stats["exports_processed"] += 1
-            except Exception as e:
-                logger.error(f"Failed to query {export_path}: {e}")
-                continue
 
         self.stats["total_attachments"] = len(all_attachments)
-        logger.info(f"Found {len(all_attachments)} total attachments")
+        logger.info("Found %d total attachments", len(all_attachments))
 
         if not all_attachments:
             logger.warning("No attachments found to process")

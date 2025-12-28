@@ -18,7 +18,11 @@ from common.dedup.description import (
     build_description,
     PLATFORM_DISCORD,
 )
-from common.dedup.service import is_file_primary_by_hash, save_dedup_metadata
+from common.dedup.service import (
+    get_canonical_timestamp,
+    save_dedup_metadata,
+)
+from common.failure_tracker import FailureTracker
 from common.files.utils import copy_file
 from common.media.exiftool import (
     DEFAULT_PREAMBLE,
@@ -34,9 +38,9 @@ from common.utils import (
     FilenameGenerator,
     get_media_type,
     is_preprocessed_directory,
-    sanitize_filename,
     update_file_timestamps,
 )
+from common.files.utils import short_path
 from common.output.paths import OutputInfo
 from processors.base import ProcessorBase
 from processors.discord.preprocess import DiscordPreprocessor
@@ -226,7 +230,6 @@ class DiscordProcessor(ProcessorBase):
             process_logic(
                 input_dir=input_dir,
                 output_dir=processor_output,
-                verbose=kwargs.get("verbose", False),
                 workers=kwargs.get("workers"),
                 dedup_manifest=dedup_manifest,
             )
@@ -303,9 +306,10 @@ def _build_metadata_requests(
         message = message_info.get("message", {})
 
         # Build datetime tags (Discord format: "YYYY-MM-DD HH:MM:SS UTC")
-        datetime_tags = build_datetime_tags(
-            message.get("timestamp", ""), strip_utc=True
+        canonical_ts = message.get("canonical_timestamp") or message.get(
+            "timestamp", ""
         )
+        datetime_tags = build_datetime_tags(canonical_ts, strip_utc=True)
 
         # Build description
         default_description = _build_description(message_info, export_username)
@@ -347,35 +351,6 @@ def build_filename_index(metadata: dict) -> Dict[str, dict]:
     )
 
 
-def _build_discord_identifier(message_info: dict, export_username: str) -> str:
-    """Build identifier for Discord filename based on channel type."""
-    channel_title = message_info.get("channel_title", "unknown")
-    channel_type = message_info.get("channel_type", "unknown")
-
-    # Sanitize channel title for filename
-    if channel_type == "dm":
-        # Extract username from DM title if possible
-        # Format: "Direct Message with username#0"
-        match = re.search(r"Direct Message with (.+?)(?:#\d+)?$", channel_title)
-        if match:
-            channel_part = sanitize_filename(match.group(1))
-        else:
-            channel_part = "dm"
-    elif channel_type == "group_dm":
-        channel_part = "group"
-    else:
-        # Server channel - use channel name
-        channel_part = sanitize_filename(
-            channel_title.split(" in ")[0] if " in " in channel_title else channel_title
-        )
-
-    # Truncate channel part if too long
-    if len(channel_part) > 30:
-        channel_part = channel_part[:30]
-
-    return f"{export_username}-{channel_part}"
-
-
 def _process_file_worker(args_tuple):
     """Worker function for processing individual files."""
     (
@@ -395,7 +370,9 @@ def _process_file_worker(args_tuple):
         copy_file(media_path, output_path)
 
         # Update filesystem timestamps - Discord uses "YYYY-MM-DD HH:MM:SS UTC" format
-        timestamp_str = message_info["message"].get("timestamp", "")
+        timestamp_str = message_info["message"].get(
+            "canonical_timestamp"
+        ) or message_info["message"].get("timestamp", "")
         if timestamp_str:
             update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
 
@@ -409,7 +386,7 @@ def _process_file_worker(args_tuple):
         )
 
     except Exception as e:
-        logger.error(f"Error processing {media_path.name}: {e}")
+        logger.error("Error processing %s: %s", media_path.name, e)
         return (
             False,
             None,
@@ -423,7 +400,6 @@ def _process_file_worker(args_tuple):
 def process_logic(
     input_dir: str,
     output_dir: str = "processed_discord",
-    verbose: bool = False,  # noqa: ARG001
     workers: Optional[int] = None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ):
@@ -477,11 +453,21 @@ def _process_working_directory(
     # Load metadata
     log.loading_metadata(str(metadata_file))
     metadata = DiscordProcessor.load_metadata(
-        metadata_file, validate=True, require_source_paths=True
+        metadata_file,
+        validate=True,
+        require_source_paths=True,
+        processor_name="Discord",
     )
 
-    export_username = metadata.get("export_info", {}).get("export_username", "unknown")
+    export_info = metadata.get("export_info", {})
+    export_username = export_info.get("export_username")
     log.export_username(export_username)
+
+    # Initialize failure tracker for this export
+    failure_tracker = FailureTracker(
+        processor_name="Discord",
+        export_directory=str(working_dir),
+    )
 
     # Build filename index
     log.building_index("filename")
@@ -491,6 +477,8 @@ def _process_working_directory(
     # Build list of media files from source_paths in metadata
     log.logger.info("Collecting media files from source_path entries...")
     media_files = []
+    invalid_sources = 0
+    invalid_examples: list[str] = []
     for filename, info in filename_index.items():
         message = info.get("message", {})
         source_paths = message.get("source_paths", {})
@@ -500,11 +488,18 @@ def _process_working_directory(
             if source_path.exists() and get_media_type(source_path):
                 media_files.append(source_path)
             else:
-                logger.warning("Source file not found or not media: %s", source_path)
+                invalid_sources += 1
+                if len(invalid_examples) < 5:
+                    invalid_examples.append(short_path(source_path))
+    if invalid_sources:
+        logger.warning(
+            "Source file missing or not media for %d entries (e.g. %s)",
+            invalid_sources,
+            ", ".join(invalid_examples),
+        )
     log.found_files(len(media_files), "media")
 
     # Filter out secondary files based on dedup manifest (using hash-based lookup)
-    # Use cached file_hashes from preprocessing when available to avoid re-hashing
     file_hashes = metadata.get("file_hashes", {})
     skipped_secondary_files = []
     if dedup_manifest:
@@ -512,31 +507,25 @@ def _process_working_directory(
         filtered_files = []
         for f in media_files:
             content_hash = file_hashes.get(f.name)
-            # Pass source_path for within-processor dedup
             source_path_str = str(f)
-            if content_hash:
-                # Use cached hash from preprocessing (avoids re-hashing)
-                if is_file_primary_by_hash(
-                    dedup_manifest, content_hash, "Discord", source_path_str
-                ):
-                    filtered_files.append(f)
-                else:
-                    skipped_secondary_files.append(str(f))
+            if DiscordProcessor.should_skip_for_dedup(
+                dedup_manifest, content_hash, "Discord", source_path_str
+            ):
+                skipped_secondary_files.append(str(f))
             else:
-                # Fallback for files without cached hash
-                if DiscordProcessor.should_skip_for_dedup(
-                    str(f), dedup_manifest, "Discord"
-                ):
-                    skipped_secondary_files.append(str(f))
-                else:
-                    filtered_files.append(f)
+                filtered_files.append(f)
         media_files = filtered_files
         skipped_count = original_count - len(media_files)
         log.skipped_secondary(skipped_count)
 
     if not media_files:
         log.logger.warning("No media files found to process.")
-        return
+        failure_tracker.add_export_failure(
+            reason="no_media_files",
+            error_details="No media files found in export to process",
+        )
+        failure_tracker.handle_failures(output_dir)
+        return False
 
     # Create output directory (subdirectory already set by caller)
     output_dir.mkdir(exist_ok=True, parents=True)
@@ -545,20 +534,27 @@ def _process_working_directory(
     log.logger.info("Matching files to metadata...")
     matched_files = []
     unmatched_files = []
-    filename_gen = FilenameGenerator("discord", timestamp_format="%Y-%m-%d %H:%M:%S")
+    filename_gen = FilenameGenerator(
+        "discord", export_username, timestamp_format="%Y-%m-%d %H:%M:%S"
+    )
 
     for media_file in media_files:
         if media_file.name in filename_index:
             message_info = filename_index[media_file.name]
-            # Build identifier (policy) and delegate to FilenameGenerator (mechanism)
+            # Generate output filename from timestamp (FilenameGenerator handles date + uniqueness)
             ext = media_file.suffix.lower()
-            identifier = _build_discord_identifier(message_info, export_username)
             timestamp = message_info["message"].get("timestamp", "")
             # Remove " UTC" suffix for parsing
             timestamp_clean = timestamp.replace(" UTC", "").strip() if timestamp else ""
-            output_filename = filename_gen.generate(timestamp_clean, identifier, ext)
             # Get content_hash from preprocessing
             content_hash = file_hashes.get(media_file.name)
+            canonical_ts = get_canonical_timestamp(
+                dedup_manifest, content_hash, timestamp_clean
+            )
+            message_info["message"]["canonical_timestamp"] = canonical_ts
+            output_filename = filename_gen.generate(
+                canonical_ts or timestamp_clean, ext
+            )
             matched_files.append(
                 (media_file, message_info, output_filename, content_hash)
             )
@@ -627,25 +623,36 @@ def _process_working_directory(
 
     # Correct file extensions and batch process EXIF metadata
     log.exif_batch_start()
+
+    # Build metadata lookup for failure tracking
+    def metadata_for_file(file_path: str) -> Optional[dict]:
+        # file_info tuples: (output_path, message_info, exp_username, hash, original_filename)
+        for info in collected.file_info:
+            if info[0] == file_path:
+                return info[1].get("message") if isinstance(info[1], dict) else None
+        return None
+
     _, _, exif_rebuilt_count = DiscordProcessor.finalize_files(
         collected.file_paths,
         collected.file_info,
         _build_metadata_requests,
         dedup_manifest,
         path_index=0,
+        failure_tracker=failure_tracker,
+        metadata_for_file=metadata_for_file,
     )
 
-    # Handle unmatched files
+    # Handle unmatched files via FailureTracker
     if unmatched_files:
         log.logger.info("Processing %d unmatched files...", len(unmatched_files))
-        failed_matching_dir = output_dir / "issues" / "failed-matching" / "media"
-        failed_matching_dir.mkdir(exist_ok=True, parents=True)
-
         for media_file in unmatched_files:
-            try:
-                copy_file(media_file, failed_matching_dir / media_file.name)
-            except Exception as e:
-                log.copy_error(media_file.name, e)
+            failure_tracker.add_orphaned_media(
+                source_path=media_file,
+                reason="No matching metadata found",
+            )
+
+    # Handle failures - copy orphaned files and generate report
+    failure_tracker.handle_failures(output_dir)
 
     # Save dedup references for skipped secondary files
     if dedup_manifest and skipped_secondary_files:
@@ -670,6 +677,5 @@ def _process_working_directory(
 
     if unmatched_files:
         log.logger.info(
-            "Unmatched files saved to: %s",
-            (output_dir / "issues" / "failed-matching" / "media").absolute(),
+            "Unmatched files were tracked via FailureTracker (see issues/failure-report.json)."
         )

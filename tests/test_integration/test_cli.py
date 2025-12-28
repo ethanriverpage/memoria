@@ -106,8 +106,7 @@ class TestCLIDetection:
         export_dir = tmp_path / "snapchat_export"
         create_snapchat_memories_export(export_dir)
 
-        # Snapchat Memories is a raw processor (doesn't use preprocessing),
-        # so cross-processor dedup needs to be disabled for detection test
+        # Disable cross-processor dedup for faster detection-only test
         env = os.environ.copy()
         env["CROSS_PROCESSOR_DEDUP"] = "false"
 

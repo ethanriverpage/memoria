@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Integration tests for cross-processor deduplication workflow."""
 
+import json
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -11,9 +12,7 @@ from common.dedup.config import DedupConfig, reset_config
 from common.dedup.service import (
     DeduplicationService,
     save_manifest,
-    load_manifest,
     get_merged_description_for_file,
-    is_file_primary,
     is_file_primary_by_hash,
     build_dedup_references,
 )
@@ -22,6 +21,37 @@ from common.dedup.hashing import (
     is_live_photo_pair,
     find_live_photo_video,
 )
+
+
+def write_catalogs_to_db(db: HashDatabase, run_id: str, catalogs: list) -> None:
+    """Write catalog entries to the database for testing analyze_from_db.
+
+    This helper prepares catalog entries with the _processor field set
+    and writes them to the database in the format expected by analyze_from_db.
+
+    Args:
+        db: HashDatabase instance.
+        run_id: Run identifier for this test.
+        catalogs: List of catalog dictionaries (same format as analyze() took).
+    """
+    for catalog in catalogs:
+        processor = catalog.get("processor", "Unknown")
+        export_name = catalog.get("input_dir", "export")
+        entries = []
+        for file_entry in catalog.get("files", []):
+            entry = dict(file_entry)
+            entry["_processor"] = processor
+            # Preserve live_photo_video in metadata for database round-trip
+            if "live_photo_video" in entry:
+                metadata = entry.get("metadata", {})
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata = dict(metadata)
+                metadata["live_photo_video"] = entry["live_photo_video"]
+                entry["metadata"] = metadata
+            entries.append(entry)
+        if entries:
+            db.write_catalog_entries_batch(run_id, export_name, entries)
 
 
 @pytest.fixture(autouse=True)
@@ -131,8 +161,10 @@ class TestEndToEndWorkflow:
         db = HashDatabase(db_path)
         service = DeduplicationService(db=db, config=config)
 
-        # Phase 1: Analyze catalogs
-        manifest = service.analyze(mock_catalogs)
+        # Phase 1: Write catalogs to DB and analyze
+        run_id = "test_full_workflow"
+        write_catalogs_to_db(db, run_id, mock_catalogs)
+        manifest = service.analyze_from_db(run_id)
 
         # Verify manifest structure
         assert manifest["version"] == "1.0"
@@ -179,7 +211,8 @@ class TestEndToEndWorkflow:
         save_manifest(manifest, manifest_path)
         assert manifest_path.exists()
 
-        loaded_manifest = load_manifest(manifest_path)
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            loaded_manifest = json.load(f)
         assert loaded_manifest["version"] == manifest["version"]
         assert loaded_manifest["statistics"] == manifest["statistics"]
 
@@ -191,7 +224,9 @@ class TestEndToEndWorkflow:
         # First session
         db1 = HashDatabase(db_path)
         service1 = DeduplicationService(db=db1, config=config)
-        service1.analyze(mock_catalogs)
+        run_id = "test_persistence"
+        write_catalogs_to_db(db1, run_id, mock_catalogs)
+        service1.analyze_from_db(run_id)
 
         stats1 = db1.get_statistics()
         assert stats1["total_files"] == 4
@@ -209,13 +244,17 @@ class TestEndToEndWorkflow:
         # Initial analysis
         db = HashDatabase(db_path)
         service = DeduplicationService(db=db, config=config)
-        service.analyze(mock_catalogs[:1])  # Just Google Photos
+        run_id1 = "test_incremental_1"
+        write_catalogs_to_db(db, run_id1, mock_catalogs[:1])  # Just Google Photos
+        service.analyze_from_db(run_id1)
 
         stats1 = db.get_statistics()
         assert stats1["total_files"] == 2
 
         # Add more catalogs
-        service.analyze(mock_catalogs[1:])  # iMessage + Instagram
+        run_id2 = "test_incremental_2"
+        write_catalogs_to_db(db, run_id2, mock_catalogs[1:])  # iMessage + Instagram
+        service.analyze_from_db(run_id2)
 
         stats2 = db.get_statistics()
         assert stats2["total_files"] == 4
@@ -227,7 +266,9 @@ class TestEndToEndWorkflow:
         db = HashDatabase(db_path)
         service = DeduplicationService(db=db, config=config)
 
-        manifest = service.analyze(mock_catalogs)
+        run_id = "test_space_savings"
+        write_catalogs_to_db(db, run_id, mock_catalogs)
+        manifest = service.analyze_from_db(run_id)
 
         # Space saved should be: best_file_size * (num_duplicates)
         # For abc123: 1000000 * 2 = 2000000 bytes
@@ -281,9 +322,11 @@ class TestErrorHandling:
         db = HashDatabase(db_path)
         service = DeduplicationService(db=db, config=config)
 
-        manifest = service.analyze(
-            [{"processor": "Test", "input_dir": "/test", "files": []}]
+        run_id = "test_empty_catalog"
+        write_catalogs_to_db(
+            db, run_id, [{"processor": "Test", "input_dir": "/test", "files": []}]
         )
+        manifest = service.analyze_from_db(run_id)
 
         assert manifest["statistics"]["total_files_scanned"] == 0
         assert manifest["duplicates"] == {}
@@ -309,13 +352,10 @@ class TestErrorHandling:
         }
 
         # Should not raise exception
-        manifest = service.analyze([minimal_catalog])
+        run_id = "test_missing_fields"
+        write_catalogs_to_db(db, run_id, [minimal_catalog])
+        manifest = service.analyze_from_db(run_id)
         assert manifest["statistics"]["total_files_scanned"] == 1
-
-    def test_invalid_manifest_path(self):
-        """Test load_manifest with non-existent file."""
-        with pytest.raises(FileNotFoundError):
-            load_manifest(Path("/nonexistent/path/manifest.json"))
 
 
 class TestMergedDescriptionIntegration:
@@ -328,7 +368,9 @@ class TestMergedDescriptionIntegration:
         db = HashDatabase(db_path)
         service = DeduplicationService(db=db, config=config)
 
-        manifest = service.analyze(mock_catalogs)
+        run_id = "test_merged_desc_sources"
+        write_catalogs_to_db(db, run_id, mock_catalogs)
+        manifest = service.analyze_from_db(run_id)
 
         # Get the primary file's merged description
         primary_path = manifest["duplicates"]["abc123"]["primary"]["source_path"]
@@ -346,7 +388,9 @@ class TestMergedDescriptionIntegration:
         db = HashDatabase(db_path)
         service = DeduplicationService(db=db, config=config)
 
-        manifest = service.analyze(mock_catalogs)
+        run_id = "test_desc_context"
+        write_catalogs_to_db(db, run_id, mock_catalogs)
+        manifest = service.analyze_from_db(run_id)
 
         primary_path = manifest["duplicates"]["abc123"]["primary"]["source_path"]
         desc = get_merged_description_for_file(manifest, primary_path)
@@ -367,7 +411,9 @@ class TestSecondaryReferencesIntegration:
         db = HashDatabase(db_path)
         service = DeduplicationService(db=db, config=config)
 
-        manifest = service.analyze(mock_catalogs)
+        run_id = "test_build_refs"
+        write_catalogs_to_db(db, run_id, mock_catalogs)
+        manifest = service.analyze_from_db(run_id)
 
         # Identify secondary files
         skipped = []
@@ -388,24 +434,6 @@ class TestSecondaryReferencesIntegration:
             assert "canonical_location" in ref
             assert "canonical_processor" in ref
 
-    def test_is_file_primary_integration(self, temp_dir, mock_catalogs):
-        """Test is_file_primary with actual manifest."""
-        db_path = temp_dir / "dedup.db"
-        config = DedupConfig(database_path=db_path, use_perceptual=False)
-        db = HashDatabase(db_path)
-        service = DeduplicationService(db=db, config=config)
-
-        manifest = service.analyze(mock_catalogs)
-
-        # Check primary file
-        assert is_file_primary(manifest, "/exports/google/photo1.jpg") is True
-
-        # Check secondary file
-        assert is_file_primary(manifest, "/exports/imessage/attachment1.jpg") is False
-
-        # Check non-duplicate file
-        assert is_file_primary(manifest, "/exports/google/photo2.jpg") is True
-
     def test_is_file_primary_by_hash_integration(self, temp_dir, mock_catalogs):
         """Test is_file_primary_by_hash with actual manifest.
 
@@ -421,7 +449,9 @@ class TestSecondaryReferencesIntegration:
         db = HashDatabase(db_path)
         service = DeduplicationService(db=db, config=config)
 
-        manifest = service.analyze(mock_catalogs)
+        run_id = "test_primary_by_hash"
+        write_catalogs_to_db(db, run_id, mock_catalogs)
+        manifest = service.analyze_from_db(run_id)
 
         # The duplicate file has content_hash "abc123" (from mock_catalogs)
         # Google Photos is the best_quality processor (largest file: 1000000 bytes)
@@ -485,7 +515,9 @@ class TestSecondaryReferencesIntegration:
             },
         ]
 
-        manifest = service.analyze(catalogs)
+        run_id = "test_best_quality_wins"
+        write_catalogs_to_db(db, run_id, catalogs)
+        manifest = service.analyze_from_db(run_id)
 
         # Verify primary is iMessage (earliest timestamp)
         dup_group = manifest["duplicates"]["xyz789"]
