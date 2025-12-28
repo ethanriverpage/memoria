@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from common.dedup.catalog import catalog_media_files
 from common.dedup.description import (
     SourceEntry,
     build_description,
@@ -190,7 +191,9 @@ class SnapchatMemoriesProcessor(ProcessorBase):
     def build_catalog(input_dir: str, **kwargs):
         """Build catalog of files with hashes and metadata.
 
-        Requires preprocessed directories (with metadata.json and source_path).
+        Supports both:
+        - Preprocessed directories (with metadata.json dict + source_path)
+        - Raw Snapchat Memories exports (metadata.json is a list; media in media/)
         """
         input_path = Path(input_dir)
         workers = kwargs.get("workers", 4)
@@ -212,10 +215,68 @@ class SnapchatMemoriesProcessor(ProcessorBase):
         )
         if catalog_iter is not None:
             yield from catalog_iter
-        else:
-            logger.warning(
-                f"Directory not preprocessed, skipping catalog: {input_path}"
+            return
+
+        # Raw export fallback (metadata.json list + media/)
+        # Support consolidated structure where memories/ is nested.
+        base_path = input_path
+        memories_subdir = input_path / "memories"
+        if _check_memories_structure(memories_subdir):
+            base_path = memories_subdir
+
+        metadata_file = base_path / "metadata.json"
+        media_dir = base_path / "media"
+
+        if not metadata_file.exists() or not media_dir.exists():
+            logger.warning(f"Directory not catalogable: {input_path}")
+            return
+
+        try:
+            raw_metadata = SnapchatMemoriesProcessor.load_memories_metadata(
+                metadata_file
             )
+        except Exception as e:
+            logger.warning(f"Failed to load Snapchat Memories metadata.json: {e}")
+            return
+
+        if not isinstance(raw_metadata, list):
+            logger.warning(
+                f"Snapchat Memories metadata.json is not a list: {metadata_file}"
+            )
+            return
+
+        # Map media filename -> timestamp (date)
+        by_filename: Dict[str, str] = {}
+        media_paths: List[Path] = []
+
+        for entry in raw_metadata:
+            if not isinstance(entry, dict):
+                continue
+            media_filename = entry.get("media_filename")
+            ts = entry.get("date")
+            if not media_filename:
+                continue
+            p = media_dir / media_filename
+            if not p.exists() or not get_media_type(p):
+                continue
+            media_paths.append(p)
+            if ts:
+                by_filename[p.name] = ts
+
+        # Deduplicate paths (same filename can appear multiple times)
+        unique_media_paths = list({str(p): p for p in media_paths}.values())
+
+        def extract_raw_metadata(file_path: Path) -> Dict[str, Any]:
+            ts = by_filename.get(file_path.name)
+            return {"timestamp": ts} if ts else {}
+
+        yield from catalog_media_files(
+            processor_name="Snapchat Memories",
+            input_path=base_path,
+            media_files=unique_media_paths,
+            workers=workers,
+            metadata_extractor=extract_raw_metadata,
+        )
 
     @classmethod
     def process(

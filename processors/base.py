@@ -209,8 +209,8 @@ class ProcessorBase(ABC):
         """Check if input directory requires preprocessing before cataloging.
 
         Preprocessing converts raw exports into a standardized format with
-        metadata.json and a media/ directory. This method checks whether the
-        input is already preprocessed or needs preprocessing first.
+        metadata.json (containing source_path entries). This method checks
+        whether the input is already preprocessed or needs preprocessing first.
 
         Args:
             input_dir: Path to the input directory to check.
@@ -226,8 +226,8 @@ class ProcessorBase(ABC):
         """Run preprocessing on a raw export directory.
 
         Converts a raw export into a standardized preprocessed format with
-        metadata.json and a media/ directory. The result is written to the
-        cache directory for reuse in subsequent runs.
+        metadata.json (containing source_path entries for all media). The
+        result is written to the cache directory for reuse in subsequent runs.
 
         Args:
             input_dir: Path to the raw export directory.
@@ -249,10 +249,11 @@ class ProcessorBase(ABC):
         media_files_key: str = "media_files",
         container_key: Optional[str] = None,
     ) -> Optional[List[Dict[str, Any]]]:
-        """Check if directory has preprocessed metadata with source_path format.
+        """Check if directory has valid preprocessed metadata.
 
-        Checks for metadata.json and whether media entries contain source_path,
-        indicating the new preprocessed format where files are not copied.
+        Checks for metadata.json and whether media entries contain source_path.
+        Preprocessed directories must have source_path entries - this is the
+        canonical format (no media/ directory in cache).
 
         Args:
             input_path: Path to the directory to check.
@@ -262,8 +263,8 @@ class ProcessorBase(ABC):
                 for iMessage). If provided, looks for media_files inside messages.
 
         Returns:
-            List of media file entries if preprocessed with source_path format,
-            None if not preprocessed or uses legacy format.
+            List of media file entries if valid preprocessed directory,
+            None if not preprocessed or missing source_path entries.
 
         Example - Flat structure (Google Photos, Snapchat Memories):
             media_files = ProcessorBase.check_preprocessed_source_path(input_path)
@@ -311,14 +312,23 @@ class ProcessorBase(ABC):
                             )
                             return all_entries if all_entries else None
             else:
-                # Flat structure: media_files at top level
+                # Flat structure: media/media_files at top level
                 media_files = metadata.get(media_files_key, [])
                 if media_files:
                     sample = (
                         media_files[0] if isinstance(media_files[0], dict) else None
                     )
-                    if sample and "source_path" in sample:
-                        return media_files
+                    if sample:
+                        # Check for source_path (media_files style)
+                        if "source_path" in sample:
+                            return media_files
+                        # Check for source_paths dict (media/posts style like Instaloader)
+                        if sample.get("source_paths"):
+                            # Return all entries extracted from posts
+                            all_entries = list(
+                                ProcessorBase.extract_all_media_entries(metadata)
+                            )
+                            return all_entries if all_entries else None
 
         except Exception as e:
             logger.debug(f"Could not check preprocessed format: {e}")
@@ -440,31 +450,117 @@ class ProcessorBase(ABC):
     @staticmethod
     def validate_working_directory(
         working_dir: Path,
-    ) -> Tuple[Optional[Path], Optional[Path]]:
+    ) -> Optional[Path]:
         """Validate working directory has required structure.
 
-        Checks for existence of metadata.json and media/ directory.
+        Checks for existence of metadata.json. Preprocessed directories
+        contain only metadata.json (with source_path entries); no media/
+        directory is expected.
 
         Args:
             working_dir: Path to working directory to validate.
 
         Returns:
-            Tuple of (metadata_path, media_dir) if valid,
-            or (None, None) if invalid.
+            Path to metadata.json if valid, or None if invalid.
         """
         working_dir = Path(working_dir)
         metadata_path = working_dir / "metadata.json"
-        media_dir = working_dir / "media"
 
         if not metadata_path.exists():
             logger.error("Metadata file not found: %s", metadata_path)
-            return None, None
+            return None
 
-        if not media_dir.exists():
-            logger.error("Media directory not found: %s", media_dir)
-            return None, None
+        return metadata_path
 
-        return metadata_path, media_dir
+    @staticmethod
+    def materialize_ambiguous_cases(
+        metadata: Dict[str, Any],
+        output_dir: Path,
+    ) -> int:
+        """Materialize ambiguous_cases from metadata into output_dir/issues/needs_matching/.
+
+        Creates a folder structure for each ambiguous case with the media and overlay
+        files copied from their source_path locations, plus a match_info.json manifest.
+
+        Args:
+            metadata: Parsed metadata.json dict (may contain 'ambiguous_cases')
+            output_dir: Processor output directory (e.g., {base}/Snapchat Messages/)
+
+        Returns:
+            Number of cases materialized
+        """
+        from common.files.utils import copy_file
+
+        ambiguous_cases = metadata.get("ambiguous_cases", [])
+        if not ambiguous_cases:
+            return 0
+
+        needs_matching_dir = output_dir / "issues" / "needs_matching"
+        needs_matching_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info(
+            "Materializing %d ambiguous cases to %s",
+            len(ambiguous_cases),
+            needs_matching_dir,
+        )
+
+        materialized = 0
+        for case in ambiguous_cases:
+            # Create timestamped subfolder (sanitized)
+            timestamp = case.get("timestamp", "unknown")
+            timestamp_safe = timestamp.replace(" ", "_").replace(":", "-")
+            case_dir = needs_matching_dir / timestamp_safe
+            case_dir.mkdir(exist_ok=True)
+
+            # Create media and overlays subdirectories
+            media_subdir = case_dir / "media"
+            overlay_subdir = case_dir / "overlays"
+            media_subdir.mkdir(exist_ok=True)
+            overlay_subdir.mkdir(exist_ok=True)
+
+            # Copy media files from source_path
+            for media_info in case.get("media_files", []):
+                filename = media_info.get("filename", "")
+                source_path_str = media_info.get("source_path")
+                if source_path_str:
+                    source_path = Path(source_path_str)
+                    if source_path.exists():
+                        dest = media_subdir / filename
+                        try:
+                            copy_file(source_path, dest)
+                        except Exception as e:
+                            logger.warning("Failed to copy %s: %s", filename, e)
+                    else:
+                        logger.warning("Source file not found: %s", source_path)
+
+            # Copy overlay files from source_path
+            for overlay_info in case.get("overlays", []):
+                filename = overlay_info.get("filename", "")
+                source_path_str = overlay_info.get("source_path")
+                if source_path_str:
+                    source_path = Path(source_path_str)
+                    if source_path.exists():
+                        dest = overlay_subdir / filename
+                        try:
+                            copy_file(source_path, dest)
+                        except Exception as e:
+                            logger.warning("Failed to copy %s: %s", filename, e)
+                    else:
+                        logger.warning("Source overlay not found: %s", source_path)
+
+            # Write match_info.json manifest
+            match_info_path = case_dir / "match_info.json"
+            try:
+                with open(match_info_path, "w", encoding="utf-8") as f:
+                    json.dump(case, f, indent=2, ensure_ascii=False)
+                materialized += 1
+            except Exception as e:
+                logger.error("Failed to write %s: %s", match_info_path, e)
+
+        logger.info(
+            "Created %d matching case folders in %s", materialized, needs_matching_dir
+        )
+        return materialized
 
     @staticmethod
     def extract_all_media_entries(
@@ -783,10 +879,28 @@ class ProcessorBase(ABC):
         # Handle unmatched media if requested
         if include_orphaned:
             unmatched = metadata.get("unmatched_media", [])
-            for message in unmatched:
-                media_files = []
+            for entry in unmatched:
+                # Schema-compliant unmatched_media entries have:
+                #   { "filename": "...", "source_path": "..." }
+                # (see common/metadata/schema.py)
+                filename = entry.get("filename") if isinstance(entry, dict) else None
+                if filename:
+                    if orphaned_prefer_existing and filename in filename_index:
+                        continue
+                    if context_builder:
+                        context = context_builder({}, entry)
+                    else:
+                        context = entry
+                    filename_index[filename] = context
+                    continue
+
+                # Fallback: some callers may treat unmatched_media as message-like entries
+                # containing "media_files" (or similar). Index these as well.
+                if not isinstance(entry, dict):
+                    continue
+                media_files: List[str] = []
                 for key in media_keys:
-                    value = message.get(key)
+                    value = entry.get(key)
                     if value:
                         if isinstance(value, list):
                             media_files.extend(value)
@@ -797,9 +911,9 @@ class ProcessorBase(ABC):
                     if orphaned_prefer_existing and media_file in filename_index:
                         continue
                     if context_builder:
-                        context = context_builder({}, message)
+                        context = context_builder({}, entry)
                     else:
-                        context = message
+                        context = entry
                     filename_index[media_file] = context
 
         return filename_index

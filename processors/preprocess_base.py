@@ -35,7 +35,6 @@ from common.dedup.hashing import compute_content_hash
 from common.detection import DetectionResult
 from common.failure_tracker import FailureTracker
 from common.files.filter import BannedFilesFilter
-from common.files.utils import copy_file
 from common.metadata.schema import validate_metadata, CONTENT_KEYS
 from common.output.progress import PHASE_PREPROCESS, futures_progress
 from common.utils import default_worker_count
@@ -54,7 +53,7 @@ SHARED_STATS_KEYS = {
 
 @dataclass
 class CopyTask:
-    """Task for copy_with_dedup() representing a file to copy.
+    """Task for hash_with_dedup() representing a file to hash.
 
     Attributes:
         source_path: Path to the source file.
@@ -69,13 +68,16 @@ class CopyTask:
 
 @dataclass
 class CopyResult:
-    """Result of a copy_with_dedup() operation for a single file.
+    """Result of register_downloaded_file() for a single file.
+
+    Used by preprocessors that download files (e.g., Discord) and need
+    to check for duplicates after download.
 
     Attributes:
-        dest_filename: Actual filename in output directory.
+        dest_filename: Actual filename to use.
         content_hash: xxHash64 of file content.
-        is_duplicate: True if this was a duplicate (not copied).
-        primary_source: Source path of the file that was actually copied.
+        is_duplicate: True if this was a duplicate (file deleted).
+        primary_source: Source path of the primary file for this hash.
     """
 
     dest_filename: str
@@ -104,16 +106,6 @@ class HashResult:
     content_hash: str
     is_duplicate: bool
     primary_source: Path
-
-
-def _copy_single_file(src_path: Path, dest_path: Path) -> None:
-    """Copy a single file with reflink optimization on supported filesystems.
-
-    Args:
-        src_path: Source file path.
-        dest_path: Destination file path.
-    """
-    copy_file(src_path, dest_path, preserve_metadata=True)
 
 
 def _hash_single_file(
@@ -172,9 +164,8 @@ class PreprocessorBase(ABC):
     Provides common functionality:
     - Output directory validation and setup
     - Thread-safe logging
-    - File hashing for deduplication
+    - File hashing for deduplication (hash_with_dedup)
     - Failure tracking
-    - Batch copy with deduplication
     - Cached username detection
     - Standardized metadata saving
 
@@ -292,7 +283,6 @@ class PreprocessorBase(ABC):
             )
 
         self.output_dir = output_base
-        self.media_output_dir = output_base / "media"
         self.metadata_file = output_base / "metadata.json"
         self.log_file = output_base / "preprocessing.log"
 
@@ -338,6 +328,9 @@ class PreprocessorBase(ABC):
 
         # Unmatched media tracking (files processable but lacking full context)
         self._unmatched_media: List[Dict[str, Any]] = []
+
+        # Ambiguous cases tracking (e.g., overlay matching ambiguity)
+        self._ambiguous_cases: List[Dict[str, Any]] = []
 
         # Cached username detection result
         self._detection_result: Optional[DetectionResult] = None
@@ -605,7 +598,7 @@ class PreprocessorBase(ABC):
         the shared stats keys (files_unique, files_duplicates).
 
         Args:
-            results: Results dict from hash_with_dedup or copy_with_dedup.
+            results: Results dict from hash_with_dedup.
 
         Returns:
             Tuple of (unique_count, duplicate_count).
@@ -693,182 +686,6 @@ class PreprocessorBase(ABC):
             unique_name = f"{stem}_{counter}{suffix}"
             return unique_name
 
-    def copy_with_dedup(
-        self,
-        tasks: List[CopyTask],
-        workers: Optional[int] = None,
-        show_progress: bool = True,
-    ) -> Dict[Path, CopyResult]:
-        """Parallel batch copy with deduplication.
-
-        Hashes all files in parallel, groups by content hash to find duplicates,
-        merges context for duplicate groups, and copies only one file per hash.
-
-        Args:
-            tasks: List of CopyTask objects describing files to copy.
-            workers: Number of parallel workers (default: self.workers).
-            show_progress: Whether to show progress bar.
-
-        Returns:
-            Dict mapping source_path to CopyResult for all input tasks.
-        """
-        if not tasks:
-            return {}
-
-        if workers is None:
-            workers = self.workers
-
-        # Get database path for hash caching
-        config = get_dedup_config()
-        db_path = config.database_path
-
-        # Check if hash caching is disabled
-        disable_cache = os.environ.get("DISABLE_HASH_CACHE", "").lower() in (
-            "1",
-            "true",
-            "yes",
-        )
-        if disable_cache:
-            db_path = None
-
-        # Phase 1: Parallel hashing
-        hashed_tasks: List[Tuple[CopyTask, str]] = []
-        cache_entries_to_write: List[Dict[str, Any]] = []
-        cache_hits = 0
-
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(_hash_single_file, task, db_path): task
-                for task in tasks
-            }
-
-            if show_progress:
-                iterator = futures_progress(
-                    futures, PHASE_PREPROCESS, "Hashing files", unit="file"
-                )
-            else:
-                from concurrent.futures import as_completed
-
-                iterator = as_completed(futures)
-
-            for future in iterator:
-                task, content_hash, cache_hit, cache_entry = future.result()
-                hashed_tasks.append((task, content_hash))
-                if cache_hit:
-                    cache_hits += 1
-                elif cache_entry is not None:
-                    cache_entries_to_write.append(cache_entry)
-
-        # Batch write cache entries after parallel processing
-        if cache_entries_to_write and db_path is not None:
-            from common.dedup.database import HashDatabase
-
-            db = HashDatabase(db_path)
-            chunk_size = 1000
-            for i in range(0, len(cache_entries_to_write), chunk_size):
-                chunk = cache_entries_to_write[i : i + chunk_size]
-                db.cache_hashes_batch(chunk)
-
-        logger.debug(
-            "Hashed %d files (%d cache hits, %d computed)",
-            len(tasks),
-            cache_hits,
-            len(tasks) - cache_hits,
-        )
-
-        # Phase 2: Group by content hash and merge contexts
-        hash_groups: Dict[str, List[CopyTask]] = {}
-        for task, content_hash in hashed_tasks:
-            if content_hash not in hash_groups:
-                hash_groups[content_hash] = []
-            hash_groups[content_hash].append(task)
-
-        # Determine primary for each group and merge contexts
-        primaries: Dict[str, CopyTask] = {}
-        for content_hash, group in hash_groups.items():
-            # First task is primary (first seen wins)
-            primary = group[0]
-            primaries[content_hash] = primary
-
-            # Store in registry with merged context
-            merged_context = dict(primary.context)
-            for duplicate in group[1:]:
-                if self._context_merger is not None:
-                    self._context_merger(merged_context, duplicate.context)
-
-            self._hash_registry[content_hash] = {
-                "filename": primary.dest_filename,
-                "context": merged_context,
-                "source_path": str(primary.source_path),
-            }
-
-        # Phase 3: Copy unique files and build results
-        results: Dict[Path, CopyResult] = {}
-
-        # Ensure output directory exists
-        self.media_output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Pre-allocate unique filenames (deterministic, single-threaded)
-        # This keeps filename generation stable regardless of copy order
-        copy_plan: List[Tuple[str, Path, Path, str, List[CopyTask]]] = []
-        for content_hash, group in hash_groups.items():
-            primary = primaries[content_hash]
-            unique_filename = self._get_unique_filename(primary.dest_filename)
-            dest_path = self.media_output_dir / unique_filename
-
-            # Update registry with actual filename used
-            self._hash_registry[content_hash]["filename"] = unique_filename
-
-            copy_plan.append(
-                (content_hash, primary.source_path, dest_path, unique_filename, group)
-            )
-
-        # Parallel copy execution (I/O bound)
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(_copy_single_file, src_path, dest_path): (
-                    content_hash,
-                    src_path,
-                    dest_path,
-                    unique_filename,
-                    group,
-                )
-                for content_hash, src_path, dest_path, unique_filename, group in copy_plan
-            }
-
-            if show_progress:
-                iterator = futures_progress(
-                    futures, PHASE_PREPROCESS, "Copying files", unit="file"
-                )
-            else:
-                from concurrent.futures import as_completed
-
-                iterator = as_completed(futures)
-
-            for future in iterator:
-                # Re-raise any exception from the copy operation
-                future.result()
-
-                # Retrieve plan details for this future
-                (
-                    content_hash,
-                    src_path,
-                    dest_path,
-                    unique_filename,
-                    group,
-                ) = futures[future]
-
-                # Build results for all tasks in this group
-                for i, task in enumerate(group):
-                    results[task.source_path] = CopyResult(
-                        dest_filename=unique_filename,
-                        content_hash=content_hash,
-                        is_duplicate=(i > 0),  # First is primary, rest are duplicates
-                        primary_source=primaries[content_hash].source_path,
-                    )
-
-        return results
-
     def hash_with_dedup(
         self,
         tasks: List[CopyTask],
@@ -878,11 +695,9 @@ class PreprocessorBase(ABC):
         """Parallel batch hashing with deduplication (no file copying).
 
         Hashes all files in parallel, groups by content hash to find duplicates,
-        and merges context for duplicate groups. Unlike copy_with_dedup(), this
-        method does NOT copy files - it only builds metadata with source paths.
-
-        The processor phase will copy directly from source_path to final output,
-        eliminating the intermediate temp/media/ copy.
+        and merges context for duplicate groups. Does NOT copy files - only builds
+        metadata with source paths. The processor phase copies directly from
+        source_path to final output.
 
         Args:
             tasks: List of CopyTask objects describing files to process.
@@ -1274,6 +1089,10 @@ class PreprocessorBase(ABC):
         if self._unmatched_media:
             metadata["unmatched_media"] = self._unmatched_media
 
+        # Include ambiguous_cases if present (for processor materialization)
+        if self._ambiguous_cases:
+            metadata["ambiguous_cases"] = self._ambiguous_cases
+
         return metadata
 
     def save_metadata_standardized(
@@ -1355,6 +1174,19 @@ class PreprocessorBase(ABC):
             unmatched: List of unmatched media entries.
         """
         self._unmatched_media = unmatched
+
+    def set_ambiguous_cases(self, cases: List[Dict[str, Any]]) -> None:
+        """Set the ambiguous cases list for inclusion in metadata.json.
+
+        Ambiguous cases (e.g., overlay matching) are recorded during preprocessing
+        and materialized into output_dir/issues/needs_matching/ during processing.
+
+        Each case should include source_path for any files that need to be copied.
+
+        Args:
+            cases: List of ambiguous case entries with source_path fields.
+        """
+        self._ambiguous_cases = cases
 
     @abstractmethod
     def validate_export(self) -> bool:

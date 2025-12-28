@@ -47,11 +47,11 @@ After downloading your Snapchat data export from "My Data":
 
 `snapchat-username-YYYYMMDD/`
 
-3. Inside this directory, create subdirectories based on what you exported:
+1. Inside this directory, create subdirectories based on what you exported:
    - Create `memories/` if you exported Memories
    - Create `messages/` if you exported Chat History
 
-4. Move the contents of your extracted export into the appropriate subdirectory so the structure matches what the processor expects (see Export Structure sections below)
+2. Move the contents of your extracted export into the appropriate subdirectory so the structure matches what the processor expects (see Export Structure sections below)
 
 **Note**: Use your actual Snapchat username and the date you downloaded the export.
 
@@ -265,7 +265,7 @@ This rich metadata makes it easy to search for and identify photos based on who 
 
 **Deleted users**: Messages from users who have deleted their accounts may show placeholder usernames in the metadata.
 
-**Ambiguous overlay matching**: See the [Ambiguous Overlay Matching](#ambiguous-overlay-matching) section below for details on the `needs_matching/` directory.
+**Ambiguous overlay matching**: See the [Ambiguous Overlay Matching](#ambiguous-overlay-matching) section below for details on the `issues/needs_matching/` directory.
 
 **Orphaned media**: See the [Orphaned Media](#orphaned-media) section below for details on the `orphaned_media/` and `issues/` directories.
 
@@ -339,7 +339,7 @@ Snapchat exports provide media files and overlay files (PNG images) separately, 
 - Videos without overlays
 - Images (never have overlays in Snapchat)
 
-**Requires Manual Review** (saved to `needs_matching/`):
+**Requires Manual Review** (saved to `issues/needs_matching/`):
 
 - 2+ videos with 2+ overlays at same timestamp
 - Multiple overlays even with 1 video
@@ -348,10 +348,10 @@ Snapchat exports provide media files and overlay files (PNG images) separately, 
 
 ### Output Structure
 
-Each ambiguous case gets a timestamped folder:
+Each ambiguous case gets a timestamped folder under the processed output:
 
 ```
-needs_matching/
+Snapchat Messages/username/messages/issues/needs_matching/
 └── 2023-01-15_10-30-45_UTC/
     ├── media/              # Videos from this message
     ├── overlays/           # Potential overlay matches
@@ -479,24 +479,25 @@ The processing is fully automatic - just point Memoria at your export directory.
 │           └── ...
 └── Snapchat Messages/
     └── username/
-        ├── conversation_1/
-        │   ├── photo_001.jpg
-        │   ├── video_002.mkv    # Video with overlay
-        │   └── ...
-        ├── conversation_2/
-        │   └── ...
-        ├── orphaned_media/       # Media not matched to any conversation
-        │   └── ...
-        ├── needs_matching/       # Ambiguous overlay-video matching cases
-        │   └── 2023-01-15_10-30-45_UTC/
-        │       ├── media/
-        │       ├── overlays/
-        │       └── match_info.json
-        └── issues/               # Detailed failure tracking
-            ├── failure-report.json
-            └── failed-matching/
-                ├── media/
-                └── metadata/
+        └── messages/
+            ├── conversation_1/
+            │   ├── photo_001.jpg
+            │   ├── video_002.mkv    # Video with overlay
+            │   └── ...
+            ├── conversation_2/
+            │   └── ...
+            ├── orphaned_media/       # Media not matched to any conversation
+            │   └── ...
+            └── issues/               # All issue artifacts
+                ├── failure-report.json
+                ├── failed-matching/
+                │   ├── media/
+                │   └── metadata/
+                └── needs_matching/   # Ambiguous overlay-video matching cases
+                    └── 2023-01-15_10-30-45_UTC/
+                        ├── media/
+                        ├── overlays/
+                        └── match_info.json
 ```
 
 **Note**: Videos with overlays are converted to MKV format with dual video tracks. Videos without overlays retain their original format.
@@ -553,7 +554,7 @@ For details on overlay embedding performance, see the [Overlay Embedding](#overl
    - Matches media files to conversations based on Media IDs, UUIDs, or timestamps
    - Handles duplicate media (same file shared in multiple conversations)
    - Creates an `orphaned_media/` folder for files that couldn't be matched
-   - Creates a `needs_matching/` folder for ambiguous overlay-to-video matching cases
+   - Creates an `issues/needs_matching/` folder for ambiguous overlay-to-video matching cases
    - Generates a preprocessing log with details about any matching issues
 
 6. **Multiple Exports**: If you request multiple Snapchat exports over time, each will be processed independently. Deduplication across exports is not currently implemented.
@@ -600,7 +601,7 @@ See the [Orphaned Media](#orphaned-media) section for detailed information.
 
 ### Messages: Ambiguous overlay matching
 
-If you see a `needs_matching/` folder in your output:
+If you see an `issues/needs_matching/` folder in your output:
 
 - This contains cases where multiple videos have multiple overlays at the same timestamp
 - Review the `match_info.json` file in each timestamped subfolder
@@ -712,6 +713,7 @@ Has the same top-level structure but simpler message objects:
 | `IsSender` | boolean | Whether you sent this snap |
 
 **Key differences from chat_history.json:**
+
 - No `Media IDs` field
 - No `Content` field
 - Uses `IMAGE`/`VIDEO` instead of `MEDIA`

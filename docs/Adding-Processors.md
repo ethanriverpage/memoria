@@ -97,10 +97,9 @@ Preprocessing is optional, but strongly recommended when:
 
 #### Preprocessed directory format (canonical)
 
-Memoria treats a directory as “preprocessed” if it contains `metadata.json` (see `common.utils.is_preprocessed_directory`).
+Memoria treats a directory as "preprocessed" if it contains `metadata.json` (see `common.utils.is_preprocessed_directory`).
 
-- **Copy-based preprocessing**: writes `metadata.json` and may create `media/` (but processors should prefer `source_path` from metadata)
-- **Hash-only preprocessing (preferred for large exports)**: writes `metadata.json` only; processors later copy directly from `source_path` to final output
+Preprocessing is **hash-only**: it writes only `metadata.json` (no `media/` directory). Processors copy directly from `source_path` in the metadata to final output during processing.
 
 The standardized schema is defined in `common/metadata/schema.py` and validated by `common.metadata.schema.validate_metadata()`:
 
@@ -108,6 +107,8 @@ The standardized schema is defined in `common/metadata/schema.py` and validated 
 - `file_hashes`: mapping of output filename → content hash (supports cross-processor dedup)
 - exactly one of: `conversations`, `media`, or `media_files`
 - all media references must include `source_path` (direct file path) so processors and dedup can operate without relying on temp copies
+- optional: `unmatched_media` (files processable but lacking full context)
+- optional: `ambiguous_cases` (e.g., overlay matching ambiguity - materialized by processor into `output_dir/issues/needs_matching/`)
 
 #### Implementing a preprocessor (current template)
 
@@ -152,11 +153,10 @@ class MyPlatformPreprocessor(PreprocessorBase):
     
     def process_export(self) -> bool:
         """Platform-specific preprocessing logic (called by run())."""
-        # 1. Parse metadata
+        # 1. Parse metadata from raw export
         # 2. Build CopyTask list for media files
-        # 3. Choose ONE:
-        #    - self.hash_with_dedup(tasks)  # preferred: no intermediate copy
-        #    - self.copy_with_dedup(tasks)  # if you truly need media/ created
+        # 3. Hash files with deduplication:
+        #    results = self.hash_with_dedup(tasks)
         # 4. Build content_data with 'filename' + 'source_path' (+ timestamps, etc.)
         # 5. self.save_metadata(content_data, extra_export_info={...})
         return True
@@ -170,13 +170,12 @@ class MyPlatformPreprocessor(PreprocessorBase):
 **Key PreprocessorBase Features:**
 
 - **Template method pipeline**: Call `preprocessor.run()` (not `process_export()` directly)
-- **Within-processor deduplication**:
-  - `hash_with_dedup()` for hash-only preprocessing (preferred)
-  - `copy_with_dedup()` for copy-based preprocessing (creates `media/`)
+- **Within-processor deduplication**: `hash_with_dedup()` hashes files in parallel, groups by content hash, and merges context for duplicates
 - **Context merging**: Set `set_context_merger()` to merge metadata when duplicates are found
 - **Hash caching**: File hashes are cached in SQLite for faster repeated processing
 - **Thread-safe logging**: Use `log_message()` for thread-safe log entries
 - **Failure tracking**: Built-in `FailureTracker` for reporting missing/bad files without crashing
+- **Issue recording**: Use `set_unmatched_media()` and `set_ambiguous_cases()` to record issues for processor materialization
 - **Standardized metadata**: `save_metadata()` builds/validates the schema and writes `metadata.json`
 
 See `processors/discord/preprocess.py` or `processors/instagram_messages/preprocess.py` for complete examples.

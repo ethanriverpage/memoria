@@ -70,9 +70,8 @@ class DiscordProcessor(ProcessorBase):
 
             # Check for preprocessed Discord export
             metadata_file = input_path / "metadata.json"
-            media_dir = input_path / "media"
 
-            if metadata_file.exists() and media_dir.exists():
+            if metadata_file.exists():
                 try:
                     with open(metadata_file, "r", encoding="utf-8") as f:
                         metadata = json.load(f)
@@ -130,9 +129,8 @@ class DiscordProcessor(ProcessorBase):
         """Check if Discord export needs preprocessing."""
         input_path = Path(input_dir)
 
-        # Check if already preprocessed (has media/ directory)
-        media_dir = input_path / "media"
-        if media_dir.exists():
+        # Check if already preprocessed (has metadata.json)
+        if is_preprocessed_directory(input_dir):
             return False
 
         # Check for raw export structure (Messages/ directory)
@@ -470,17 +468,10 @@ def _process_working_directory(
     """Process a working directory (preprocessed export)."""
     # Configuration
     metadata_file = working_dir / "metadata.json"
-    media_dir = working_dir / "media"
 
     # Check for metadata file
     if not metadata_file.exists():
         log.file_not_found(str(metadata_file), "Metadata file")
-        return
-
-    # Check for media directory
-    if not media_dir.exists():
-        log.file_not_found(str(media_dir), "Media directory")
-        log.logger.warning("No media files to process.")
         return
 
     # Load metadata
@@ -497,10 +488,19 @@ def _process_working_directory(
     filename_index = build_filename_index(metadata)
     log.found_items(len(filename_index), "media files in metadata")
 
-    # Scan media directory for actual files
-    log.scanning_directory(str(media_dir))
-    media_files = list(media_dir.glob("*"))
-    media_files = [f for f in media_files if f.is_file() and get_media_type(f)]
+    # Build list of media files from source_paths in metadata
+    log.logger.info("Collecting media files from source_path entries...")
+    media_files = []
+    for filename, info in filename_index.items():
+        message = info.get("message", {})
+        source_paths = message.get("source_paths", {})
+        source_path_str = source_paths.get(filename)
+        if source_path_str:
+            source_path = Path(source_path_str)
+            if source_path.exists() and get_media_type(source_path):
+                media_files.append(source_path)
+            else:
+                logger.warning("Source file not found or not media: %s", source_path)
     log.found_files(len(media_files), "media")
 
     # Filter out secondary files based on dedup manifest (using hash-based lookup)

@@ -12,6 +12,7 @@ Only messages sent by the exporting user are included.
 import json
 import logging
 import re
+import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -132,6 +133,9 @@ class DiscordPreprocessor(PreprocessorBase):
         self.messages_dir = self.export_path / "Messages"
         self.servers_dir = self.export_path / "Servers"
         self.index_file = self.messages_dir / "index.json"
+
+        # Downloads directory for downloaded attachments (non-canonical cache location)
+        self.downloads_dir = self.output_dir / "downloads"
 
         # Additional lock for filename collision tracking
         self.filename_lock = Lock()
@@ -406,6 +410,21 @@ class DiscordPreprocessor(PreprocessorBase):
         Returns:
             Tuple of (success, error_message)
         """
+        # Support offline test fixtures via file:// URLs
+        try:
+            parsed = urlparse(url)
+            if parsed.scheme == "file":
+                source_path = Path(unquote(parsed.path))
+                if not source_path.exists():
+                    return False, f"Local file not found: {source_path}"
+
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(source_path, "rb") as src, open(output_path, "wb") as dst:
+                    shutil.copyfileobj(src, dst, length=1024 * 1024)
+                return True, None
+        except Exception as e:
+            return False, f"Local file URL error: {e}"
+
         error_msg = "Max retries exceeded"
         for attempt in range(self.MAX_RETRIES):
             try:
@@ -495,7 +514,7 @@ class DiscordPreprocessor(PreprocessorBase):
 
         # Generate unique filename
         output_filename = self.generate_unique_filename(original_filename, message_id)
-        output_path = self.media_output_dir / output_filename
+        output_path = self.downloads_dir / output_filename
 
         # Download the file
         success, error_msg = self.download_attachment(url, output_path)
@@ -642,7 +661,8 @@ class DiscordPreprocessor(PreprocessorBase):
                 attachment_urls = [
                     url.strip()
                     for url in attachments_str.split(" ")
-                    if url.strip() and url.strip().startswith("http")
+                    if url.strip()
+                    and urlparse(url.strip()).scheme in ("http", "https", "file")
                 ]
 
                 with self.stats_lock:
@@ -689,8 +709,8 @@ class DiscordPreprocessor(PreprocessorBase):
         if not download_tasks:
             return {}
 
-        # Create media output directory
-        self.media_output_dir.mkdir(parents=True, exist_ok=True)
+        # Create downloads directory
+        self.downloads_dir.mkdir(parents=True, exist_ok=True)
 
         log.downloading(len(download_tasks), "attachments")
 

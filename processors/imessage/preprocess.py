@@ -253,9 +253,6 @@ class IMessagePreprocessor(PreprocessorBase):
         # Store all export paths (multi-export support)
         self.export_paths = export_paths_list
 
-        # Override media_dir to match expected name
-        self.media_dir = self.media_output_dir
-
         # Owner name (device owner) - extract from directory name if not provided
         self.owner_name = owner_name or self._extract_owner_name()
 

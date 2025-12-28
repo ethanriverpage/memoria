@@ -4,7 +4,7 @@
 Tests cover:
 - PreprocessorBase initialization and validation
 - temp_output_dir context manager
-- copy_with_dedup batch operations
+- hash_with_dedup batch operations
 - File hashing and deduplication
 - Context merging during deduplication
 - Filename collision handling
@@ -95,7 +95,6 @@ class TestPreprocessorBaseInit:
         )
 
         assert preprocessor.output_dir == output_dir
-        assert preprocessor.media_output_dir == output_dir / "media"
         assert preprocessor.metadata_file == output_dir / "metadata.json"
         assert preprocessor.log_file == output_dir / "preprocessing.log"
 
@@ -166,140 +165,6 @@ class TestPreprocessorBaseRun:
         result = preprocessor.run()
 
         assert result is False
-
-
-class TestCopyWithDedup:
-    """Tests for copy_with_dedup method."""
-
-    def test_copies_unique_files(self, tmp_path: Path) -> None:
-        """Should copy unique files to output directory."""
-        export_dir = tmp_path / "export"
-        output_dir = tmp_path / "output"
-        export_dir.mkdir()
-        output_dir.mkdir()
-
-        # Create source files
-        file1 = export_dir / "photo1.jpg"
-        file2 = export_dir / "photo2.jpg"
-        file1.write_bytes(b"content1")
-        file2.write_bytes(b"content2")
-
-        preprocessor = ConcretePreprocessor(
-            export_path=export_dir,
-            output_dir=output_dir,
-            workers=1,
-        )
-
-        tasks = [
-            CopyTask(source_path=file1, dest_filename="photo1.jpg"),
-            CopyTask(source_path=file2, dest_filename="photo2.jpg"),
-        ]
-
-        with patch.dict(os.environ, {"DISABLE_HASH_CACHE": "true"}):
-            results = preprocessor.copy_with_dedup(tasks, show_progress=False)
-
-        assert len(results) == 2
-        assert (output_dir / "media" / "photo1.jpg").exists()
-        assert (output_dir / "media" / "photo2.jpg").exists()
-
-    def test_deduplicates_identical_files(self, tmp_path: Path) -> None:
-        """Should deduplicate files with same content."""
-        export_dir = tmp_path / "export"
-        output_dir = tmp_path / "output"
-        export_dir.mkdir()
-        output_dir.mkdir()
-
-        # Create duplicate files
-        file1 = export_dir / "photo1.jpg"
-        file2 = export_dir / "photo2.jpg"
-        same_content = b"identical content"
-        file1.write_bytes(same_content)
-        file2.write_bytes(same_content)
-
-        preprocessor = ConcretePreprocessor(
-            export_path=export_dir,
-            output_dir=output_dir,
-            workers=1,
-        )
-
-        tasks = [
-            CopyTask(source_path=file1, dest_filename="photo1.jpg"),
-            CopyTask(source_path=file2, dest_filename="photo2.jpg"),
-        ]
-
-        with patch.dict(os.environ, {"DISABLE_HASH_CACHE": "true"}):
-            results = preprocessor.copy_with_dedup(tasks, show_progress=False)
-
-        # Both should point to same destination
-        assert results[file1].content_hash == results[file2].content_hash
-        assert results[file1].is_duplicate is False
-        assert results[file2].is_duplicate is True
-        assert results[file1].dest_filename == results[file2].dest_filename
-
-    def test_merges_context_for_duplicates(self, tmp_path: Path) -> None:
-        """Should merge context when duplicates found."""
-        export_dir = tmp_path / "export"
-        output_dir = tmp_path / "output"
-        export_dir.mkdir()
-        output_dir.mkdir()
-
-        file1 = export_dir / "photo1.jpg"
-        file2 = export_dir / "photo2.jpg"
-        same_content = b"identical"
-        file1.write_bytes(same_content)
-        file2.write_bytes(same_content)
-
-        preprocessor = ConcretePreprocessor(
-            export_path=export_dir,
-            output_dir=output_dir,
-            workers=1,
-        )
-
-        # Custom merger that accumulates albums
-        def merge_albums(existing: Dict, new: Dict) -> None:
-            if "albums" not in existing:
-                existing["albums"] = []
-            existing["albums"].extend(new.get("albums", []))
-
-        preprocessor.set_context_merger(merge_albums)
-
-        tasks = [
-            CopyTask(
-                source_path=file1,
-                dest_filename="photo1.jpg",
-                context={"albums": ["album1"]},
-            ),
-            CopyTask(
-                source_path=file2,
-                dest_filename="photo2.jpg",
-                context={"albums": ["album2"]},
-            ),
-        ]
-
-        with patch.dict(os.environ, {"DISABLE_HASH_CACHE": "true"}):
-            results = preprocessor.copy_with_dedup(tasks, show_progress=False)
-
-        # Check merged context
-        merged_contexts = preprocessor.get_merged_contexts()
-        assert len(merged_contexts) == 1
-        content_hash = results[file1].content_hash
-        assert "album1" in merged_contexts[content_hash]["albums"]
-        assert "album2" in merged_contexts[content_hash]["albums"]
-
-    def test_handles_empty_task_list(self, tmp_path: Path) -> None:
-        """Should return empty dict for empty task list."""
-        export_dir = tmp_path / "export"
-        output_dir = tmp_path / "output"
-        export_dir.mkdir()
-
-        preprocessor = ConcretePreprocessor(
-            export_path=export_dir,
-            output_dir=output_dir,
-        )
-
-        results = preprocessor.copy_with_dedup([], show_progress=False)
-
-        assert results == {}
 
 
 class TestHashWithDedup:
@@ -550,7 +415,7 @@ class TestFilenameCollision:
         ]
 
         with patch.dict(os.environ, {"DISABLE_HASH_CACHE": "true"}):
-            results = preprocessor.copy_with_dedup(tasks, show_progress=False)
+            results = preprocessor.hash_with_dedup(tasks, show_progress=False)
 
         # Should have different output filenames
         filenames = {results[file1].dest_filename, results[file2].dest_filename}
@@ -699,7 +564,7 @@ class TestContextMerging:
         ]
 
         with patch.dict(os.environ, {"DISABLE_HASH_CACHE": "true"}):
-            preprocessor.copy_with_dedup(tasks, show_progress=False)
+            preprocessor.hash_with_dedup(tasks, show_progress=False)
 
         context = preprocessor.get_merged_context_for_file("photo.jpg")
         assert context is not None

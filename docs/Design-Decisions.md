@@ -218,7 +218,7 @@ Each processor:
 
 Many processors also have a preprocessor that extends `PreprocessorBase`, providing:
 
-- Built-in deduplication via `copy_with_dedup()`
+- Built-in deduplication via `hash_with_dedup()` (hash-only, no file copying)
 - Context merging for duplicate metadata
 - Hash caching for performance
 - Thread-safe logging and failure tracking
@@ -289,8 +289,6 @@ All three processors match and should run. Priority ensures they run in a sensib
 
 - Requires developers to choose appropriate priority values
 - Potential for priority conflicts (mitigated by documentation)
-
-
 
 ## Default to Immich Upload
 

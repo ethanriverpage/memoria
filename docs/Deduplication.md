@@ -56,14 +56,15 @@ class MyPreprocessor(PreprocessorBase):
         # Set context merger for handling duplicates
         self.set_context_merger(self._merge_message_context)
         
-        # Copy with automatic deduplication
-        results = self.copy_with_dedup(tasks)
+        # Hash with automatic deduplication (no file copying)
+        results = self.hash_with_dedup(tasks)
         
-        # Results map source_path -> CopyResult with:
-        # - dest_filename: actual filename used
+        # Results map source_path -> HashResult with:
+        # - source_path: original file location for direct processing
+        # - dest_filename: unique filename for output
         # - content_hash: xxHash64 of file
         # - is_duplicate: True if this was a duplicate
-        # - primary_source: source path of the copied file
+        # - primary_source: source path of the primary file for this hash
 ```
 
 ### Context Merging
@@ -275,17 +276,17 @@ Both messages reference the same file because they have identical content.
 
 ## Instagram Messages
 
-The Instagram Messages preprocessor implements deduplication using `PreprocessorBase.copy_with_dedup()`. When the same image is shared across multiple conversations, it is copied only once.
+The Instagram Messages preprocessor implements deduplication using `PreprocessorBase.hash_with_dedup()`. When the same image is shared across multiple conversations, it is hashed only once and processed once during the processing phase.
 
 ### How It Works
 
 1. Build catalog of all media files in the export with conversation context
 2. Create `CopyTask` objects for each file with metadata
-3. Call `copy_with_dedup()` which:
+3. Call `hash_with_dedup()` which:
    - Hashes all files in parallel using xxHash64
    - Groups files by content hash
    - Merges conversation metadata for duplicates
-   - Copies only unique files
+   - Records source_path for each unique file (no intermediate copying)
 
 ### Expected Results
 
@@ -295,7 +296,7 @@ PREPROCESSING STATISTICS
 Total conversations processed:         67
 Total messages with media:            432
 Total media files found:              456
-Media files copied:                   312
+Unique media files:                   312
 ======================================================================
 
 DEDUPLICATION SUMMARY:

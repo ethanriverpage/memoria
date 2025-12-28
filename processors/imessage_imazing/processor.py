@@ -433,7 +433,6 @@ def _build_metadata_requests(
 
 def is_preprocessed(input_path: Path) -> bool:
     metadata_file = input_path / "metadata.json"
-    media_dir = input_path / "media"
 
     if not metadata_file.exists():
         return False
@@ -449,12 +448,8 @@ def is_preprocessed(input_path: Path) -> bool:
         if metadata.get("export_info", {}).get("export_format") != "imazing":
             return False
 
-        # New format: file_hashes present (source_path-based, no media/ dir needed)
-        # Old format: media/ directory must exist
-        has_file_hashes = "file_hashes" in metadata
-        has_media_dir = media_dir.exists()
-
-        return has_file_hashes or has_media_dir
+        # Preprocessed format requires file_hashes (source_path-based)
+        return "file_hashes" in metadata
     except (json.JSONDecodeError, KeyError):
         return False
 
@@ -622,7 +617,9 @@ def process_logic(
 
         # Read source_path from metadata
         for media_filename, message in filename_index.items():
-            source_path_str = message.get("source_path")
+            # Get source path from source_paths dict (keyed by filename)
+            source_paths = message.get("source_paths", {})
+            source_path_str = source_paths.get(media_filename)
             if not source_path_str:
                 log.logger.warning(f"No source_path for file: {media_filename}")
                 continue

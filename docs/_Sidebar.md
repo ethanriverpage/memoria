@@ -20,6 +20,7 @@
 - [Immich Upload](Immich-Upload)
 - [Parallel Processing](Parallel-Processing)
 - [Deduplication](Deduplication)
+- [Failure Handling](Failure-Handling)
 - [Logging](Logging)
 
 ### Reference

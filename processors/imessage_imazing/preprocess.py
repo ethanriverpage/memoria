@@ -153,9 +153,6 @@ class ImazingPreprocessor(PreprocessorBase):
             final_output_dir=final_output_dir,
         )
 
-        # Override media_dir to match expected name
-        self.media_dir = self.media_output_dir
-
         # Owner name (device owner) - extract from Device-Info.txt if not provided
         self.owner_name = owner_name or self._extract_owner_name()
 

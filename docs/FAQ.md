@@ -232,9 +232,14 @@ Snapchat exports provide media files and overlay files (PNG images with text/dra
 
 **How Memoria handles it**: The preprocessor reads and stores ALL timestamps before any file operations, ensuring accurate matching even after files are copied.
 
-### Why are some Snapchat messages in the "needs_matching" folder?
+### Why are some Snapchat messages in the "issues/needs_matching" folder?
 
-When a message contains multiple videos with multiple overlays all at the same timestamp, Memoria can't automatically determine which overlay belongs to which video. These ambiguous cases are saved to `needs_matching/` for manual review.
+When a message contains multiple videos with multiple overlays all at the same timestamp, Memoria can't automatically determine which overlay belongs to which video. These ambiguous cases are saved to `{output_dir}/issues/needs_matching/` for manual review.
+
+Each case folder contains:
+- `media/` - the video files
+- `overlays/` - the overlay images
+- `match_info.json` - metadata explaining the ambiguity
 
 For example: A message sent at 10:30:45 containing 2 videos and 2 overlays - all timestamped 10:30:45 - creates 4 possible pairings. Only manual review of the content can determine the correct matches.
 

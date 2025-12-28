@@ -3,7 +3,6 @@
 import json
 import logging
 import re
-import shutil
 from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -72,8 +71,7 @@ class SnapchatMessagesProcessor(ProcessorBase):
 
                 # Check for preprocessed in messages/ subdirectory
                 metadata_file = messages_subdir / "metadata.json"
-                media_dir = messages_subdir / "media"
-                if metadata_file.exists() and media_dir.exists():
+                if metadata_file.exists():
                     try:
                         with open(metadata_file, "r", encoding="utf-8") as f:
                             metadata = json.load(f)
@@ -99,9 +97,8 @@ class SnapchatMessagesProcessor(ProcessorBase):
 
             # Check for preprocessed pattern
             metadata_file = input_path / "metadata.json"
-            media_dir = input_path / "media"
 
-            if metadata_file.exists() and media_dir.exists():
+            if metadata_file.exists():
                 try:
                     with open(metadata_file, "r", encoding="utf-8") as f:
                         metadata = json.load(f)
@@ -445,7 +442,13 @@ def build_media_index(metadata: dict) -> dict:
     # Index unmatched media
     unmatched_media = metadata.get("unmatched_media", [])
     for message in unmatched_media:
-        media_id = message.get("media_id", "")
+        # Unmatched media entries follow a different schema than messages.
+        # Prefer top-level media_id, but also allow it under metadata{}.
+        media_id = message.get("media_id", "") or (
+            (message.get("metadata") or {}).get("media_id", "")
+            if isinstance(message, dict)
+            else ""
+        )
         if media_id:
             # Split by " | " to handle multiple media IDs
             media_ids = [mid.strip() for mid in media_id.split("|")]
@@ -516,7 +519,8 @@ def _get_message_timestamp(message: dict) -> Optional[str]:
             message["messages"][0].get("created") if message["messages"] else None
         )
     else:
-        return message.get("created")
+        # Snapchat Messages uses `created`. Unmatched media entries use `timestamp`.
+        return message.get("created") or message.get("timestamp")
 
 
 def _update_snapchat_timestamps(file_path: Path, message: dict) -> bool:
@@ -546,7 +550,7 @@ def _create_file_worker(args_tuple):
     """Worker function for creating output files with overlays.
 
     Args:
-        args_tuple: (media_path, message, export_username, output_dir, overlays_dir,
+        args_tuple: (media_path, message, export_username, output_dir,
                     output_filename, content_hash, original_filename)
 
     Returns:
@@ -558,7 +562,6 @@ def _create_file_worker(args_tuple):
         message,
         export_username,
         output_dir,
-        overlays_dir,
         output_filename,
         content_hash,
         original_filename,
@@ -573,10 +576,11 @@ def _create_file_worker(args_tuple):
         file_ext = media_path.suffix.lower()
 
         # Get overlay from message metadata (matched during preprocessing)
+        # Uses overlay_source_path directly from metadata (hash-only preprocessing)
         overlay_path = None
-        overlay_filename = message.get("overlay_file")
-        if overlay_filename:
-            potential_overlay = overlays_dir / overlay_filename
+        overlay_source_path = message.get("overlay_source_path")
+        if overlay_source_path:
+            potential_overlay = Path(overlay_source_path)
             if potential_overlay.exists():
                 overlay_path = potential_overlay
 
@@ -768,7 +772,6 @@ def _process_snapchat_working_directory(
 
     # Configuration
     metadata_file = working_dir / "metadata.json"
-    overlays_dir = working_dir / "overlays"
 
     # Check for metadata file (should exist after preprocessing or if already preprocessed)
     if not metadata_file.exists():
@@ -791,19 +794,33 @@ def _process_snapchat_working_directory(
     logger.info(f"Found {len(media_index)} messages with media IDs")
     logger.info(f"Found {len(filename_index)} orphaned media entries by filename")
 
-    # Build list of source files from metadata
-    media_files = []
-    for msg in filename_index.values():
-        source_path_str = msg.get("source_path")
-        if source_path_str:
-            source_path = Path(source_path_str)
-            if source_path.exists():
-                media_files.append(source_path)
-            else:
-                logger.warning(f"Source file not found: {source_path}")
+    # Build list of source files from metadata.
+    #
+    # Conversation messages store:
+    #   media_files + source_paths{filename -> absolute path}
+    # Unmatched media entries store:
+    #   filename + source_path
+    media_files: list[Path] = []
+    for filename, ctx in filename_index.items():
+        source_path_str: Optional[str] = None
+        if isinstance(ctx, dict) and ctx.get("source_path"):
+            source_path_str = ctx.get("source_path")
         else:
-            logger.warning("No source_path for file in metadata")
-    logger.info(f"Found {len(media_files)} media files from metadata")
+            source_paths = ctx.get("source_paths", {}) if isinstance(ctx, dict) else {}
+            if isinstance(source_paths, dict):
+                source_path_str = source_paths.get(filename)
+
+        if not source_path_str:
+            logger.warning("No source path for file in metadata: %s", filename)
+            continue
+
+        source_path = Path(source_path_str)
+        if source_path.exists():
+            media_files.append(source_path)
+        else:
+            logger.warning("Source file not found: %s", source_path)
+
+    logger.info("Found %d media files from metadata", len(media_files))
 
     # Filter out secondary files based on dedup manifest (using hash-based lookup)
     # Use cached file_hashes from preprocessing when available to avoid re-hashing
@@ -871,12 +888,17 @@ def _process_snapchat_working_directory(
         # Get file extension for filename generation
         file_ext = media_file.suffix.lower()
 
-        # Check if this file will get an overlay and become MKV
-        overlay_filename = message.get("overlay_file")
+        # Check if this file will get an overlay and become MKV.
+        # Conversation messages use top-level overlay_source_path.
+        # Unmatched media entries store extra fields under metadata{}.
+        overlay_source_path = message.get("overlay_source_path") or (
+            (message.get("metadata") or {}).get("overlay_source_path", "")
+            if isinstance(message, dict)
+            else ""
+        )
         will_have_overlay = False
-        if overlay_filename:
-            potential_overlay = overlays_dir / overlay_filename
-            if potential_overlay.exists() and is_video:
+        if overlay_source_path and is_video:
+            if Path(overlay_source_path).exists():
                 will_have_overlay = True
 
         # Build identifier (policy) and delegate to FilenameGenerator (mechanism)
@@ -909,7 +931,6 @@ def _process_snapchat_working_directory(
                 message,
                 export_username,
                 output_dir,
-                overlays_dir,
                 output_filename,
                 content_hash,
                 original_filename,
@@ -1016,31 +1037,14 @@ def _process_snapchat_working_directory(
     logger.info("  - Track 1: Original video without overlay")
     logger.info("  Switch tracks in VLC: Video > Video Track > Select track")
 
-    # Move any needs_matching folders from the preprocessing temp dir
-    # into the final processed output so they persist after cleanup.
+    # Materialize ambiguous cases from metadata into output/issues/needs_matching/
+    # These were recorded during preprocessing with source_path for each file
     try:
-        needs_matching_src = working_dir / "needs_matching"
-        if needs_matching_src.exists() and needs_matching_src.is_dir():
-            needs_matching_dest = output_dir / "needs_matching"
-            needs_matching_dest.mkdir(parents=True, exist_ok=True)
-
-            for child in needs_matching_src.iterdir():
-                dest_path = needs_matching_dest / child.name
-                try:
-                    # If destination exists, merge by moving contents where possible
-                    if dest_path.exists() and child.is_dir():
-                        # Move each item within the child directory
-                        for sub in child.iterdir():
-                            shutil.move(str(sub), str(dest_path / sub.name))
-                        try:
-                            child.rmdir()
-                        except Exception:
-                            pass
-                    else:
-                        shutil.move(str(child), str(dest_path))
-                except Exception as e:
-                    logger.warning(f"Failed to move {child} to {dest_path}: {e}")
-
-            logger.info(f"Ambiguous cases moved to: {needs_matching_dest.absolute()}")
+        materialized = SnapchatMessagesProcessor.materialize_ambiguous_cases(
+            metadata, output_dir
+        )
+        if materialized > 0:
+            needs_matching_dest = output_dir / "issues" / "needs_matching"
+            logger.info(f"Ambiguous cases created in: {needs_matching_dest.absolute()}")
     except Exception as e:
-        logger.warning(f"Failed to move needs_matching directory to output: {e}")
+        logger.warning(f"Failed to materialize ambiguous cases: {e}")

@@ -120,7 +120,7 @@ class GoogleChatProcessor(ProcessorBase):
         """Check if Google Chat export needs preprocessing."""
         input_path = Path(input_dir)
 
-        # Check if already preprocessed (has metadata.json and media/)
+        # Check if already preprocessed (has metadata.json)
         if is_preprocessed_directory(input_dir):
             return False
 
@@ -444,7 +444,7 @@ def _process_working_directory(
     """Process a working directory (preprocessed export)
 
     Args:
-        working_dir: Path to preprocessed directory with metadata.json and media/
+        working_dir: Path to preprocessed directory with metadata.json
         output_dir: Output directory for processed files
         workers: Number of parallel workers
         dedup_manifest: Optional deduplication manifest for filtering secondary files

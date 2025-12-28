@@ -325,19 +325,17 @@ class TestImazingPreprocessed:
         """Should identify preprocessed export correctly."""
         from processors.imessage_imazing.processor import is_preprocessed
 
-        media_dir = imazing_export_dir / "media"
-        media_dir.mkdir()
-
         metadata = {
             "export_info": {"export_format": "imazing"},
             "conversations": {},
+            "file_hashes": {},  # Required for hash-only preprocessing
         }
         (imazing_export_dir / "metadata.json").write_text(json.dumps(metadata))
 
         assert is_preprocessed(imazing_export_dir) is True
 
-    def test_is_preprocessed_false_missing_media(self, imazing_export_dir):
-        """Should reject if media directory is missing."""
+    def test_is_preprocessed_false_missing_file_hashes(self, imazing_export_dir):
+        """Should reject if file_hashes is missing."""
         from processors.imessage_imazing.processor import is_preprocessed
 
         metadata = {
@@ -351,9 +349,6 @@ class TestImazingPreprocessed:
     def test_is_preprocessed_false_missing_metadata(self, imazing_export_dir):
         """Should reject if metadata.json is missing."""
         from processors.imessage_imazing.processor import is_preprocessed
-
-        media_dir = imazing_export_dir / "media"
-        media_dir.mkdir()
 
         assert is_preprocessed(imazing_export_dir) is False
 

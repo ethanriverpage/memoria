@@ -457,7 +457,7 @@ def _process_working_directory(
     """Process a working directory (preprocessed export)
 
     Args:
-        working_dir: Path to preprocessed directory with metadata.json and media/
+        working_dir: Path to preprocessed directory with metadata.json
         output_dir: Output directory for processed files
         workers: Number of parallel workers
         dedup_manifest: Optional deduplication manifest for filtering secondary files

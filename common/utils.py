@@ -238,8 +238,8 @@ def is_preprocessed_directory(input_dir: str) -> bool:
     """Return True if directory contains metadata.json.
 
     The metadata.json file is the canonical indicator of preprocessing.
-    Hash-only preprocessing creates only metadata.json (no media/ directory),
-    while copy-based preprocessing creates both. This function accepts either.
+    Preprocessed directories contain only metadata.json with source_path
+    entries pointing to original media files (no media/ directory).
     """
     input_path = Path(input_dir)
     metadata_file = input_path / "metadata.json"

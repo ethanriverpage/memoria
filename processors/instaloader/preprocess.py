@@ -500,9 +500,9 @@ class InstaloaderPreprocessor(PreprocessorBase):
     def copy_media_files(self, metadata: List[Dict]) -> None:
         """Hash media files and build metadata with source_path using hash_with_dedup."""
 
-        logger.info("Collecting media files for copy...")
+        logger.info("Collecting media files for hashing...")
         logger.debug(
-            f"Copying {self.stats['total_media_files']} media files to {self.media_output_dir}"
+            f"Hashing {self.stats['total_media_files']} media files for deduplication"
         )
 
         # Phase 1: Collect all files to copy

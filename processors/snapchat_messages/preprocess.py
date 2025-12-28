@@ -2,10 +2,11 @@
 """
 Snapchat Export Preprocessor
 
-Organizes Snapchat export files and creates cleaned metadata:
-- Moves media files to media/ folder
-- Moves overlay files to overlays/ folder
-- Creates metadata.json with essential information
+Preprocesses Snapchat export files with hash-only deduplication:
+- Hashes media files and builds source_path references (no file copying)
+- Matches overlays to videos by timestamp, storing overlay_source_path
+- Creates metadata.json with conversation context and source_path entries
+- Records ambiguous overlay cases for processor materialization into issues/
 """
 
 import json
@@ -16,7 +17,6 @@ from datetime import datetime, timezone
 import re
 
 from common.detection import DetectionResult
-from common.files.utils import copy_file
 from common.preprocess.context_mergers import merge_snapchat_context
 from common.output.logging import get_processor_logger
 from common.processing import print_preprocessing_stats
@@ -53,11 +53,6 @@ class SnapchatPreprocessor(PreprocessorBase):
 
         # Store username override for consolidated exports
         self.username_override = username_override
-
-        # Additional output directories specific to Snapchat
-        self.media_dir = self.media_output_dir
-        self.overlays_dir = self.output_dir / "overlays"
-        self.needs_matching_dir = self.output_dir / "needs_matching"
 
         # Set up context merger for message accumulation
         self.set_context_merger(merge_snapchat_context)
@@ -522,6 +517,7 @@ class SnapchatPreprocessor(PreprocessorBase):
 
                 # Phase 3: Overlay matching
                 overlay_file = None
+                overlay_source_path = None
                 if media_files:
                     try:
                         date_str = message.get("Created", "")
@@ -556,8 +552,10 @@ class SnapchatPreprocessor(PreprocessorBase):
                             overlay_count = len(overlays_at_timestamp)
 
                             if video_count == 1 and overlay_count == 1:
-                                # Safe 1:1 match
+                                # Safe 1:1 match - get overlay file and its source path
                                 overlay_file = overlays_at_timestamp[0]
+                                overlay_info = file_catalog.get(overlay_file, {})
+                                overlay_source_path = overlay_info.get("original_path")
                                 matched_overlays.add(overlay_file)
                             elif overlay_count > 0 and (
                                 video_count > 1 or overlay_count > 1
@@ -588,6 +586,7 @@ class SnapchatPreprocessor(PreprocessorBase):
                     context = {
                         "messages": [msg_context.copy()],
                         "overlay_file": overlay_file,
+                        "overlay_source_path": overlay_source_path,
                         "primary_created": msg_context.get("created"),
                     }
 
@@ -638,6 +637,7 @@ class SnapchatPreprocessor(PreprocessorBase):
 
                 # Try to find overlay
                 overlay_file = None
+                overlay_source_path = None
                 if mtime and mtime in mtime_to_filenames:
                     available_overlays = [
                         fname
@@ -646,6 +646,8 @@ class SnapchatPreprocessor(PreprocessorBase):
                     ]
                     if len(available_overlays) == 1:
                         overlay_file = available_overlays[0]
+                        overlay_info = file_catalog.get(overlay_file, {})
+                        overlay_source_path = overlay_info.get("original_path")
                         matched_overlays.add(overlay_file)
 
                 orphaned_context = {
@@ -663,6 +665,7 @@ class SnapchatPreprocessor(PreprocessorBase):
                         }
                     ],
                     "overlay_file": overlay_file,
+                    "overlay_source_path": overlay_source_path,
                     "primary_created": created_date,
                     "is_orphaned": True,
                 }
@@ -713,7 +716,7 @@ class SnapchatPreprocessor(PreprocessorBase):
         conversation_type: str,
         conversation_title: Optional[str],
     ) -> None:
-        """Record an ambiguous overlay matching case."""
+        """Record an ambiguous overlay matching case with source_path for materialization."""
         date_str = message.get("Created", "")
 
         ambiguous_case = {
@@ -731,7 +734,7 @@ class SnapchatPreprocessor(PreprocessorBase):
             "overlays": [],
         }
 
-        # Add video file details only
+        # Add video file details only (with source_path for materialization)
         image_count = 0
         video_count = 0
         for media_file in media_files:
@@ -742,6 +745,7 @@ class SnapchatPreprocessor(PreprocessorBase):
                 ambiguous_case["media_files"].append(
                     {
                         "filename": media_file,
+                        "source_path": file_info.get("original_path"),
                         "media_id": file_info.get("media_id"),
                         "uuid": file_info.get("uuid"),
                         "type": media_type,
@@ -751,11 +755,13 @@ class SnapchatPreprocessor(PreprocessorBase):
             else:
                 image_count += 1
 
-        # Add overlay details
+        # Add overlay details (with source_path for materialization)
         for overlay_file in overlays_at_timestamp:
+            overlay_info = file_catalog.get(overlay_file, {})
             ambiguous_case["overlays"].append(
                 {
                     "filename": overlay_file,
+                    "source_path": overlay_info.get("original_path"),
                     "uuid": self.extract_uuid(overlay_file),
                 }
             )
@@ -785,30 +791,21 @@ class SnapchatPreprocessor(PreprocessorBase):
             f"{overlay_count} overlays available",
         )
 
-    def copy_overlay_files(self, file_catalog: Dict) -> None:
-        """Copy overlay files to overlays/ directory."""
-        self.overlays_dir.mkdir(parents=True, exist_ok=True)
-
+    def validate_overlay_files(self, file_catalog: Dict) -> None:
+        """Validate overlay files exist (no copying - uses source_path directly)."""
         for filename, file_info in file_catalog.items():
             if file_info["type"] != "overlay":
                 continue
 
             source = Path(file_info["original_path"])
             if not source.exists():
-                continue
-
-            destination = self.overlays_dir / filename
-            try:
-                copy_file(source, destination)
-                file_info["new_path"] = str(destination)
-            except Exception as e:
                 self.log_failure(
-                    "COPY_FAILED",
+                    "MISSING_OVERLAY",
                     filename,
-                    f"Failed to copy overlay: {e}",
-                    f"source={source}, dest={destination}",
+                    "Overlay file not found",
+                    f"expected={source}",
                 )
-                logger.error("Failed to copy %s: %s", filename, e)
+                logger.warning("Overlay file not found: %s", source)
 
     def get_content_key(self) -> str:
         """Return the content key for Snapchat Messages metadata."""
@@ -820,20 +817,12 @@ class SnapchatPreprocessor(PreprocessorBase):
         merged_contexts = self.get_merged_contexts()
 
         metadata = {
-            "export_info": {
-                "export_path": str(self.export_path),
-                "export_name": self.export_path.name,
-                "export_username": self.extract_username(chat_history),
-                "processed_date": datetime.now().isoformat(),
-            },
             "conversations": {},
-            "unmatched_media": [],  # Files processable but lacking conversation context
-            "file_hashes": {},  # Maps filename -> content_hash for dedup optimization
         }
 
         # Group entries by conversation
         conversation_entries: Dict[str, List[Dict]] = {}
-        orphaned_entries: List[Dict] = []
+        orphaned_count = 0
 
         for content_hash, context in merged_contexts.items():
             registry_entry = self._hash_registry.get(content_hash, {})
@@ -848,23 +837,29 @@ class SnapchatPreprocessor(PreprocessorBase):
             is_duplicate = len(messages) > 1
 
             if is_orphaned or (messages and messages[0].get("conversation_id") is None):
-                # Orphaned media
-                entry = {
-                    "conversation_id": None,
-                    "conversation_type": None,
-                    "conversation_title": None,
-                    "sender": None,
-                    "media_type": "MEDIA",
-                    "created": context.get("primary_created"),
-                    "content": "",
-                    "is_sender": None,
-                    "media_id": messages[0].get("media_id", "") if messages else "",
-                    "media_files": [filename],
-                    "source_paths": {filename: source_path},
-                }
-                if overlay_file:
-                    entry["overlay_file"] = overlay_file
-                orphaned_entries.append(entry)
+                # Orphaned media: record as schema-compliant unmatched_media entry.
+                #
+                # NOTE:
+                # - `unmatched_media` entries are NOT message entries.
+                # - They must include: filename + source_path (see common/metadata/schema.py).
+                timestamp = context.get("primary_created")
+                media_id = messages[0].get("media_id", "") if messages else ""
+                try:
+                    if filename and source_path:
+                        self.add_unmatched_media(
+                            filename=filename,
+                            source_path=Path(source_path),
+                            content_hash=content_hash,
+                            timestamp=timestamp,
+                            media_id=media_id,
+                            overlay_file=overlay_file,
+                            overlay_source_path=context.get("overlay_source_path"),
+                        )
+                        orphaned_count += 1
+                except Exception:
+                    # If something goes wrong here, let save_metadata validation surface it
+                    # with a clear error rather than crashing mid-preprocess.
+                    pass
             elif is_duplicate:
                 # Duplicate media across conversations - create merged entry
                 conv_id = messages[0].get("conversation_id")
@@ -879,6 +874,9 @@ class SnapchatPreprocessor(PreprocessorBase):
                 }
                 if overlay_file:
                     entry["overlay_file"] = overlay_file
+                overlay_source_path = context.get("overlay_source_path")
+                if overlay_source_path:
+                    entry["overlay_source_path"] = overlay_source_path
 
                 if conv_id not in conversation_entries:
                     conversation_entries[conv_id] = []
@@ -904,6 +902,9 @@ class SnapchatPreprocessor(PreprocessorBase):
                 }
                 if overlay_file:
                     entry["overlay_file"] = overlay_file
+                overlay_source_path = context.get("overlay_source_path")
+                if overlay_source_path:
+                    entry["overlay_source_path"] = overlay_source_path
 
                 if conv_id not in conversation_entries:
                     conversation_entries[conv_id] = []
@@ -932,14 +933,6 @@ class SnapchatPreprocessor(PreprocessorBase):
                 "messages": entries,
             }
 
-        metadata["unmatched_media"] = orphaned_entries
-
-        # Build file_hashes lookup table for cross-processor dedup optimization
-        for content_hash, registry_entry in self._hash_registry.items():
-            filename = registry_entry.get("filename", "")
-            if filename:
-                metadata["file_hashes"][filename] = content_hash
-
         # Update stats
         total_unique = len(merged_contexts)
         total_messages = sum(
@@ -948,75 +941,29 @@ class SnapchatPreprocessor(PreprocessorBase):
         duplicates = total_messages - total_unique
         self.stats["duplicate_files"] = duplicates if duplicates > 0 else 0
         self.stats["deduplicated_files"] = duplicates if duplicates > 0 else 0
-        self.stats["orphaned_media"] = len(orphaned_entries)
+        self.stats["orphaned_media"] = orphaned_count
 
         return metadata
 
-    def organize_ambiguous_files(
+    def prepare_ambiguous_cases(
         self, ambiguous_cases: List[Dict], export_username: str
-    ) -> None:
-        """Organize ambiguous matching cases into needs_matching/ directory"""
+    ) -> List[Dict]:
+        """Prepare ambiguous matching cases for storage in metadata.json.
+        
+        The processor will materialize these into output_dir/issues/needs_matching/
+        using the source_path fields during processing.
+        """
         if not ambiguous_cases:
-            return
-
-        self.needs_matching_dir.mkdir(exist_ok=True)
+            return []
 
         logger.info(
-            "Organizing %d ambiguous cases for manual matching...", len(ambiguous_cases)
+            "Recording %d ambiguous cases for manual matching...", len(ambiguous_cases)
         )
 
         for case in ambiguous_cases:
-            # Create timestamped subfolder (sanitized)
-            timestamp = case["timestamp"].replace(" ", "_").replace(":", "-")
-            case_dir = self.needs_matching_dir / timestamp
-            case_dir.mkdir(exist_ok=True)
-
-            # Create media and overlays subdirectories
-            media_subdir = case_dir / "media"
-            overlay_subdir = case_dir / "overlays"
-            media_subdir.mkdir(exist_ok=True)
-            overlay_subdir.mkdir(exist_ok=True)
-
-            # Copy media files
-            for media_info in case["media_files"]:
-                filename = media_info["filename"]
-                source = self.media_dir / filename
-                dest = media_subdir / filename
-                if source.exists():
-                    try:
-                        copy_file(source, dest)
-                    except Exception as e:
-                        logger.warning("Failed to copy %s: %s", filename, e)
-                else:
-                    logger.warning("Source file not found: %s", source)
-
-            # Copy overlay files
-            for overlay_info in case["overlays"]:
-                filename = overlay_info["filename"]
-                source = self.overlays_dir / filename
-                dest = overlay_subdir / filename
-                if source.exists():
-                    try:
-                        copy_file(source, dest)
-                    except Exception as e:
-                        logger.warning("Failed to copy %s: %s", filename, e)
-                else:
-                    logger.warning("Source overlay not found: %s", source)
-
-            # Add export username to case
             case["export_username"] = export_username
 
-            # Write match_info.json
-            match_info_path = case_dir / "match_info.json"
-            try:
-                with open(match_info_path, "w", encoding="utf-8") as f:
-                    json.dump(case, f, indent=2, ensure_ascii=False)
-            except Exception as e:
-                logger.error("Failed to write %s: %s", match_info_path, e)
-
-        logger.info(
-            "Created %d folders in %s", len(ambiguous_cases), self.needs_matching_dir
-        )
+        return ambiguous_cases
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -1069,25 +1016,25 @@ class SnapchatPreprocessor(PreprocessorBase):
             duplicates = sum(1 for r in results.values() if r.is_duplicate)
             logger.info(f"   Copied {unique} unique files, {duplicates} duplicates")
 
-        # Copy overlay files (no deduplication for overlays)
-        logger.info("Copying overlay files...")
-        self.copy_overlay_files(file_catalog)
+        # Validate overlay files exist (no copying - uses source_path during processing)
+        logger.info("Validating overlay files...")
+        self.validate_overlay_files(file_catalog)
 
         # Build metadata from dedup results
         logger.info("Building metadata...")
         metadata = self.build_metadata_from_results(chat_history)
 
-        # Organize ambiguous cases
+        # Prepare ambiguous cases for storage in metadata (materialized during processing)
         export_username = metadata.get("export_info", {}).get(
             "export_username", "unknown"
         )
-        self.organize_ambiguous_files(ambiguous_cases, export_username)
+        prepared_cases = self.prepare_ambiguous_cases(ambiguous_cases, export_username)
 
-        # Save metadata
-        self.set_unmatched_media(metadata.get("unmatched_media", []))
+        # Save metadata (with unmatched_media and ambiguous_cases)
+        self.set_ambiguous_cases(prepared_cases)
         self.save_metadata(
             metadata["conversations"],
-            extra_export_info={},  # export_info already built in build_metadata_from_results
+            extra_export_info={},
         )
 
         return True
