@@ -80,7 +80,8 @@ class GooglePhotosProcessor(ProcessorBase):
 
     @staticmethod
     def get_priority() -> int:
-        return 50
+        # Slower processor (~hours) - run later when multiple processors match (e.g., Takeout)
+        return 60
 
     @staticmethod
     def get_output_info() -> OutputInfo:

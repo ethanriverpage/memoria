@@ -553,7 +553,7 @@ class TestImazingProcessor:
         """Should return priority value."""
         from processors.imessage_imazing.processor import ImazingProcessor
 
-        assert ImazingProcessor.get_priority() == 85
+        assert ImazingProcessor.get_priority() == 50
 
     def test_supports_dedup(self):
         """Should support deduplication."""

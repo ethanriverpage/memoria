@@ -109,7 +109,8 @@ class IMessageProcessor(ProcessorBase):
 
     @staticmethod
     def get_priority() -> int:
-        return 80  # High priority - requires specific SQLite database structure
+        # Slowest processor in typical full runs (~hours) - run later when multiple processors match
+        return 49
 
     @staticmethod
     def get_output_info() -> OutputInfo:

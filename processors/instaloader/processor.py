@@ -94,7 +94,8 @@ class InstaloaderProcessor(ProcessorBase):
 
     @staticmethod
     def get_priority() -> int:
-        return 30
+        # Fast processor (~minutes) - run early when multiple processors match
+        return 84
 
     @staticmethod
     def get_output_info() -> OutputInfo:

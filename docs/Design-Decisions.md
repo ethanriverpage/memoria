@@ -279,9 +279,9 @@ The flat structure became unwieldy with 20+ modules. Grouping by functionality:
 **Why it matters:**
 A Google Takeout export may contain:
 
-- Google Photos (priority 50)
-- Google Chat (priority 50)
-- Google Voice (priority 50)
+- Google Photos (priority 60)
+- Google Chat (priority 86)
+- Google Voice (priority 95)
 
 All three processors match and should run. Priority ensures they run in a sensible order (processors with higher priority run first).
 

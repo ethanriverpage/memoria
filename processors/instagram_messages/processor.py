@@ -110,7 +110,8 @@ class InstagramMessagesProcessor(ProcessorBase):
 
     @staticmethod
     def get_priority() -> int:
-        return 70
+        # Fast processor (~minutes) - run early when multiple processors match
+        return 88
 
     @staticmethod
     def get_output_info() -> OutputInfo:

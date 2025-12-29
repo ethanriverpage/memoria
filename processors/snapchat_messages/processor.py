@@ -106,7 +106,8 @@ class SnapchatMessagesProcessor(ProcessorBase):
 
     @staticmethod
     def get_priority() -> int:
-        return 85
+        # Slower processor (~tens of minutes) - run after the fastest processors
+        return 69
 
     @staticmethod
     def get_required_dependencies() -> List[str]:

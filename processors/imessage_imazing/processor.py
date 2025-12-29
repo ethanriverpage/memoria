@@ -113,7 +113,8 @@ class ImazingProcessor(ProcessorBase):
 
     @staticmethod
     def get_priority() -> int:
-        return 85
+        # Slow processor in typical full runs - run later when multiple processors match
+        return 50
 
     @staticmethod
     def get_output_info() -> OutputInfo:

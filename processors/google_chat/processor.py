@@ -102,7 +102,8 @@ class GoogleChatProcessor(ProcessorBase):
 
     @staticmethod
     def get_priority() -> int:
-        return 50
+        # Fast processor (~minutes) - run early when multiple processors match (e.g., Takeout)
+        return 86
 
     @staticmethod
     def get_output_info() -> OutputInfo:

@@ -282,6 +282,8 @@ def _extract_frame_unchecked(
     Returns:
         Path to temporary frame image, or None if extraction failed.
     """
+    frame_path: Optional[Path] = None
+    extracted_ok = False
     try:
         # Create temporary file for frame
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
@@ -322,21 +324,14 @@ def _extract_frame_unchecked(
             ]
             error_msg = error_lines[-1] if error_lines else "unknown error"
             logger.debug(f"Frame extract failed: {short_path(video_path)}: {error_msg}")
-            try:
-                frame_path.unlink()
-            except Exception:
-                pass
             return None
 
         # Verify frame was created
         if not frame_path.exists() or frame_path.stat().st_size == 0:
             logger.debug(f"No frame output: {short_path(video_path)}")
-            try:
-                frame_path.unlink()
-            except Exception:
-                pass
             return None
 
+        extracted_ok = True
         return frame_path
 
     except subprocess.TimeoutExpired:
@@ -348,6 +343,13 @@ def _extract_frame_unchecked(
     except Exception as e:
         logger.debug(f"Frame failed: {short_path(video_path)}: {e}")
         return None
+    finally:
+        # Only clean up on failure; on success the caller is responsible for deletion.
+        if frame_path is not None and not extracted_ok:
+            try:
+                frame_path.unlink()
+            except Exception:
+                pass
 
 
 def compute_video_hash_with_dims(

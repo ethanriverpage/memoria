@@ -187,17 +187,17 @@ Output example:
 ```
 Available processors:
 
-  iMessage-iMazing               (priority: 85)
-  Snapchat Messages              (priority: 85)
-  iMessage                       (priority: 80)
-  Snapchat Memories              (priority: 80)
-  Discord                        (priority: 70)
-  Instagram Messages             (priority: 70)
-  Instagram Public Media         (priority: 60)
-  Google Chat                    (priority: 50)
-  Google Photos                  (priority: 50)
-  Google Voice                   (priority: 50)
-  Instaloader                    (priority: 30)
+  Google Voice                   (priority: 95)
+  Discord                        (priority: 90)
+  Instagram Messages             (priority: 88)
+  Instagram Public Media         (priority: 87)
+  Google Chat                    (priority: 86)
+  Instaloader                    (priority: 84)
+  Snapchat Memories              (priority: 70)
+  Snapchat Messages              (priority: 69)
+  Google Photos                  (priority: 60)
+  iMessage-iMazing               (priority: 50)
+  iMessage                       (priority: 49)
 
 Total: 11 processor(s)
 ```
