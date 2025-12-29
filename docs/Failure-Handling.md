@@ -66,6 +66,42 @@ Processors must use `FailureTracker` to record soft-fails and matching failures.
 - For **failed-matching**, we keep originals intact and **copy** evidence into `issues/failed-matching/`.
 - For **failed-processing**, we must ensure failed outputs do not remain mixed with successful outputs; the preferred behavior is to **move** failed output files into `issues/failed-processing/`.
 
+## Terminology: orphaned vs unmatched (matching concepts)
+
+These terms are easy to mix up because they all come from the same underlying problem: the export contains **media files** and **metadata references**, and they don’t always line up.
+
+### Orphaned media (matching failure)
+
+- **Definition**: A **media file exists**, but there is **no matching metadata** entry for it.
+- **Impact**: We generally lack authoritative context (timestamp/source attribution/conversation association), so any processing may be “best effort”.
+- **How it’s recorded**: `FailureTracker.add_orphaned_media(...)`
+- **Where it shows up**:
+  - Evidence copy: `issues/failed-matching/media/`
+  - Summary + context: `issues/failure-report.json`
+
+### Orphaned metadata (matching failure)
+
+- **Definition**: A **metadata entry exists**, but the **media file it references is missing**.
+- **Impact**: There is nothing to process; this is evidence of an incomplete or inconsistent export.
+- **How it’s recorded**: `FailureTracker.add_orphaned_metadata(...)`
+- **Where it shows up**:
+  - JSON entries: `issues/failed-matching/metadata/`
+  - Summary + context: `issues/failure-report.json`
+
+### Unmatched media (processable, but incomplete context)
+
+This is **not** a FailureTracker category. It’s a field in preprocessed `metadata.json`.
+
+- **Definition**: A media file that is **still processable** (it has `filename` + `source_path`), but is missing **full context** (e.g., not matched to a conversation/thread/sender, or only partially matched).
+- **How it’s recorded**: `metadata.json` → top-level `unmatched_media` list (schema: `common/metadata/schema.py: UnmatchedMediaEntry`).
+- **Why it exists**: Some processors choose to still emit outputs for these files (with limited metadata) so they remain accessible/searchable, rather than only filing them under `issues/`.
+
+### Quick “who’s missing what?” checklist
+
+- **Orphaned media**: file exists, metadata missing → FailureTracker → `issues/failed-matching/media/`
+- **Orphaned metadata**: metadata exists, file missing → FailureTracker → `issues/failed-matching/metadata/`
+- **Unmatched media**: file exists, processable, but context incomplete → `metadata.json: unmatched_media[]`
+
 ## Canonical Failure Conditions (Policy Decisions)
 
 This section captures the required behavior for specific conditions.
@@ -129,7 +165,16 @@ This section captures the required behavior for specific conditions.
 - **Required behavior**:
   - Abort processor invocation.
   - Log the offending item and its GPS source.
-- **Rationale**: (0,0) is a common “unknown” sentinel and embedding it corrupts location data.
+- **Rationale**: (0,0) is a common "unknown" sentinel and embedding it corrupts location data.
+
+### 8) FilenameGenerator requires a valid, parseable timestamp (hard-fail)
+
+- **Condition**: `FilenameGenerator.generate()` is called with a `None`, empty, or unparseable `timestamp_str`.
+- **Severity**: Hard-fail (processor-level).
+- **Required behavior**:
+  - Raise `InvariantViolation` immediately.
+  - Include the platform, username, and offending timestamp value in the error message.
+- **Rationale**: Output filenames encode the date (`YYYYMMDD`). A missing or unparseable timestamp indicates a bug in the processor - either the media item should have been filtered out earlier (orphaned/unmatched), or the timestamp extraction logic has a defect. Silently falling back to a placeholder date would produce incorrect filenames and embed wrong metadata.
 
 ## Additional Failure Conditions Observed in Logs (Needs Policy)
 
@@ -164,6 +209,17 @@ These are real patterns seen in `logs/media_processor_20251227_184304.log` that 
 - **Proposed policy**:
   - If EXIF embed is required for correctness (timestamps, attribution): **soft-fail (media-level)** → `issues/failed-processing/`.
   - If EXIF embed is optional for that format: **warning** with explicit “skipping EXIF for unsupported/corrupt file”.
+
+### E) Placeholder attachments (iMessage optimized/iCloud stubs)
+
+- **Observed pattern**:
+  - A file exists on disk (often `.mov`/`.mp4`) but is not a valid container (e.g., missing `ftyp` atom near the start),
+    and probing fails with errors like “moov atom not found”.
+- **Policy**: **soft-fail (media-level)** as a **matching failure** (treat the payload as missing).
+  - Record via `FailureTracker.add_orphaned_metadata(...)` with reason `placeholder_attachment`.
+  - Save an entry under `issues/failed-matching/metadata/` (include `source_path`, file size, and detection reason).
+  - Do **not** emit a processed output file for placeholder attachments.
+  - Rationale: the export contains a stub, not the actual media payload; attempting to “process” it produces junk output.
 
 ### F) EXIF batch skips non-existent files listed for writing
 
@@ -211,6 +267,9 @@ Two distinct cases appear in logs:
 - **Invariant validators** (`common/validation/invariants.py`):
   - `require_non_unknown_username()` - hard-fail if username is None or "unknown"
   - `validate_gps()` - hard-fail if GPS is (0.0, 0.0) or out of valid range
+
+- **FilenameGenerator** (`common/utils.py`):
+  - `generate()` raises `InvariantViolation` if timestamp is missing or unparseable
 
 - **EXIF batch outcomes** (`common/media/exiftool.py`):
   - `BatchWriteOutcome` - structured result with successes and `ExifWriteFailure` list

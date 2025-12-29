@@ -325,7 +325,10 @@ class TestInstaloaderOrphanDetection:
         # Check that orphaned metadata was tracked
         assert len(preprocessor.failure_tracker.orphaned_metadata) >= 1
         orphaned_entry = preprocessor.failure_tracker.orphaned_metadata[0]
-        assert orphaned_entry["reason"] == "Metadata exists but no matching media file found"
+        assert (
+            orphaned_entry["reason"]
+            == "Metadata exists but no matching media file found"
+        )
         assert orphaned_entry["context"]["has_txt"] is True
 
     def test_orphaned_metadata_json_without_media(

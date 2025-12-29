@@ -118,6 +118,37 @@ class TestGooglePhotosLivePhotos:
         assert (photos_dir / "IMG_1234.JPG").exists()
         assert (photos_dir / "IMG_1234.MOV").exists()
 
+    def test_live_photo_no_collision_with_regular_file(
+        self, google_photos_processor, temp_export_dir, temp_output_dir
+    ):
+        """Live photo pair should not collide with regular file of same timestamp."""
+        photos_dir = temp_export_dir / "Google Photos" / "Collision Test"
+        photos_dir.mkdir(parents=True)
+
+        # Create Live Photo pair and a regular video with same timestamp
+        write_media_file(photos_dir / "IMG_1234.JPG", "jpeg")
+        write_media_file(photos_dir / "IMG_1234.MOV", "mov")
+        write_media_file(photos_dir / "VID_5678.MOV", "mov")  # Same timestamp, different file
+
+        # All three files have the same timestamp
+        metadata = {
+            "title": "IMG_1234",
+            "photoTakenTime": {"timestamp": "1609459200"},
+        }
+        (photos_dir / "IMG_1234.JPG.json").write_text(json.dumps(metadata))
+        (photos_dir / "IMG_1234.MOV.json").write_text(json.dumps(metadata))
+
+        metadata2 = {
+            "title": "VID_5678.MOV",
+            "photoTakenTime": {"timestamp": "1609459200"},  # Same timestamp
+        }
+        (photos_dir / "VID_5678.MOV.json").write_text(json.dumps(metadata2))
+
+        # All files should exist in export
+        assert (photos_dir / "IMG_1234.JPG").exists()
+        assert (photos_dir / "IMG_1234.MOV").exists()
+        assert (photos_dir / "VID_5678.MOV").exists()
+
 
 class TestGooglePhotosEdgeCases:
     """Tests for edge cases in Google Photos processing."""
@@ -312,14 +343,14 @@ class TestGooglePhotosContentHashCaching:
         assert len(media_files) > 0, "Should have at least one media file"
 
         for media_entry in media_files:
-            assert "content_hash" in media_entry, (
-                "Each media entry should have content_hash for cross-processor dedup"
-            )
+            assert (
+                "content_hash" in media_entry
+            ), "Each media entry should have content_hash for cross-processor dedup"
             assert media_entry["content_hash"], "content_hash should not be empty"
             # xxHash64 produces 16-character hex string
-            assert len(media_entry["content_hash"]) == 16, (
-                "content_hash should be a 16-char xxHash64 hex digest"
-            )
+            assert (
+                len(media_entry["content_hash"]) == 16
+            ), "content_hash should be a 16-char xxHash64 hex digest"
 
 
 class TestGooglePhotosRealisticFixtures:
@@ -380,7 +411,9 @@ class TestGooglePhotosRealisticFixtures:
         )
 
         takeout_dir = temp_export_dir / "Takeout"
-        lib_file = takeout_dir / "Google Photos" / "Photos from 2023" / "shared_photo.jpg"
+        lib_file = (
+            takeout_dir / "Google Photos" / "Photos from 2023" / "shared_photo.jpg"
+        )
         album_file = (
             takeout_dir / "Google Photos" / "Albums" / "Favorites" / "shared_photo.jpg"
         )
@@ -396,11 +429,11 @@ class TestGooglePhotosRealisticFixtures:
         """Should handle files with and without JSON metadata."""
         from tests.fixtures.export_tree import copy_export_fixture
 
-        copy_export_fixture("google_photos", "takeout_missing_json_some", temp_export_dir)
-
-        photos_dir = (
-            temp_export_dir / "Takeout" / "Google Photos" / "Photos from 2023"
+        copy_export_fixture(
+            "google_photos", "takeout_missing_json_some", temp_export_dir
         )
+
+        photos_dir = temp_export_dir / "Takeout" / "Google Photos" / "Photos from 2023"
 
         # One has metadata, one doesn't
         assert (photos_dir / "with_metadata.jpg").exists()

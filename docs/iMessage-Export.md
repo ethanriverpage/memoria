@@ -14,7 +14,8 @@ This guide covers processing iMessage exports from Mac and iPhone backups.
 8. [Embedded Metadata](#embedded-metadata)
 9. [Deduplication](#deduplication)
 10. [Live Photos](#live-photos)
-11. [Troubleshooting](#troubleshooting)
+11. [Placeholder Attachments](#placeholder-attachments)
+12. [Troubleshooting](#troubleshooting)
 
 ## Overview
 
@@ -408,6 +409,58 @@ The EXIF description for the video includes `[Live Photo Video]` marker.
 
 ---
 
+## Placeholder Attachments
+
+### What Are Placeholder Attachments?
+
+When iCloud "Optimize Storage" is enabled on a Mac or iPhone, the device may not download the full content of large attachments (especially videos). Instead, it keeps a **placeholder blob** on disk that appears to be a MOV/MP4 file but actually contains:
+
+- Encrypted or incomplete data
+- No valid video container structure (missing `ftyp` and `moov` atoms)
+- High-entropy binary data that cannot be played or processed
+
+These placeholders exist in the iMessage database with valid metadata (timestamp, sender, conversation), but the actual media content was never fully downloaded from iCloud.
+
+### How Memoria Detects Them
+
+Memoria uses a two-stage detection strategy:
+
+1. **Fast header check**: Scan the first 64KB for the `ftyp` atom (a required marker in MOV/MP4 containers). If missing, the file is suspicious.
+
+2. **Authoritative ffprobe check**: For suspicious files, run `ffprobe` to confirm. If ffprobe fails with "moov atom not found" or similar errors, the file is confirmed as a placeholder.
+
+This approach is fast (header check takes <1ms per file) and accurate (ffprobe confirms edge cases).
+
+### How Memoria Handles Them
+
+Placeholder attachments are treated as **orphaned metadata** (database entry exists but media payload is missing):
+
+- The file is **skipped** during preprocessing (not included in `metadata.json`)
+- The metadata is **recorded** in `issues/orphaned-metadata/` via FailureTracker
+- The reason is logged as "Placeholder attachment (iCloud incomplete download)"
+
+### Recovering Placeholder Content
+
+To recover the actual media content:
+
+1. **On Mac**: Open Messages.app, find the conversation, and click on the attachment to trigger a download from iCloud
+2. **On iPhone**: Open the Messages app and tap on attachments to download them
+3. **Re-export**: After downloading, create a new iMessage export
+
+Alternatively, you can check if the same media exists in other exports (e.g., from the sender's device or a different backup).
+
+### Statistics
+
+When placeholders are detected during preprocessing, you'll see a log message like:
+
+```
+Detected 967 placeholder attachments (iCloud incomplete downloads)
+```
+
+These are also included in the failure report under `issues/orphaned-metadata/`.
+
+---
+
 ## Troubleshooting
 
 ### "No processors matched input directory"
@@ -463,6 +516,12 @@ The iMessage database only includes:
 - Messages not deleted before backup
 
 Deleted messages and attachments cannot be recovered.
+
+### "moov atom not found" errors in logs
+
+This error indicates placeholder attachments from iCloud "Optimize Storage". The video files exist on disk but contain incomplete/encrypted data instead of actual video content.
+
+**Solution**: See [Placeholder Attachments](#placeholder-attachments) for details. These files are automatically detected and tracked as orphaned metadata. To recover the actual content, open Messages.app and download the attachments from iCloud before re-exporting.
 
 ---
 
@@ -551,6 +610,8 @@ Both sources use the same SQLite database schema.
 | `transfer_name` | TEXT | Original filename | `"IMG_0926.HEIC"` |
 | `total_bytes` | INTEGER | File size in bytes | `148605` |
 
+**Note on `transfer_state`**: A value of 5 indicates the attachment transfer is "complete" according to the database. However, when iCloud "Optimize Storage" is enabled, the file on disk may be a placeholder blob rather than the actual media content. These placeholders pass database checks but fail container validation (see [Placeholder Attachments](#placeholder-attachments)).
+
 ### Attachment Path Structure
 
 Attachments are stored in a hashed directory structure:
@@ -604,6 +665,7 @@ def convert_timestamp(apple_timestamp: int) -> datetime:
 Starting with macOS Ventura (13.0) and iOS 16, message content is often stored in `attributedBody` (NSTypedStream format) rather than the `text` column.
 
 **Impact:**
+
 - Mac exports (macOS Ventura+): ~99% of messages have NULL `text`
 - iPhone exports: ~15-20% may need `attributedBody` extraction
 

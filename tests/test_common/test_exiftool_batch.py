@@ -20,6 +20,7 @@ from common.media.exiftool import (
     GPSData,
     MetadataWriteRequest,
     XMP_PRESERVED_FILENAME_EXTENSIONS,
+    _parse_exiftool_failed_files,
     batch_read_existing_metadata,
     batch_write_metadata_requests,
 )
@@ -656,16 +657,173 @@ class TestBatchWriteOutcomes:
             return_value=MagicMock(
                 returncode=1,
                 stdout="",
-                stderr="File format error: cannot parse",
+                stderr=f"Error: Not a valid MOV (looks more like a TXT) - {test_file}",
             ),
         ):
             outcome = batch_write_metadata_requests(
-                [request], existing_metadata_map={str(test_file): {}}, dedup_manifest=None
+                [request],
+                existing_metadata_map={str(test_file): {}},
+                dedup_manifest=None,
             )
 
         assert outcome.failures
         assert outcome.failures[0].reason_code == "format_error"
         assert str(test_file) not in outcome.successes
+
+    def test_mixed_success_failure_only_marks_failed_files(
+        self, tmp_path: Path
+    ) -> None:
+        """When some files fail and others succeed, only failed files are marked.
+
+        This is the fix for the bug where a non-zero exiftool return code
+        caused ALL files in a batch to be marked as failed.
+        """
+        good1 = tmp_path / "good1.jpg"
+        good2 = tmp_path / "good2.jpg"
+        bad = tmp_path / "bad.jpg"
+        good1.touch()
+        good2.touch()
+        bad.touch()
+
+        requests = [
+            MetadataWriteRequest(
+                file_path=str(good1),
+                arg_preamble=DEFAULT_PREAMBLE,
+                processor_name="test",
+            ),
+            MetadataWriteRequest(
+                file_path=str(bad), arg_preamble=DEFAULT_PREAMBLE, processor_name="test"
+            ),
+            MetadataWriteRequest(
+                file_path=str(good2),
+                arg_preamble=DEFAULT_PREAMBLE,
+                processor_name="test",
+            ),
+        ]
+
+        # Simulate exiftool output where only bad.jpg fails
+        stderr = f"Error: Not a valid JPG (looks more like a TXT) - {bad}"
+        with patch(
+            "common.media.exiftool.subprocess.run",
+            return_value=MagicMock(returncode=1, stdout="", stderr=stderr),
+        ):
+            outcome = batch_write_metadata_requests(
+                requests,
+                existing_metadata_map={
+                    str(good1): {},
+                    str(bad): {},
+                    str(good2): {},
+                },
+                dedup_manifest=None,
+            )
+
+        # Only bad.jpg should be marked as failed
+        assert len(outcome.failures) == 1
+        assert outcome.failures[0].file_path == str(bad)
+        assert outcome.failures[0].reason_code == "format_error"
+
+        # good1.jpg and good2.jpg should be in successes
+        assert str(good1) in outcome.successes
+        assert str(good2) in outcome.successes
+        assert str(bad) not in outcome.successes
+
+    def test_multiple_file_errors_in_batch(self, tmp_path: Path) -> None:
+        """Multiple files failing should each be tracked individually."""
+        good = tmp_path / "good.jpg"
+        bad1 = tmp_path / "bad1.jpg"
+        bad2 = tmp_path / "bad2.jpg"
+        good.touch()
+        bad1.touch()
+        bad2.touch()
+
+        requests = [
+            MetadataWriteRequest(
+                file_path=str(good),
+                arg_preamble=DEFAULT_PREAMBLE,
+                processor_name="test",
+            ),
+            MetadataWriteRequest(
+                file_path=str(bad1),
+                arg_preamble=DEFAULT_PREAMBLE,
+                processor_name="test",
+            ),
+            MetadataWriteRequest(
+                file_path=str(bad2),
+                arg_preamble=DEFAULT_PREAMBLE,
+                processor_name="test",
+            ),
+        ]
+
+        # Simulate exiftool output where both bad files fail
+        stderr = (
+            f"Error: Not a valid JPG (looks more like a TXT) - {bad1}\n"
+            f"Error: File not found - {bad2}"
+        )
+        with patch(
+            "common.media.exiftool.subprocess.run",
+            return_value=MagicMock(returncode=1, stdout="", stderr=stderr),
+        ):
+            outcome = batch_write_metadata_requests(
+                requests,
+                existing_metadata_map={
+                    str(good): {},
+                    str(bad1): {},
+                    str(bad2): {},
+                },
+                dedup_manifest=None,
+            )
+
+        # Both bad files should be marked as failed with correct reason codes
+        assert len(outcome.failures) == 2
+        failure_map = {f.file_path: f for f in outcome.failures}
+
+        assert str(bad1) in failure_map
+        assert failure_map[str(bad1)].reason_code == "format_error"
+
+        assert str(bad2) in failure_map
+        assert failure_map[str(bad2)].reason_code == "file_missing"
+
+        # Only good.jpg should be in successes
+        assert str(good) in outcome.successes
+        assert len(outcome.successes) == 1
+
+    def test_warning_messages_also_tracked(self, tmp_path: Path) -> None:
+        """Warning messages with file paths should also mark files as failed."""
+        good = tmp_path / "good.jpg"
+        warned = tmp_path / "warned.jpg"
+        good.touch()
+        warned.touch()
+
+        requests = [
+            MetadataWriteRequest(
+                file_path=str(good),
+                arg_preamble=DEFAULT_PREAMBLE,
+                processor_name="test",
+            ),
+            MetadataWriteRequest(
+                file_path=str(warned),
+                arg_preamble=DEFAULT_PREAMBLE,
+                processor_name="test",
+            ),
+        ]
+
+        stderr = f"Warning: Bad EXIF data - {warned}"
+        with patch(
+            "common.media.exiftool.subprocess.run",
+            return_value=MagicMock(returncode=1, stdout="", stderr=stderr),
+        ):
+            outcome = batch_write_metadata_requests(
+                requests,
+                existing_metadata_map={str(good): {}, str(warned): {}},
+                dedup_manifest=None,
+            )
+
+        # Warned file should be in failures
+        assert len(outcome.failures) == 1
+        assert outcome.failures[0].file_path == str(warned)
+
+        # Good file should be in successes
+        assert str(good) in outcome.successes
 
 
 class TestBatchReadResult:
@@ -681,3 +839,69 @@ class TestBatchReadResult:
         assert isinstance(result, BatchReadResult)
         assert str(missing) in result.missing_files
         assert str(existing) in result.metadata_map
+
+
+class TestParseExiftoolFailedFiles:
+    """Tests for _parse_exiftool_failed_files helper function."""
+
+    def test_parse_error_with_file_path(self) -> None:
+        """Parse standard error message with file path."""
+        stderr = "Error: File not found - /path/to/missing.jpg"
+        result = _parse_exiftool_failed_files(stderr)
+
+        assert "/path/to/missing.jpg" in result
+        assert result["/path/to/missing.jpg"] == "File not found"
+
+    def test_parse_format_error(self) -> None:
+        """Parse format error message."""
+        stderr = "Error: Not a valid JPG (looks more like a TXT) - /tmp/bad.jpg"
+        result = _parse_exiftool_failed_files(stderr)
+
+        assert "/tmp/bad.jpg" in result
+        assert "Not a valid JPG" in result["/tmp/bad.jpg"]
+
+    def test_parse_warning_with_file_path(self) -> None:
+        """Parse warning message with file path."""
+        stderr = "Warning: Bad EXIF data - /path/to/warned.jpg"
+        result = _parse_exiftool_failed_files(stderr)
+
+        assert "/path/to/warned.jpg" in result
+        assert result["/path/to/warned.jpg"] == "Bad EXIF data"
+
+    def test_parse_multiple_errors(self) -> None:
+        """Parse multiple error messages."""
+        stderr = (
+            "Error: File not found - /path/to/missing.jpg\n"
+            "Error: Not a valid JPG - /path/to/corrupt.jpg\n"
+            "Warning: Bad data - /path/to/warned.jpg"
+        )
+        result = _parse_exiftool_failed_files(stderr)
+
+        assert len(result) == 3
+        assert "/path/to/missing.jpg" in result
+        assert "/path/to/corrupt.jpg" in result
+        assert "/path/to/warned.jpg" in result
+
+    def test_parse_empty_stderr(self) -> None:
+        """Empty stderr should return empty dict."""
+        result = _parse_exiftool_failed_files("")
+        assert result == {}
+
+    def test_parse_no_matching_patterns(self) -> None:
+        """Stderr without file paths should return empty dict."""
+        stderr = "Warning: Tag 'BadTag' is not defined\nNothing to do."
+        result = _parse_exiftool_failed_files(stderr)
+        assert result == {}
+
+    def test_multiple_errors_same_file_concatenated(self) -> None:
+        """Multiple errors for same file should be concatenated."""
+        stderr = (
+            "Error: First error - /path/to/file.jpg\n"
+            "Error: Second error - /path/to/file.jpg"
+        )
+        result = _parse_exiftool_failed_files(stderr)
+
+        assert len(result) == 1
+        assert "/path/to/file.jpg" in result
+        assert "First error" in result["/path/to/file.jpg"]
+        assert "Second error" in result["/path/to/file.jpg"]

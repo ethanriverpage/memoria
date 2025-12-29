@@ -17,7 +17,7 @@ import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from common.files.utils import short_path
 
@@ -46,20 +46,62 @@ class VideoMetadata:
     bitrate: Optional[int] = None
 
 
-def get_video_metadata(video_path: Path, timeout: int = 10) -> Optional[VideoMetadata]:
+@dataclass(frozen=True)
+class VideoProbeFailure:
+    """Diagnostic details when ffprobe fails.
+
+    This module intentionally does *not* decide whether a failure is a warning,
+    matching failure, or processing failure. Callers apply policy.
     """
-    Get all video metadata in a single FFprobe call.
 
-    Consolidates stream presence, dimensions, rotation, and bitrate detection
-    into one probe for better performance (avoids multiple subprocess calls).
+    reason_code: str
+    stderr_excerpt: str = ""
 
-    Args:
-        video_path: Path to the video file.
-        timeout: Timeout in seconds for the ffprobe command (default 10).
+
+def quick_isobmff_header_check(
+    video_path: Path, header_bytes: int = 64 * 1024
+) -> Tuple[bool, str]:
+    """
+    Fast heuristic to check if a file looks like an ISO BMFF / QuickTime container.
 
     Returns:
-        VideoMetadata with all extracted info, or None if probing failed entirely.
-        If the file has no video stream, returns VideoMetadata(has_video=False).
+        (ok, reason_code)
+        - ok=True: header resembles a plausible MOV/MP4 container
+        - ok=False: header does not resemble a plausible MOV/MP4 container
+
+    Notes:
+        This is NOT authoritative. Some valid videos may not match this heuristic.
+        Use ffprobe for an authoritative determination.
+    """
+    try:
+        with open(video_path, "rb") as f:
+            head = f.read(header_bytes)
+    except FileNotFoundError:
+        return False, "file_not_found"
+    except (OSError, ValueError) as e:
+        return False, f"read_failed:{type(e).__name__}"
+
+    # QuickTime/MP4 almost always contains 'ftyp' very early.
+    if b"ftyp" in head:
+        return True, "header_has_ftyp"
+
+    # Some edge cases may still have recognizable atoms early even without ftyp.
+    if b"moov" in head[:4096] or b"mdat" in head[:4096]:
+        return True, "header_has_moov_or_mdat_early"
+
+    return False, "header_missing_ftyp"
+
+
+def get_video_metadata_with_failure(
+    video_path: Path, timeout: int = 10
+) -> Tuple[Optional[VideoMetadata], Optional[VideoProbeFailure]]:
+    """
+    Probe video metadata and return structured failure info when probing fails.
+
+    Returns:
+        (metadata, failure)
+        - If probing succeeds: (VideoMetadata(...), None)
+        - If probing fails: (None, VideoProbeFailure(...))
     """
     try:
         # Single ffprobe call to get all metadata as JSON
@@ -88,10 +130,21 @@ def get_video_metadata(video_path: Path, timeout: int = 10) -> Optional[VideoMet
         )
 
         if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            low = stderr.lower()
+            reason = "ffprobe_failed"
+            if "moov atom not found" in low:
+                reason = "moov_atom_not_found"
+            elif "invalid data found" in low:
+                reason = "invalid_data"
+
             logger.debug(
                 "FFprobe failed for %s: %s", short_path(video_path), result.stderr
             )
-            return None
+            return None, VideoProbeFailure(
+                reason_code=reason,
+                stderr_excerpt=stderr[:300],
+            )
 
         data = json.loads(result.stdout)
 
@@ -99,7 +152,7 @@ def get_video_metadata(video_path: Path, timeout: int = 10) -> Optional[VideoMet
         streams = data.get("streams", [])
         if not streams:
             logger.debug("No video streams found in %s", short_path(video_path))
-            return VideoMetadata(has_video=False)
+            return VideoMetadata(has_video=False), None
 
         stream = streams[0]
 
@@ -107,7 +160,7 @@ def get_video_metadata(video_path: Path, timeout: int = 10) -> Optional[VideoMet
         codec_type = stream.get("codec_type", "")
         if codec_type and codec_type.lower() != "video":
             logger.debug("First stream is not video in %s", short_path(video_path))
-            return VideoMetadata(has_video=False)
+            return VideoMetadata(has_video=False), None
 
         # Extract dimensions
         width = stream.get("width")
@@ -117,7 +170,7 @@ def get_video_metadata(video_path: Path, timeout: int = 10) -> Optional[VideoMet
             logger.debug(
                 "Missing dimensions in stream data for %s", short_path(video_path)
             )
-            return VideoMetadata(has_video=False)
+            return VideoMetadata(has_video=False), None
 
         # Extract rotation from tags or side_data
         rotation = _extract_rotation(stream)
@@ -125,30 +178,52 @@ def get_video_metadata(video_path: Path, timeout: int = 10) -> Optional[VideoMet
         # Extract bitrate - try format first, then stream
         bitrate = _extract_bitrate(stream, data.get("format", {}))
 
-        return VideoMetadata(
-            has_video=True,
-            width=width,
-            height=height,
-            rotation=rotation,
-            bitrate=bitrate,
+        return (
+            VideoMetadata(
+                has_video=True,
+                width=width,
+                height=height,
+                rotation=rotation,
+                bitrate=bitrate,
+            ),
+            None,
         )
 
     except subprocess.TimeoutExpired:
         logger.warning("Timeout probing video metadata for %s", short_path(video_path))
-        return None
+        return None, VideoProbeFailure(reason_code="timeout")
     except json.JSONDecodeError as e:
         logger.warning(
             "Failed to parse FFprobe JSON for %s: %s", short_path(video_path), e
         )
-        return None
+        return None, VideoProbeFailure(reason_code="json_decode_error")
     except FileNotFoundError:
         logger.warning("ffprobe not found, cannot extract video metadata")
-        return None
-    except Exception as e:
+        return None, VideoProbeFailure(reason_code="ffprobe_not_found")
+    except (OSError, ValueError) as e:
         logger.debug(
             "Error probing video metadata for %s: %s", short_path(video_path), e
         )
-        return None
+        return None, VideoProbeFailure(reason_code=f"error:{type(e).__name__}")
+
+
+def get_video_metadata(video_path: Path, timeout: int = 10) -> Optional[VideoMetadata]:
+    """
+    Get all video metadata in a single FFprobe call.
+
+    Consolidates stream presence, dimensions, rotation, and bitrate detection
+    into one probe for better performance (avoids multiple subprocess calls).
+
+    Args:
+        video_path: Path to the video file.
+        timeout: Timeout in seconds for the ffprobe command (default 10).
+
+    Returns:
+        VideoMetadata with all extracted info, or None if probing failed entirely.
+        If the file has no video stream, returns VideoMetadata(has_video=False).
+    """
+    metadata, _failure = get_video_metadata_with_failure(video_path, timeout=timeout)
+    return metadata
 
 
 def _extract_rotation(stream: dict) -> Optional[int]:
@@ -219,4 +294,3 @@ def _extract_bitrate(stream: dict, format_info: dict) -> Optional[int]:
             pass
 
     return bitrate
-

@@ -419,7 +419,7 @@ Memoria's preprocessor reads all timestamps BEFORE any file operations to preven
 
 **Technical Details**:
 
-- Overlays are PNG or WebP files with transparency
+- Overlays are PNG or WebP files with transparency (some may be wrapped in SCOF containers - see below)
 - Composite operation preserves original media resolution
 - Photos: Overlays are composited onto the image using PIL/Pillow
 - Videos: Converted to multi-track MKV format with dual video tracks:
@@ -735,6 +735,37 @@ Has the same top-level structure but simpler message objects:
 Overlay files (PNG images with text/drawings/stickers) are stored separately with no explicit links to media files in the JSON. Memoria matches them using **file modification timestamps**.
 
 **Critical:** Timestamps must be preserved from the original export for overlay matching to work correctly.
+
+### SCOF Container Format
+
+Some overlay files from Snapchat exports are wrapped in a proprietary binary container format called **SCOF** (Snapchat Overlay Format). These files have a `.png` or `.webp` extension but are not directly decodable as images because they start with a binary header instead of the expected image signature.
+
+**How to identify SCOF files:**
+
+- The file starts with bytes `14 00 00 00 53 43 4F 46` (where `53 43 4F 46` = ASCII "SCOF")
+- Standard image decoders (PIL, ImageMagick) will fail with "cannot identify image file"
+- The actual image payload (always PNG in observed samples) is embedded at **byte offset 136**
+
+**SCOF header structure (136 bytes):**
+
+| Offset | Size | Description |
+|--------|------|-------------|
+| 0x00 | 4 | Header size indicator (always `0x14` = 20) |
+| 0x04 | 4 | Magic bytes: `SCOF` |
+| 0x08 | 4 | Version/flags (observed: `0x00000A00`) |
+| 0x0C-0x4F | varies | Container metadata (section table, offsets) |
+| 0x50 | 4 | Image width (little-endian u32) |
+| 0x54 | 4 | Image height (little-endian u32) |
+| 0x58-0x87 | varies | Additional flags/padding |
+| 0x88 (136) | - | **Start of embedded PNG payload** |
+
+**What Memoria does:**
+
+Memoria automatically detects SCOF-wrapped overlays and extracts the embedded PNG payload before compositing. No manual intervention is required.
+
+**Prevalence:**
+
+SCOF containers are relatively rare (observed in ~0.2% of overlay files in test exports). Most overlays are standard PNG or WebP files.
 
 ### Platform-Specific Notes
 

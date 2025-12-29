@@ -1231,16 +1231,19 @@ class ProcessorBase(ABC):
 
     @staticmethod
     def process_media_copy_batch(batch_tasks: List[MediaCopyTask]) -> List[Tuple]:
-        """Copy files, correct extensions, update timestamps (multiprocessing worker).
+        """Copy files and update timestamps (multiprocessing worker).
 
         Consolidates the previously duplicated `process_media_batch()` helpers
         across multiple processors.
+
+        Note: Extension correction is NOT done here. It is handled by
+        finalize_files() immediately before EXIF metadata writing, ensuring
+        files have correct extensions for proper metadata embedding.
         """
-        from common.files.utils import batch_correct_extensions, copy_file
+        from common.files.utils import copy_file
         from common.utils import update_file_timestamps
 
         results: List[Tuple] = []
-        file_paths: List[str] = []
         file_info: List[Tuple] = []
         timestamp_meta: List[Tuple[Optional[str], Optional[str]]] = []
 
@@ -1256,23 +1259,16 @@ class ProcessorBase(ABC):
 
             try:
                 copy_file(src, dst)
-                file_paths.append(dst)
                 file_info.append((dst, *task.info_rest))
                 timestamp_meta.append((task.timestamp_str, task.timestamp_format))
             except Exception as e:  # noqa: BLE001
                 logger.error("Failed to copy %s: %s", short_path(src), e)
                 results.append((False, None, None))
 
-        if not file_paths:
+        if not file_info:
             return results if results else [(False, None, None)] * len(batch_tasks)
 
-        # Phase 2: Correct file extensions based on actual content
-        corrections = batch_correct_extensions([Path(p) for p in file_paths])
-        if corrections:
-            file_paths = [corrections.get(p, p) for p in file_paths]
-            file_info = [(corrections.get(t[0], t[0]), *t[1:]) for t in file_info]
-
-        # Phase 3: Update timestamps and compile results
+        # Phase 2: Update timestamps and compile results
         for idx, info in enumerate(file_info):
             output_path = info[0]
             timestamp_str, timestamp_format = timestamp_meta[idx]

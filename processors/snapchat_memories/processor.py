@@ -362,13 +362,17 @@ def _build_metadata_requests(
             media_data.get("canonical_timestamp"), strip_utc=True
         )
 
-        # Build GPS data
+        # Build GPS data (skip invalid coordinates like 0.0, 0.0)
         gps: Optional[GPSData] = None
         if "latitude" in media_data and "longitude" in media_data:
-            gps = GPSData(
-                latitude=float(media_data["latitude"]),
-                longitude=float(media_data["longitude"]),
-            )
+            lat = float(media_data["latitude"])
+            lon = float(media_data["longitude"])
+            # Skip (0.0, 0.0) as it represents "no GPS data" in Snapchat exports
+            # Also skip out-of-range coordinates
+            if not (lat == 0.0 and lon == 0.0) and (
+                -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0
+            ):
+                gps = GPSData(latitude=lat, longitude=lon)
 
         # Build description using unified format
         entry = SourceEntry(

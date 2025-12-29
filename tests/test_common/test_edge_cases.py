@@ -24,6 +24,7 @@ from common.utils import (
     update_file_timestamps,
     default_worker_count,
 )
+from common.validation.invariants import InvariantViolation
 from common.files.filter import BannedFilesFilter
 from common.files.scanner import iter_media_files, collect_media_files
 from common.files.utils import batch_correct_extensions
@@ -58,11 +59,10 @@ class TestEmptyInputs:
         assert result.endswith(".jpg")
 
     def test_filename_generator_none_timestamp(self) -> None:
-        """Should handle None timestamp."""
+        """None timestamp should raise InvariantViolation (bug in calling code)."""
         gen = FilenameGenerator("platform", "user")
-        result = gen.generate(None, ".jpg")
-        assert result is not None
-        assert result.endswith(".jpg")
+        with pytest.raises(InvariantViolation, match="missing timestamp"):
+            gen.generate(None, ".jpg")
 
     def test_filename_generator_empty_username(self) -> None:
         """Should handle empty username."""
@@ -311,23 +311,21 @@ class TestTimestampEdgeCases:
             pass  # Acceptable to raise
 
     def test_filename_generator_malformed_timestamp(self) -> None:
-        """Should handle malformed timestamp strings."""
+        """Malformed timestamps should raise InvariantViolation (bug in calling code)."""
         gen = FilenameGenerator("platform", "user")
 
         malformed_timestamps = [
-            "not-a-date",
-            "2021/01/01",
-            "01-01-2021",
-            "12:00:00",
-            "",
-            "   ",
+            ("not-a-date", "unparseable"),
+            ("2021/01/01", "unparseable"),
+            ("01-01-2021", "unparseable"),
+            ("12:00:00", "unparseable"),
+            ("", "missing"),
+            ("   ", "unparseable"),
         ]
 
-        for ts in malformed_timestamps:
-            result = gen.generate(ts, ".jpg")
-            # Should return something usable
-            assert result is not None
-            assert result.endswith(".jpg")
+        for ts, expected_msg in malformed_timestamps:
+            with pytest.raises(InvariantViolation, match=expected_msg):
+                gen.generate(ts, ".jpg")
 
 
 # ============================================================================

@@ -212,6 +212,248 @@ class TestIMessageLivePhotos:
         assert (attachments_dir / "Photo.MOV").exists()
 
 
+class TestIMessageLivePhotoPairing:
+    """Tests for Live Photo filename pairing logic.
+
+    Verifies that:
+    1. Live photo pairs (image + MOV sidecar) get matching base filenames
+    2. Collision prevention works when regular files share timestamps with live photos
+    """
+
+    def test_live_photo_pair_same_base_filename(self, tmp_path):
+        """Live photo image and video should share the same base filename."""
+        from common.utils import FilenameGenerator
+
+        # Simulate the two-pass logic from iMessage processor
+        filename_gen = FilenameGenerator(
+            "imessage",
+            "testuser",
+            timestamp_format="%Y-%m-%d %H:%M:%S UTC",
+        )
+
+        # Simulate metadata from preprocessing:
+        # - Image with attachment_id=1
+        # - Video with is_live_photo_video=True, live_photo_image_id=1
+        filename_index = {
+            "lp_image.HEIC": {
+                "attachment_id": "1",
+                "created": "2023-05-26 12:00:00 UTC",
+            },
+            "lp_image.MOV": {
+                "is_live_photo_video": True,
+                "live_photo_image_id": "1",
+                "created": "2023-05-26 12:00:00 UTC",
+            },
+        }
+
+        # Build live photo pairing map
+        live_photo_videos_by_image = {}
+        for media_filename, message in filename_index.items():
+            if message.get("is_live_photo_video"):
+                image_id = message.get("live_photo_image_id")
+                if image_id:
+                    if image_id not in live_photo_videos_by_image:
+                        live_photo_videos_by_image[image_id] = set()
+                    live_photo_videos_by_image[image_id].add(media_filename)
+
+        # Two-pass filename generation
+        live_photo_bases = {}
+        results = {}
+
+        # Pass A: non-live-video items
+        for media_filename, message in filename_index.items():
+            if message.get("is_live_photo_video"):
+                continue
+
+            file_ext = ".heic"
+            canonical_ts = message.get("created")
+            output_filename = filename_gen.generate(canonical_ts, file_ext)
+
+            # Store base and reserve .mov for paired video
+            attachment_id = message.get("attachment_id")
+            if attachment_id and attachment_id in live_photo_videos_by_image:
+                base = output_filename[: -len(file_ext)]
+                live_photo_bases[attachment_id] = base
+                filename_gen.used_filenames.add(f"{base}.mov")
+
+            results[media_filename] = output_filename
+
+        # Pass B: live-photo video items
+        for media_filename, message in filename_index.items():
+            if not message.get("is_live_photo_video"):
+                continue
+
+            file_ext = ".mov"
+            image_id = message.get("live_photo_image_id")
+
+            if image_id and image_id in live_photo_bases:
+                base = live_photo_bases[image_id]
+                output_filename = f"{base}{file_ext}"
+                filename_gen.used_filenames.add(output_filename)
+            else:
+                output_filename = filename_gen.generate(
+                    message.get("created"), file_ext
+                )
+
+            results[media_filename] = output_filename
+
+        # Verify: both files should have same base
+        heic_name = results["lp_image.HEIC"]
+        mov_name = results["lp_image.MOV"]
+        heic_base = heic_name.rsplit(".", 1)[0]
+        mov_base = mov_name.rsplit(".", 1)[0]
+
+        assert heic_base == mov_base, f"Base mismatch: {heic_base} != {mov_base}"
+        assert heic_name.endswith(".heic")
+        assert mov_name.endswith(".mov")
+
+    def test_live_photo_no_collision_with_regular_file(self, tmp_path):
+        """Regular file with same timestamp should not collide with live photo pair."""
+        from common.utils import FilenameGenerator
+
+        filename_gen = FilenameGenerator(
+            "imessage",
+            "testuser",
+            timestamp_format="%Y-%m-%d %H:%M:%S UTC",
+        )
+
+        # Same timestamp for all three files:
+        # - Live photo image (attachment_id=1)
+        # - Live photo video (linked to attachment_id=1)
+        # - Regular video (not a live photo)
+        timestamp = "2023-05-26 12:00:00 UTC"
+        filename_index = {
+            "lp_image.HEIC": {
+                "attachment_id": "1",
+                "created": timestamp,
+            },
+            "lp_image.MOV": {
+                "is_live_photo_video": True,
+                "live_photo_image_id": "1",
+                "created": timestamp,
+            },
+            "regular_video.MOV": {
+                "created": timestamp,
+            },
+        }
+
+        # Build live photo pairing map
+        live_photo_videos_by_image = {}
+        for media_filename, message in filename_index.items():
+            if message.get("is_live_photo_video"):
+                image_id = message.get("live_photo_image_id")
+                if image_id:
+                    if image_id not in live_photo_videos_by_image:
+                        live_photo_videos_by_image[image_id] = set()
+                    live_photo_videos_by_image[image_id].add(media_filename)
+
+        # Two-pass filename generation
+        live_photo_bases = {}
+        results = {}
+
+        # Pass A: non-live-video items (including regular video)
+        for media_filename, message in filename_index.items():
+            if message.get("is_live_photo_video"):
+                continue
+
+            file_ext = ".heic" if "HEIC" in media_filename else ".mov"
+            canonical_ts = message.get("created")
+            output_filename = filename_gen.generate(canonical_ts, file_ext)
+
+            # Store base and reserve .mov for paired live photo video
+            attachment_id = message.get("attachment_id")
+            if attachment_id and attachment_id in live_photo_videos_by_image:
+                base = output_filename[: -len(file_ext)]
+                live_photo_bases[attachment_id] = base
+                filename_gen.used_filenames.add(f"{base}.mov")
+
+            results[media_filename] = output_filename
+
+        # Pass B: live-photo video items
+        for media_filename, message in filename_index.items():
+            if not message.get("is_live_photo_video"):
+                continue
+
+            file_ext = ".mov"
+            image_id = message.get("live_photo_image_id")
+
+            if image_id and image_id in live_photo_bases:
+                base = live_photo_bases[image_id]
+                output_filename = f"{base}{file_ext}"
+                filename_gen.used_filenames.add(output_filename)
+            else:
+                output_filename = filename_gen.generate(
+                    message.get("created"), file_ext
+                )
+
+            results[media_filename] = output_filename
+
+        # Verify: live photo pair has matching bases
+        heic_name = results["lp_image.HEIC"]
+        lp_mov_name = results["lp_image.MOV"]
+        heic_base = heic_name.rsplit(".", 1)[0]
+        lp_mov_base = lp_mov_name.rsplit(".", 1)[0]
+        assert heic_base == lp_mov_base, f"Live photo pair mismatch: {heic_base} != {lp_mov_base}"
+
+        # Verify: regular video has different base (got a sequence number)
+        regular_mov_name = results["regular_video.MOV"]
+        regular_base = regular_mov_name.rsplit(".", 1)[0]
+        assert regular_base != lp_mov_base, (
+            f"Regular video should have different base: {regular_base} == {lp_mov_base}"
+        )
+
+        # All filenames should be unique
+        all_names = list(results.values())
+        assert len(all_names) == len(set(all_names)), f"Duplicate filenames: {all_names}"
+
+    def test_live_photo_video_without_image_falls_back(self, tmp_path):
+        """Live photo video without paired image should fall back to independent name."""
+        from common.utils import FilenameGenerator
+
+        filename_gen = FilenameGenerator(
+            "imessage",
+            "testuser",
+            timestamp_format="%Y-%m-%d %H:%M:%S UTC",
+        )
+
+        # Video claims to be live photo but references non-existent image
+        filename_index = {
+            "orphan_video.MOV": {
+                "is_live_photo_video": True,
+                "live_photo_image_id": "999",  # No matching image
+                "created": "2023-05-26 12:00:00 UTC",
+            },
+        }
+
+        # No images, so live_photo_videos_by_image won't find any matches
+        live_photo_bases = {}
+        results = {}
+
+        # Pass A: no non-live-video items
+        # Pass B: live-photo video items
+        for media_filename, message in filename_index.items():
+            if not message.get("is_live_photo_video"):
+                continue
+
+            file_ext = ".mov"
+            image_id = message.get("live_photo_image_id")
+
+            if image_id and image_id in live_photo_bases:
+                base = live_photo_bases[image_id]
+                output_filename = f"{base}{file_ext}"
+            else:
+                # Fallback: generate independent name
+                output_filename = filename_gen.generate(
+                    message.get("created"), file_ext
+                )
+
+            results[media_filename] = output_filename
+
+        # Should still get a valid filename (fallback path)
+        assert "orphan_video.MOV" in results
+        assert results["orphan_video.MOV"].endswith(".mov")
+
+
 class TestIMessageDeduplication:
     """Tests for cross-export deduplication."""
 

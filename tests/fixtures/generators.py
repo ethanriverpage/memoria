@@ -525,6 +525,41 @@ def create_instagram_messages_export(
     return base_path
 
 
+def _format_instagram_timestamp(iso_timestamp: str) -> str:
+    """Convert ISO timestamp to Instagram HTML format.
+
+    Input: "2021-01-01T12:00:00"
+    Output: "Jan 01, 2021 12:00 pm"
+    """
+    from datetime import datetime
+
+    try:
+        dt = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
+        return dt.strftime("%b %d, %Y %-I:%M %p").lower()
+    except (ValueError, AttributeError):
+        return "Jan 01, 2021 12:00 pm"
+
+
+def _generate_instagram_post_html(
+    media_path: str,
+    caption: str,
+    timestamp: str,
+) -> str:
+    """Generate HTML for a single Instagram post container.
+
+    Uses the CSS classes expected by the preprocessor.
+    """
+    formatted_ts = _format_instagram_timestamp(timestamp)
+    return f"""<div class="pam _3-95 _2ph- _a6-g uiBoxWhite noborder">
+<h2 class="_3-95 _2pim _a6-h _a6-i">{caption}</h2>
+<div class="_3-95 _a6-p">
+<a href="{media_path}"><img src="{media_path}" /></a>
+</div>
+<div class="_3-94 _a6-o">{formatted_ts}</div>
+</div>
+"""
+
+
 def create_instagram_public_export(
     base_path: Path,
     username: str = "testuser",
@@ -534,18 +569,25 @@ def create_instagram_public_export(
     """Create a minimal Instagram Public Media export structure.
 
     Structure:
-        {base_path}/media/
-            posts/YYYYMM/
-                {media_file}
-                {media_file}.json
-            archived_posts/YYYYMM/
-                {media_file}
-                {media_file}.json
+        {base_path}/
+            media/
+                posts/YYYYMM/
+                    {media_file}
+                archived_posts/YYYYMM/
+                    {media_file}
+            your_instagram_activity/
+                media/
+                    posts_1.html      # HTML metadata for posts
+                    archived_posts.html  # HTML metadata for archived posts
 
     Args:
         base_path: Base directory for the export
         username: Username for naming
-        posts: List of post metadata dicts
+        posts: List of post metadata dicts with keys:
+            - filename: e.g., "202101/photo1.jpg"
+            - caption: Post caption text
+            - timestamp: ISO format timestamp
+            - archived: bool (goes to archived_posts if True)
         include_archived: Whether to include archived posts
 
     Returns:
@@ -593,9 +635,13 @@ def create_instagram_public_export(
 </html>"""
     (personal_info_dir / "personal_information.html").write_text(personal_info_html)
 
-    # Also create the HTML metadata dir for the processor
+    # Create the HTML metadata directory
     html_dir = base_path / "your_instagram_activity" / "media"
     html_dir.mkdir(parents=True, exist_ok=True)
+
+    # Collect posts by type for HTML generation
+    regular_posts_html = []
+    archived_posts_html = []
 
     for post in posts:
         filename = post["filename"]
@@ -611,13 +657,45 @@ def create_instagram_public_export(
         ext = filename.split(".")[-1].lower()
         write_media_file(file_path, ext)
 
-        # Create JSON metadata
-        json_path = file_path.parent / f"{file_path.name}.json"
-        metadata = {
-            "caption": post.get("caption", ""),
-            "taken_at": post.get("timestamp", ""),
-        }
-        json_path.write_text(json.dumps(metadata, indent=2))
+        # Build media path relative to export root for HTML href
+        if is_archived:
+            media_path = f"media/archived_posts/{filename}"
+        else:
+            media_path = f"media/posts/{filename}"
+
+        # Generate HTML for this post
+        post_html = _generate_instagram_post_html(
+            media_path=media_path,
+            caption=post.get("caption", ""),
+            timestamp=post.get("timestamp", "2021-01-01T12:00:00"),
+        )
+
+        if is_archived:
+            archived_posts_html.append(post_html)
+        else:
+            regular_posts_html.append(post_html)
+
+    # Write posts_1.html if there are regular posts
+    if regular_posts_html:
+        posts_html_content = f"""<!DOCTYPE html>
+<html>
+<head><title>Posts</title></head>
+<body>
+{"".join(regular_posts_html)}
+</body>
+</html>"""
+        (html_dir / "posts_1.html").write_text(posts_html_content)
+
+    # Write archived_posts.html if there are archived posts
+    if archived_posts_html:
+        archived_html_content = f"""<!DOCTYPE html>
+<html>
+<head><title>Archived Posts</title></head>
+<body>
+{"".join(archived_posts_html)}
+</body>
+</html>"""
+        (html_dir / "archived_posts.html").write_text(archived_html_content)
 
     return base_path
 

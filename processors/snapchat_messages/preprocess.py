@@ -613,13 +613,16 @@ class SnapchatPreprocessor(PreprocessorBase):
                     )
 
         # Collect orphaned media files (not matched to any message)
+        # Per Failure-Handling.md:
+        # - If has timestamp -> unmatched_media (processable with file-derived timestamp)
+        # - If no timestamp -> orphaned_media via FailureTracker (invalid)
         for filename, file_info in file_catalog.items():
             if file_info["type"] == "media" and filename not in matched_media_files:
                 source_path = Path(file_info["original_path"])
                 if not source_path.exists():
                     continue
 
-                # Build orphaned entry context
+                # Try to get timestamp from file mtime or filename-derived date
                 created_date = None
                 mtime = file_info.get("mtime")
                 if mtime:
@@ -629,6 +632,22 @@ class SnapchatPreprocessor(PreprocessorBase):
                 else:
                     created_date = file_info.get("date")
 
+                media_id = file_info.get("media_id", "N/A")
+
+                if created_date is None:
+                    # No timestamp = orphaned media (invalid, FailureTracker only)
+                    self.failure_tracker.add_orphaned_media(
+                        media_path=source_path,
+                        reason="Not matched to any message and no timestamp available",
+                        context={
+                            "media_id": media_id,
+                            "date": file_info.get("date"),
+                            "mtime": mtime,
+                        },
+                    )
+                    continue
+
+                # Has timestamp = unmatched media (processable with incomplete context)
                 # Try to find overlay
                 overlay_file = None
                 overlay_source_path = None
@@ -655,7 +674,7 @@ class SnapchatPreprocessor(PreprocessorBase):
                             "created": created_date,
                             "content": "",
                             "is_sender": None,
-                            "media_id": file_info.get("media_id", ""),
+                            "media_id": media_id,
                         }
                     ],
                     "overlay_file": overlay_file,
@@ -670,28 +689,6 @@ class SnapchatPreprocessor(PreprocessorBase):
                         dest_filename=filename,
                         context=orphaned_context,
                     )
-                )
-
-                # Log and track
-                media_id = file_info.get("media_id", "N/A")
-                overlay_status = "with overlay" if overlay_file else "no overlay"
-                self.log_failure(
-                    "ORPHANED_MEDIA",
-                    filename,
-                    "Not matched to any message",
-                    f"media_id={media_id}, {overlay_status}",
-                )
-
-                self.failure_tracker.add_orphaned_media(
-                    media_path=source_path,
-                    reason="Not matched to any message in chat_history.json",
-                    context={
-                        "media_id": media_id,
-                        "overlay_status": overlay_status,
-                        "date": file_info.get("date"),
-                        "mtime": mtime,
-                        "has_overlay": overlay_file is not None,
-                    },
                 )
 
         self.stats["matched_overlays"] = len(matched_overlays)

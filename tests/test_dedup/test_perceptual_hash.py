@@ -9,6 +9,7 @@ from common.dedup.hashing import (
     is_perceptual_hash_available,
     compute_image_hash,
     compute_perceptual_hash_with_dims,
+    is_supported_for_perceptual_hashing,
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
     is_live_photo_pair,
@@ -102,6 +103,12 @@ class TestComputePerceptualHashWithDims:
         """Test unsupported file extensions return (None, None)."""
         result = compute_perceptual_hash_with_dims(Path("/path/file.txt"))
         assert result == (None, None)
+
+    def test_audio_extension(self):
+        """Test audio file extensions return (None, None) and are not eligible."""
+        audio_path = Path("/path/file.mp3")
+        assert is_supported_for_perceptual_hashing(audio_path) is False
+        assert compute_perceptual_hash_with_dims(audio_path) == (None, None)
 
     @patch("common.dedup.hashing.PERCEPTION_AVAILABLE", False)
     def test_returns_none_when_unavailable(self):

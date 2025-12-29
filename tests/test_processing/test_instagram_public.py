@@ -18,10 +18,10 @@ from tests.fixtures.media_samples import write_media_file
 class TestInstagramPublicPosts:
     """Tests for regular post handling in Instagram Public Media."""
 
-    def test_post_with_json_metadata(
+    def test_post_with_html_metadata(
         self, instagram_public_processor, temp_export_dir, temp_output_dir
     ):
-        """Should process post with JSON metadata."""
+        """Should process post with HTML metadata."""
         create_instagram_public_export(
             temp_export_dir,
             posts=[
@@ -35,9 +35,17 @@ class TestInstagramPublicPosts:
             include_archived=False,
         )
 
+        # Check media file exists
         posts_dir = temp_export_dir / "media" / "posts" / "202101"
         assert (posts_dir / "photo.jpg").exists()
-        assert (posts_dir / "photo.jpg.json").exists()
+
+        # Check HTML metadata exists
+        html_dir = temp_export_dir / "your_instagram_activity" / "media"
+        assert (html_dir / "posts_1.html").exists()
+
+        # Verify HTML contains the caption
+        html_content = (html_dir / "posts_1.html").read_text()
+        assert "Test caption" in html_content
 
     def test_post_without_caption(
         self, instagram_public_processor, temp_export_dir, temp_output_dir
@@ -76,9 +84,17 @@ class TestInstagramPublicArchived:
             include_archived=True,
         )
 
+        # Check media file exists
         archived_dir = temp_export_dir / "media" / "archived_posts" / "202101"
         assert (archived_dir / "archived_photo.jpg").exists()
-        assert (archived_dir / "archived_photo.jpg.json").exists()
+
+        # Check HTML metadata exists
+        html_dir = temp_export_dir / "your_instagram_activity" / "media"
+        assert (html_dir / "archived_posts.html").exists()
+
+        # Verify HTML contains the caption
+        html_content = (html_dir / "archived_posts.html").read_text()
+        assert "Archived post" in html_content
 
     def test_mixed_posts_and_archived(
         self, instagram_public_processor, temp_export_dir, temp_output_dir

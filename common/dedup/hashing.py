@@ -48,6 +48,7 @@ if PERCEPTION_AVAILABLE:
         pass
 
 from common.files.utils import short_path
+from common.files.filter import BannedFilesFilter
 from common.media.probe import VideoMetadata, get_video_metadata
 
 logger = logging.getLogger(__name__)
@@ -63,9 +64,26 @@ from common.utils import (  # noqa: E402
     LIVE_PHOTO_VIDEO_EXTENSIONS,
 )
 
+# Only images/videos are eligible for perceptual hashing (audio is not).
+PERCEPTUAL_HASH_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
+
 
 # Backwards-compatible alias for internal usage
 VideoInfo = VideoMetadata
+
+
+def is_supported_for_perceptual_hashing(
+    file_path: Path,
+    banned_filter: Optional[BannedFilesFilter] = None,
+) -> bool:
+    """Return True if this file should be considered for perceptual hashing.
+
+    We only do perceptual hashing for images/videos. Callers can optionally
+    pass a BannedFilesFilter to skip known system/tool artifacts.
+    """
+    if banned_filter is not None and banned_filter.is_banned(file_path):
+        return False
+    return file_path.suffix.lower() in PERCEPTUAL_HASH_EXTENSIONS
 
 
 def is_perceptual_hash_available() -> bool:
@@ -410,7 +428,6 @@ def compute_perceptual_hash_with_dims(
     elif suffix in VIDEO_EXTENSIONS:
         return compute_video_hash_with_dims(file_path, hash_size)
     else:
-        logger.debug(f"Unsupported file type for perceptual hashing: {suffix}")
         return (None, None)
 
 

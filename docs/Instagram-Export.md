@@ -164,49 +164,57 @@ For videos, equivalent metadata is embedded in the `Comment` and `Description` f
 
 **Conversation names**: Group chat names may not exactly match what you see in the app if they were changed after messages were sent.
 
-## Instagram Public Media (New Format)
+## Instagram Public Media
 
 ### Export Structure
 
+Instagram Public Media exports have two key components:
+
+1. **Media files** in date-organized folders under `media/`
+2. **HTML metadata files** in `your_instagram_activity/media/` (current format) or `content/` (legacy format)
+
 ```
 instagram-username-YYYYMMDD/
-└── media/
-    ├── posts/
-    │   ├── 202301/        # YYYYMM date folders
-    │   │   ├── photo_123.jpg
-    │   │   ├── photo_123.json
-    │   │   ├── video_456.mp4
-    │   │   └── video_456.json
-    │   ├── 202302/
-    │   │   └── ...
-    │   └── ...
-    ├── archived_posts/
-    │   └── 202212/
-    │       ├── photo_789.jpg
-    │       ├── photo_789.json
-    │       └── ...
-    └── stories/
-        └── 202301/
-            └── ...
+├── media/
+│   ├── posts/
+│   │   ├── 202301/        # YYYYMM date folders
+│   │   │   ├── photo_123.jpg
+│   │   │   └── video_456.mp4
+│   │   ├── 202302/
+│   │   │   └── ...
+│   │   └── ...
+│   ├── archived_posts/
+│   │   └── 202212/
+│   │       └── archived_photo.jpg
+│   └── stories/
+│       └── 202301/
+│           └── ...
+└── your_instagram_activity/
+    └── media/
+        ├── posts_1.html         # Metadata for posts
+        ├── archived_posts.html  # Metadata for archived posts
+        ├── stories.html         # Metadata for stories
+        └── reels.html           # Metadata for reels
 ```
+
+**Legacy format (pre-2023)** uses `content/` instead of `your_instagram_activity/media/` for HTML metadata.
 
 ### What Gets Processed
 
 - Published posts
 - Archived posts
 - Stories (if included in export)
-- Metadata from JSON files including:
+- Reels
+- Metadata from HTML files including:
   - Post timestamp
   - Caption
-  - Location (if added)
-  - Hashtags
-  - Tagged users
+  - GPS coordinates (if available)
 
 ### Required Elements
 
-- `media/posts/` and/or `media/archived_posts/` directories
-- YYYYMM date-organized subfolders
-- JSON metadata files alongside each media file
+- `media/posts/` and/or `media/archived_posts/` directories with YYYYMM subfolders
+- HTML metadata directory: `your_instagram_activity/media/` or `content/`
+- At least one HTML metadata file (e.g., `posts_1.html`)
 
 ### Date Organization
 
@@ -588,5 +596,7 @@ Both formats use the same HTML structure for posts metadata with identical CSS c
 ### Implications for Processing
 
 Memoria automatically detects which format is present and handles both:
-- Detection passes if media structure exists (`media/posts/` or `media/archived_posts/`)
-- Preprocessing looks for metadata in both `your_instagram_activity/media/` and `content/`
+- Detection requires both:
+  - Media structure (`media/posts/` or `media/archived_posts/` with YYYYMM subfolders)
+  - HTML metadata directory (`your_instagram_activity/media/` or `content/`) with at least one `.html` file
+- Preprocessing parses HTML metadata files to extract captions, timestamps, and GPS coordinates

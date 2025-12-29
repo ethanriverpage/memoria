@@ -610,13 +610,30 @@ def _process_working_directory(
         export_username,
         timestamp_format="%Y-%m-%d %H:%M:%S UTC",
     )
-    matched_files = []
     missing_source_path = 0
     missing_path_examples: list[str] = []
     missing_file_count = 0
     missing_file_examples: list[str] = []
 
-    # Read source_path from metadata
+    # Build live photo pairing maps from metadata
+    # Map: image_attachment_id -> set of video media_filenames that reference it
+    live_photo_videos_by_image: Dict[str, set] = {}
+    for media_filename, message in filename_index.items():
+        if message.get("is_live_photo_video"):
+            image_id = message.get("live_photo_image_id")
+            if image_id:
+                if image_id not in live_photo_videos_by_image:
+                    live_photo_videos_by_image[image_id] = set()
+                live_photo_videos_by_image[image_id].add(media_filename)
+
+    # Two-pass filename generation for deterministic live photo pairing
+    # Pass A: non-live-video items (images and regular files)
+    # Pass B: live-photo video items (reuse base from paired image)
+    live_photo_bases: Dict[str, str] = {}  # image_attachment_id -> base filename
+    pending_items: list = []  # items to process
+    live_video_items: list = []  # deferred for Pass B
+
+    # Collect and categorize items, applying validation/dedup filtering
     for media_filename, message in filename_index.items():
         # Get source path from source_paths dict (keyed by filename)
         source_paths = message.get("source_paths", {})
@@ -643,11 +660,67 @@ def _process_working_directory(
             skipped_dedup += 1
             continue
 
+        # Categorize: live-photo videos go to Pass B, everything else to Pass A
+        if message.get("is_live_photo_video"):
+            live_video_items.append((media_filename, message))
+        else:
+            pending_items.append((media_filename, message))
+
+    matched_files = []
+
+    # Pass A: Process non-live-video items (images and regular files)
+    for media_filename, message in pending_items:
+        source_paths = message.get("source_paths", {})
+        source_path_str = source_paths.get(media_filename)
+        source_path = Path(source_path_str)
+        content_hash = file_hashes.get(media_filename)
+
         file_ext = source_path.suffix.lower()
         timestamp = _extract_message_timestamp(message)
         canonical_ts = get_canonical_timestamp(dedup_manifest, content_hash, timestamp)
         message["canonical_timestamp"] = canonical_ts
         output_filename = filename_gen.generate(canonical_ts, file_ext)
+
+        # If this image has a live-photo video pair, store base and reserve .mov
+        attachment_id = message.get("attachment_id")
+        if attachment_id and attachment_id in live_photo_videos_by_image:
+            base = output_filename[: -len(file_ext)] if file_ext else output_filename
+            live_photo_bases[attachment_id] = base
+            # Reserve .mov extension for the paired video to prevent collisions
+            reserved_mov = f"{base}.mov"
+            filename_gen.used_filenames.add(reserved_mov)
+
+        matched_files.append((source_path, message, output_filename, content_hash))
+
+    # Pass B: Process live-photo video items (reuse base from paired image)
+    for media_filename, message in live_video_items:
+        source_paths = message.get("source_paths", {})
+        source_path_str = source_paths.get(media_filename)
+        source_path = Path(source_path_str)
+        content_hash = file_hashes.get(media_filename)
+
+        file_ext = source_path.suffix.lower()
+        timestamp = _extract_message_timestamp(message)
+        canonical_ts = get_canonical_timestamp(dedup_manifest, content_hash, timestamp)
+        message["canonical_timestamp"] = canonical_ts
+
+        # Try to reuse base from paired image
+        image_id = message.get("live_photo_image_id")
+        if image_id and image_id in live_photo_bases:
+            base = live_photo_bases[image_id]
+            output_filename = f"{base}{file_ext}"
+            # Ensure filename is registered (belt-and-suspenders)
+            filename_gen.used_filenames.add(output_filename)
+        else:
+            # Fallback: no paired image found (corrupted metadata or image was skipped)
+            log.logger.warning(
+                "Live photo video %s has no paired image (live_photo_image_id=%s), "
+                "generating independent filename",
+                media_filename,
+                image_id,
+            )
+            output_filename = filename_gen.generate(canonical_ts, file_ext)
+
         matched_files.append((source_path, message, output_filename, content_hash))
 
     if skipped_dedup > 0:

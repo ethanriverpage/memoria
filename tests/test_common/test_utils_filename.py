@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Unit tests for FilenameGenerator class in common/utils.py."""
 
+import pytest
 
 from common.utils import FilenameGenerator
+from common.validation.invariants import InvariantViolation
 
 
 class TestFilenameGenerator:
@@ -18,20 +20,23 @@ class TestFilenameGenerator:
         result = gen.generate("2024-01-15 10:30:00", ".jpg")
         assert result == "google-ethriverpage-photos-20240115.jpg"
 
-    def test_none_timestamp_uses_fallback(self):
+    def test_none_timestamp_raises_invariant_violation(self):
+        """Missing timestamp is a bug in calling code - must raise."""
         gen = FilenameGenerator("google", "ethriverpage", service="chat")
-        result = gen.generate(None, ".jpg")
-        assert result == "google-ethriverpage-chat-00000000.jpg"
+        with pytest.raises(InvariantViolation, match="missing timestamp"):
+            gen.generate(None, ".jpg")
 
-    def test_empty_timestamp_uses_fallback(self):
+    def test_empty_timestamp_raises_invariant_violation(self):
+        """Empty timestamp is a bug in calling code - must raise."""
         gen = FilenameGenerator("google", "ethriverpage", service="chat")
-        result = gen.generate("", ".jpg")
-        assert result == "google-ethriverpage-chat-00000000.jpg"
+        with pytest.raises(InvariantViolation, match="missing timestamp"):
+            gen.generate("", ".jpg")
 
-    def test_invalid_timestamp_uses_fallback(self):
+    def test_invalid_timestamp_raises_invariant_violation(self):
+        """Unparseable timestamp is a bug in calling code - must raise."""
         gen = FilenameGenerator("google", "ethriverpage", service="chat")
-        result = gen.generate("not-a-date", ".jpg")
-        assert result == "google-ethriverpage-chat-00000000.jpg"
+        with pytest.raises(InvariantViolation, match="unparseable timestamp"):
+            gen.generate("not-a-date", ".jpg")
 
     def test_custom_timestamp_format(self):
         gen = FilenameGenerator("imessage", "m3mbp", timestamp_format="%Y/%m/%d")
@@ -124,3 +129,51 @@ class TestFilenameGenerator:
         assert r1 == "insta-ethriverpage-posts-20240115.jpg"
         assert r2 == "insta-ethriverpage-posts-20240115"
         assert r1 != r2
+
+    # ========================================================================
+    # Filename Sanitization Tests
+    # ========================================================================
+
+    def test_sanitizes_unicode_apostrophe_in_username(self):
+        """Unicode curly apostrophe should be stripped from username."""
+        # This was the real-world case: "Ethan's iPhone" with Unicode apostrophe
+        gen = FilenameGenerator("imessage", "Ethan\u2019s iPhone")
+        result = gen.generate("2020-08-27 10:30:00", ".png")
+        assert result == "imessage-ethans_iphone-20200827.png"
+
+    def test_sanitizes_whitespace_in_username(self):
+        """Whitespace in username should be converted to underscores."""
+        gen = FilenameGenerator("imessage", "My Device Name")
+        result = gen.generate("2024-01-15 10:30:00", ".jpg")
+        assert result == "imessage-my_device_name-20240115.jpg"
+
+    def test_sanitizes_uppercase_to_lowercase(self):
+        """Uppercase characters should be converted to lowercase."""
+        gen = FilenameGenerator("Discord", "UserName", service="Photos")
+        result = gen.generate("2024-01-15 10:30:00", ".jpg")
+        assert result == "discord-username-photos-20240115.jpg"
+
+    def test_sanitizes_special_characters(self):
+        """Special characters should be removed from components."""
+        gen = FilenameGenerator("plat@form!", "user<name>", service="serv:ice")
+        result = gen.generate("2024-01-15 10:30:00", ".jpg")
+        assert result == "platform-username-service-20240115.jpg"
+
+    def test_sanitizes_path_separators(self):
+        """Path separators should be removed from components."""
+        gen = FilenameGenerator("plat/form", "user\\name")
+        result = gen.generate("2024-01-15 10:30:00", ".jpg")
+        assert result == "platform-username-20240115.jpg"
+
+    def test_sanitizes_collapses_multiple_underscores(self):
+        """Multiple consecutive underscores should be collapsed."""
+        gen = FilenameGenerator("test", "user   name")  # multiple spaces
+        result = gen.generate("2024-01-15 10:30:00", ".jpg")
+        assert result == "test-user_name-20240115.jpg"
+
+    def test_sanitized_components_accessible(self):
+        """Sanitized values should be stored in instance attributes."""
+        gen = FilenameGenerator("Discord", "Ethan\u2019s iPhone", service="Messages")
+        assert gen.platform == "discord"
+        assert gen.username == "ethans_iphone"
+        assert gen.service == "messages"

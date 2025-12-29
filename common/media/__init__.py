@@ -28,6 +28,9 @@ from common.media.encoder import (
 from common.media.probe import (
     VideoMetadata,
     get_video_metadata,
+    VideoProbeFailure,
+    get_video_metadata_with_failure,
+    quick_isobmff_header_check,
 )
 
 # Note: overlay module has many exports, import directly when needed
@@ -53,4 +56,7 @@ __all__ = [
     # Probe
     "VideoMetadata",
     "get_video_metadata",
+    "VideoProbeFailure",
+    "get_video_metadata_with_failure",
+    "quick_isobmff_header_check",
 ]

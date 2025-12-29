@@ -39,6 +39,7 @@ setup(
     packages=find_packages(
         include=["common", "common.*", "processors", "processors.*"]
     ),
+    py_modules=["memoria"],
     python_requires=">=3.7",
     install_requires=requirements,
     entry_points={

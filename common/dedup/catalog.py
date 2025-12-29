@@ -14,11 +14,16 @@ from common.dedup.hashing import (
     compute_content_hash,
     compute_perceptual_hash_with_dims,
     get_media_dimensions,
+    is_supported_for_perceptual_hashing,
 )
 from common.output.progress import PHASE_CATALOG, futures_progress
+from common.files.filter import BannedFilesFilter
 from common.files.utils import short_path, get_export_name
 
 logger = logging.getLogger(__name__)
+
+# Shared filter instance: safe to reuse across threads (read-only).
+_BANNED_FILES_FILTER = BannedFilesFilter()
 
 
 def _extract_media_entries(metadata: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
@@ -269,7 +274,12 @@ def _compute_missing_hashes(
         perceptual_hash = None
         dimensions = None
         if use_perceptual:
-            perceptual_hash, dimensions = compute_perceptual_hash_with_dims(source_path)
+            if is_supported_for_perceptual_hashing(
+                source_path, banned_filter=_BANNED_FILES_FILTER
+            ):
+                perceptual_hash, dimensions = compute_perceptual_hash_with_dims(
+                    source_path
+                )
         else:
             dimensions = get_media_dimensions(source_path)
 
@@ -374,9 +384,12 @@ def _process_single_file(
             # Get perceptual hash and dimensions in a single file open
             # This avoids opening the image/video twice (once for hash, once for dims)
             if use_perceptual:
-                perceptual_hash, dimensions = compute_perceptual_hash_with_dims(
-                    file_path
-                )
+                if is_supported_for_perceptual_hashing(
+                    file_path, banned_filter=_BANNED_FILES_FILTER
+                ):
+                    perceptual_hash, dimensions = compute_perceptual_hash_with_dims(
+                        file_path
+                    )
             else:
                 # Still need dimensions even without perceptual hash
                 dimensions = get_media_dimensions(file_path)

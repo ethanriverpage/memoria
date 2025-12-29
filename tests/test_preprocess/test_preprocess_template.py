@@ -293,6 +293,32 @@ class TestCachedUsernameDetection:
         # Result should be cached
         assert preprocessor.get_detection_result() is not None
 
+    def test_directory_username_overrides_content_detection(self, tmp_path):
+        """Directory-derived username should be canonical when extractable."""
+        export_dir = tmp_path / "testprefix-diruser-20250101"
+        output_dir = tmp_path / "output"
+        export_dir.mkdir()
+
+        preprocessor = ValidPreprocessor(export_path=export_dir, output_dir=output_dir)
+        result = preprocessor.ensure_detection_result()
+
+        assert result.username == "diruser"
+        assert result.source == "directory"
+        # detect_username still only called once (cached)
+        assert preprocessor.detect_count == 1
+
+    def test_directory_username_username_service_date_style(self, tmp_path):
+        """Support username-service-date style for some iMessage-like exports."""
+        export_dir = tmp_path / "iphxr-messages-20251121"
+        output_dir = tmp_path / "output"
+        export_dir.mkdir()
+
+        preprocessor = ValidPreprocessor(export_path=export_dir, output_dir=output_dir)
+        result = preprocessor.ensure_detection_result()
+
+        assert result.username == "iphxr"
+        assert result.source == "directory"
+
 
 # =============================================================================
 # Validation Helper Tests

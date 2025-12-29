@@ -16,9 +16,11 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+import pytest
 from hypothesis import given, assume, settings, strategies as st, HealthCheck
 
 from common.utils import sanitize_filename, FilenameGenerator
+from common.validation.invariants import InvariantViolation
 from common.files.filter import BannedFilesFilter
 from common.dedup.hashing import compute_content_hash
 
@@ -33,7 +35,7 @@ safe_filename_chars = string.ascii_letters + string.digits + "-_. "
 # Strategy for filenames with potentially problematic characters
 problematic_filenames = st.text(
     alphabet=st.sampled_from(
-        safe_filename_chars + "/<>:\"\\|?*\x00\n\r\t@#$%^&()[]{}=+"
+        safe_filename_chars + '/<>:"\\|?*\x00\n\r\t@#$%^&()[]{}=+'
     ),
     min_size=1,
     max_size=100,
@@ -47,10 +49,22 @@ valid_filenames = st.text(
 ).filter(lambda x: x.strip() and x not in (".", ".."))
 
 # Strategy for file extensions
-file_extensions = st.sampled_from([
-    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic",
-    ".mp4", ".mov", ".avi", ".mkv", ".mp3", ".wav",
-])
+file_extensions = st.sampled_from(
+    [
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".webp",
+        ".heic",
+        ".mp4",
+        ".mov",
+        ".avi",
+        ".mkv",
+        ".mp3",
+        ".wav",
+    ]
+)
 
 # Strategy for timestamps
 timestamp_strings = st.from_regex(
@@ -87,7 +101,9 @@ class TestSanitizeFilenameProperties:
         if result:
             assert result == result.strip() or not result.strip()
 
-    @given(st.text(alphabet=string.ascii_letters + string.digits, min_size=1, max_size=50))
+    @given(
+        st.text(alphabet=string.ascii_letters + string.digits, min_size=1, max_size=50)
+    )
     def test_alphanumeric_preserved(self, input_text: str) -> None:
         """Alphanumeric characters should be preserved (case-insensitive)."""
         result = sanitize_filename(input_text)
@@ -123,11 +139,16 @@ class TestFilenameGeneratorProperties:
     @given(
         platform=st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10),
         username=st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10),
-        service=st.one_of(st.none(), st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10)),
-        timestamp=st.from_regex(
-            r"20[0-9]{2}-[01][0-9]-[0-3][0-9] [0-2][0-9]:[0-5][0-9]:[0-5][0-9]",
-            fullmatch=True,
+        service=st.one_of(
+            st.none(), st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10)
         ),
+        # Generate valid dates: year 2000-2029, month 01-12, day 01-28 (safe for all months)
+        year=st.integers(min_value=2000, max_value=2029),
+        month=st.integers(min_value=1, max_value=12),
+        day=st.integers(min_value=1, max_value=28),
+        hour=st.integers(min_value=0, max_value=23),
+        minute=st.integers(min_value=0, max_value=59),
+        second=st.integers(min_value=0, max_value=59),
         extension=st.sampled_from([".jpg", ".png", ".mp4"]),
     )
     def test_generates_unique_filenames(
@@ -135,10 +156,16 @@ class TestFilenameGeneratorProperties:
         platform: str,
         username: str,
         service: Optional[str],
-        timestamp: str,
+        year: int,
+        month: int,
+        day: int,
+        hour: int,
+        minute: int,
+        second: int,
         extension: str,
     ) -> None:
-        """Generator should produce unique filenames for different inputs."""
+        """Generator should produce unique filenames for valid timestamps."""
+        timestamp = f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
         gen = FilenameGenerator(platform, username, service=service)
         filename = gen.generate(timestamp, extension)
 
@@ -149,20 +176,20 @@ class TestFilenameGeneratorProperties:
     @given(
         platform=st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10),
         username=st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10),
-        service=st.one_of(st.none(), st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10)),
+        service=st.one_of(
+            st.none(), st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10)
+        ),
     )
-    def test_handles_none_timestamp(
+    def test_none_timestamp_raises_invariant_violation(
         self,
         platform: str,
         username: str,
         service: Optional[str],
     ) -> None:
-        """Generator should handle None timestamp gracefully."""
+        """Generator should raise InvariantViolation for None timestamp."""
         gen = FilenameGenerator(platform, username, service=service)
-        filename = gen.generate(None, ".jpg")
-
-        assert filename is not None
-        assert filename.endswith(".jpg")
+        with pytest.raises(InvariantViolation, match="missing timestamp"):
+            gen.generate(None, ".jpg")
 
 
 # ============================================================================
@@ -235,7 +262,9 @@ class TestBannedFilesFilterProperties:
     """Property-based tests for BannedFilesFilter."""
 
     @given(
-        filename=st.text(alphabet=string.ascii_letters + string.digits, min_size=1, max_size=50),
+        filename=st.text(
+            alphabet=string.ascii_letters + string.digits, min_size=1, max_size=50
+        ),
         extension=st.sampled_from([".jpg", ".png", ".mp4", ".txt"]),
     )
     @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
@@ -292,7 +321,9 @@ class TestPathHandlingProperties:
 
     @given(
         parts=st.lists(
-            st.text(alphabet=string.ascii_letters + string.digits, min_size=1, max_size=20),
+            st.text(
+                alphabet=string.ascii_letters + string.digits, min_size=1, max_size=20
+            ),
             min_size=1,
             max_size=10,
         )
@@ -367,4 +398,3 @@ class TestDeduplicationProperties:
 
             # All hashes should be unique
             assert len(set(hashes)) == len(contents)
-

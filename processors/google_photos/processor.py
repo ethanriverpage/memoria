@@ -468,6 +468,12 @@ def _process_working_directory(
                 )
                 live_photo_bases[live_photo_key] = base
 
+                # Reserve all filenames for this live photo pair to prevent collisions
+                # with non-live-photo files that have the same timestamp
+                for _, ext in live_photo_groups.get(live_photo_key, []):
+                    reserved_name = f"{base}{ext}"
+                    filename_gen.used_filenames.add(reserved_name)
+
         # Get primary album name for metadata (use first album in list)
         albums_list = media_data.get("albums", [])
         album_name = albums_list[0] if albums_list else "unknown"

@@ -23,6 +23,7 @@ Performance Optimizations:
 - Cached video metadata to avoid redundant probing
 """
 
+import io
 import shutil
 import subprocess
 import tempfile
@@ -32,6 +33,13 @@ import logging
 from common.files.utils import copy_file
 
 from PIL import Image  # type: ignore
+
+# SCOF container format constants
+# Some Snapchat overlay files are wrapped in a proprietary SCOF container
+# with the actual PNG/image payload starting at byte offset 136
+SCOF_MAGIC = b"SCOF"
+SCOF_MAGIC_OFFSET = 4  # Magic appears at offset 4 (after 4-byte header size)
+SCOF_PAYLOAD_OFFSET = 136  # Embedded image starts at byte 136
 
 # Import video encoder detection
 from common.media.encoder import (
@@ -57,6 +65,54 @@ from common.dedup.description import (
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+
+def _extract_scof_payload(data: bytes) -> bytes:
+    """
+    Extract embedded image payload from SCOF container if present.
+
+    SCOF (Snapchat Overlay Format) is a proprietary binary container that wraps
+    PNG images. The container has a 136-byte header with "SCOF" magic at offset 4.
+
+    Args:
+        data: Raw file bytes
+
+    Returns:
+        The embedded image payload if SCOF container detected, otherwise original data
+    """
+    # Check for SCOF magic at offset 4
+    if len(data) > SCOF_PAYLOAD_OFFSET and data[SCOF_MAGIC_OFFSET : SCOF_MAGIC_OFFSET + 4] == SCOF_MAGIC:
+        logger.debug("Detected SCOF container, extracting payload from offset %d", SCOF_PAYLOAD_OFFSET)
+        return data[SCOF_PAYLOAD_OFFSET:]
+    return data
+
+
+def _open_overlay_image(overlay_path: Path) -> Image.Image:
+    """
+    Open an overlay image, handling SCOF containers transparently.
+
+    This function reads the overlay file and checks if it's wrapped in a SCOF
+    container. If so, it extracts the embedded PNG payload before opening.
+
+    Args:
+        overlay_path: Path to the overlay file
+
+    Returns:
+        PIL Image object
+
+    Raises:
+        Exception: If the image cannot be opened (propagates PIL errors)
+    """
+    data = overlay_path.read_bytes()
+    payload = _extract_scof_payload(data)
+
+    if payload is not data:
+        # SCOF container detected - open from bytes
+        return Image.open(io.BytesIO(payload))
+    else:
+        # Regular image file - open directly
+        return Image.open(overlay_path)
+
 
 class OverlayProcessingError(RuntimeError):
     """Raised when an overlay exists but cannot be processed (corrupt/unreadable)."""
@@ -357,8 +413,10 @@ def _pass2_apply_overlay_impl(
         return rotated_video_path
 
     # Scale overlay to match video dimensions using PIL
+    # Uses _open_overlay_image to handle SCOF containers transparently
     try:
-        with Image.open(overlay_path) as overlay_img:
+        overlay_img = _open_overlay_image(overlay_path)
+        try:
             orig_width, orig_height = overlay_img.size
 
             # Convert to RGBA if not already (for transparency support)
@@ -382,6 +440,13 @@ def _pass2_apply_overlay_impl(
             temp_overlay_path = Path(temp_overlay.name)
             scaled_overlay.save(temp_overlay_path, format="PNG", optimize=True)
             scaled_overlay.close()  # Close after saving
+        finally:
+            # Ensure overlay_img is closed if an error occurs mid-processing
+            if not overlay_img.fp is None:
+                try:
+                    overlay_img.close()
+                except Exception:
+                    pass
 
     except Exception as e:
         # Provide clear error message for corrupted overlays
@@ -762,9 +827,10 @@ def create_image_with_overlay(
                 base_img.close()
                 base_img = converted
 
-            # Open the overlay image - catch specific PIL errors
+            # Open the overlay image - uses _open_overlay_image to handle SCOF containers
             try:
-                with Image.open(overlay_path) as overlay_img:
+                overlay_img = _open_overlay_image(overlay_path)
+                try:
                     # Convert overlay to RGBA for transparency support
                     if overlay_img.mode != "RGBA":
                         converted = overlay_img.convert("RGBA")
@@ -795,6 +861,12 @@ def create_image_with_overlay(
                     result_img.save(output_path, quality=quality, optimize=True)
                     result_img.close()
                     return True
+                finally:
+                    # Ensure overlay_img is closed
+                    try:
+                        overlay_img.close()
+                    except Exception:
+                        pass
 
             except Exception as e:
                 # Provide clear error message for corrupted overlays

@@ -13,6 +13,7 @@ Processors (policy layer) build MetadataWriteRequest objects specifying WHAT to 
 import json
 import logging
 import os
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -23,7 +24,6 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from common.output.progress import PHASE_EXIF, chunked_progress
 from common.utils import get_media_type, get_gps_format
 from common.files.utils import short_path
-from common.validation.invariants import InvariantViolation, validate_gps
 from common.validation.invariants import InvariantViolation, validate_gps
 
 logger = logging.getLogger(__name__)
@@ -184,6 +184,43 @@ class BatchReadResult:
 
 
 # =============================================================================
+# Per-File Error Parsing
+# =============================================================================
+
+# Pattern to extract file paths from exiftool error/warning messages
+# Matches lines like:
+#   "Error: File not found - /path/to/file.jpg"
+#   "Error: Not a valid JPG (looks more like a TXT) - /path/to/file.jpg"
+#   "Warning: Bad EXIF data - /path/to/file.jpg"
+_EXIFTOOL_ERROR_PATTERN = re.compile(
+    r"^(?:Error|Warning):\s+(.+?)\s+-\s+(.+)$", re.MULTILINE
+)
+
+
+def _parse_exiftool_failed_files(stderr: str) -> Dict[str, str]:
+    """Parse exiftool stderr to extract per-file error messages.
+
+    Args:
+        stderr: The stderr output from exiftool.
+
+    Returns:
+        Dict mapping file paths to their error messages.
+    """
+    failed_files: Dict[str, str] = {}
+
+    for match in _EXIFTOOL_ERROR_PATTERN.finditer(stderr):
+        error_msg = match.group(1).strip()
+        file_path = match.group(2).strip()
+        # If same file has multiple errors, concatenate them
+        if file_path in failed_files:
+            failed_files[file_path] += f"; {error_msg}"
+        else:
+            failed_files[file_path] = error_msg
+
+    return failed_files
+
+
+# =============================================================================
 # Unified Batch Executor
 # =============================================================================
 
@@ -332,24 +369,35 @@ def batch_write_metadata_requests(
                 stdin=subprocess.DEVNULL,
             )
 
-            stderr_excerpt = (result.stderr or "").strip()[:500]
-            if result.returncode != 0:
-                reason_code = "exiftool_write_failed"
-                if "File format error" in stderr_excerpt or "format error" in stderr_excerpt:
-                    reason_code = "format_error"
-                elif "moov atom not found" in stderr_excerpt:
-                    reason_code = "probe_error"
+            # Parse per-file errors from stderr for precise failure attribution
+            stderr_text = (result.stderr or "").strip()
+            failed_files = _parse_exiftool_failed_files(stderr_text)
 
-                for request in filtered_chunk:
+            # Classify each file individually based on whether it appears in errors
+            for request in filtered_chunk:
+                if request.file_path in failed_files:
+                    # This specific file failed - determine reason code
+                    error_msg = failed_files[request.file_path]
+                    reason_code = "exiftool_write_failed"
+                    if (
+                        "format error" in error_msg.lower()
+                        or "not a valid" in error_msg.lower()
+                    ):
+                        reason_code = "format_error"
+                    elif "moov atom not found" in error_msg.lower():
+                        reason_code = "probe_error"
+                    elif "file not found" in error_msg.lower():
+                        reason_code = "file_missing"
+
                     outcome.failures.append(
                         ExifWriteFailure(
                             file_path=request.file_path,
                             reason_code=reason_code,
-                            stderr_excerpt=stderr_excerpt,
+                            stderr_excerpt=error_msg[:500],
                         )
                     )
-            else:
-                for request in filtered_chunk:
+                else:
+                    # File not in error list - it succeeded
                     outcome.successes.add(request.file_path)
 
             os.unlink(argfile_path)

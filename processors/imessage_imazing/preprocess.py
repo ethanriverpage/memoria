@@ -8,7 +8,7 @@ Processes iMazing-format iMessage exports which use:
 - Individual vCard files for contacts
 
 Output structure matches the standard iMessage processor format:
-- metadata.json with export_info, conversations, orphaned_media
+- metadata.json with export_info, conversations
 - media/ directory with copied attachment files
 """
 
@@ -117,7 +117,7 @@ class ImazingPreprocessor(PreprocessorBase):
     optionally cross-referencing with CSV files for additional context.
 
     Output structure matches standard iMessage processor format:
-    - metadata.json with export_info, conversations, orphaned_media
+    - metadata.json with export_info, conversations
     - media/ directory with copied attachment files
 
     Attributes:
@@ -382,16 +382,14 @@ class ImazingPreprocessor(PreprocessorBase):
         """
         return source_path.name
 
-    def _build_conversations(
-        self, media_files: List[Path]
-    ) -> Tuple[Dict[str, Dict], List[Dict]]:
+    def _build_conversations(self, media_files: List[Path]) -> Dict[str, Dict]:
         """Build conversations structure using hash_with_dedup (no file copying).
 
         Args:
             media_files: List of media file paths to process
 
         Returns:
-            Tuple of (conversations dict, orphaned_media list)
+            Conversations dict
         """
 
         # Sort files by parsed timestamp so oldest is processed first (becomes primary)
@@ -548,10 +546,7 @@ class ImazingPreprocessor(PreprocessorBase):
         self.stats["duplicate_files"] = duplicate_count
         self.stats["conversations"] = len(conversations)
 
-        # No orphaned media in this format
-        orphaned_media: List[Dict] = []
-
-        return conversations, orphaned_media
+        return conversations
 
     def get_content_key(self) -> str:
         """Return the content key for iMessage iMazing metadata."""
@@ -604,7 +599,7 @@ class ImazingPreprocessor(PreprocessorBase):
 
         # Phase 3: Build conversations and copy files (with deduplication)
         log.logger.info("Building conversations and copying files...")
-        conversations, orphaned_media = self._build_conversations(media_files)
+        conversations = self._build_conversations(media_files)
         log.logger.info(
             "Organized into %d conversations, %d unique files (%d duplicates removed)",
             len(conversations),
@@ -618,7 +613,6 @@ class ImazingPreprocessor(PreprocessorBase):
         # Phase 5: Generate metadata
         log.logger.info("Saving metadata.json")
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.set_unmatched_media(orphaned_media)
         self.save_metadata(conversations, extra_export_info=extra_export_info)
 
         return True

@@ -32,6 +32,22 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Clutter; potential confusion for new contributors.
 - **Confidence**: **Medium** (Check utility before deletion).
 
+---
+
+### 2.3 CLI / Orchestration Findings (`memoria.py`)
+
+##### Finding S — Hardcoded platform/service taxonomies in upload-only scanning will drift
+
+- **Category**: DRY violation / architectural drift
+- **Location**: `memoria.py:1150-1284` (`_scan_platform_username_service_structure`)
+- **Description & evidence**
+  - Upload-only scanning hardcodes `known_platforms` and `known_services` sets in `memoria.py`.
+  - Similar “known platforms” constants also exist in `common/dedup/description.py` and `standalone/clear_immich_albums.py`, creating multiple sources of truth.
+  - New processors/services or naming changes require edits in multiple places, and missed updates will cause silent upload omissions.
+- **Impact**
+  - **Medium**: Drift-prone behavior and silent functional gaps (missing uploads) when processors evolve.
+- **Confidence**: **High**
+
 ##### Finding P2 — Duplicated `_process_working_directory` boilerplate
 
 - **Category**: DRY violation

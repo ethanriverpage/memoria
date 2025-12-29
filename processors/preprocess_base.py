@@ -18,6 +18,7 @@ Template Enforcement:
 
 import logging
 import os
+import re
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
@@ -32,7 +33,7 @@ import json
 from common.dedup.config import get_dedup_config
 from common.dedup.database import get_thread_db
 from common.dedup.hashing import compute_content_hash
-from common.detection import DetectionResult
+from common.detection import DetectionResult, detect_from_dirname
 from common.failure_tracker import FailureTracker
 from common.files.filter import BannedFilesFilter
 from common.metadata.schema import validate_metadata, CONTENT_KEYS
@@ -459,6 +460,48 @@ class PreprocessorBase(ABC):
     # Cached Username Detection
     # =========================================================================
 
+    def _extract_directory_username(self) -> Optional[str]:
+        """Extract the user-chosen export username from the export directory name.
+
+        This project treats the directory username as the canonical export identity
+        (user-controlled), and it must be used consistently for:
+        - export_info.export_username
+        - filenames and descriptions (via downstream processors reading export_info)
+
+        We support two common directory naming styles:
+        - prefix-username-<date...> (e.g. "imessage-iphxr-20210621_...")
+        - username-service-<date...> (e.g. "iphxr-messages-20251121") for some iMessage-style exports
+        """
+        dir_name = self.export_path.name
+
+        # Style 2: username-service-date (only if the second token is a known service marker)
+        # Example: iphxr-messages-20251121
+        parts = dir_name.split("-")
+        if len(parts) >= 3:
+            service_token = parts[1].lower()
+            date_token = parts[2]
+            known_services = {
+                "messages",
+                "photos",
+                "memories",
+                "voice",
+                "chat",
+                "public",
+                "public_media",
+                "instaloader",
+            }
+            if service_token in known_services and re.match(
+                r"^\d{8}($|[-_])", date_token
+            ):
+                return parts[0]
+
+        # Style 1: prefix-username-date (standard)
+        m = re.match(r"^([a-z0-9]+)[-_]", dir_name, flags=re.IGNORECASE)
+        if not m:
+            return None
+        prefix = m.group(1)
+        return detect_from_dirname(self.export_path, prefix)
+
     def ensure_detection_result(self) -> DetectionResult:
         """Ensure username detection has been performed and return the result.
 
@@ -469,7 +512,17 @@ class PreprocessorBase(ABC):
             DetectionResult with username and source
         """
         if self._detection_result is None:
-            self._detection_result = self.detect_username()
+            detected = self.detect_username()
+
+            # Directory username is canonical across the pipeline.
+            directory_username = self._extract_directory_username()
+            if directory_username:
+                self._detection_result = DetectionResult(
+                    username=directory_username,
+                    source="directory",
+                )
+            else:
+                self._detection_result = detected
         return self._detection_result
 
     def get_detection_result(self) -> Optional[DetectionResult]:
@@ -744,9 +797,7 @@ class PreprocessorBase(ABC):
             }
 
             if show_progress:
-                iterator = futures_progress(
-                    futures, PHASE_PREPROCESS, "Hashing files"
-                )
+                iterator = futures_progress(futures, PHASE_PREPROCESS, "Hashing files")
             else:
                 from concurrent.futures import as_completed
 

@@ -8,11 +8,14 @@ Tests cover edge cases including:
 - Memory with missing overlay file
 - Empty metadata.json array
 - Resolution mismatch (overlay scaling)
+- GPS coordinate handling (filtering invalid coordinates)
 """
 
 import json
 
+import pytest
 
+from processors.snapchat_memories.processor import _build_metadata_requests
 from tests.fixtures.generators import create_snapchat_memories_export
 from tests.fixtures.media_samples import write_media_file
 
@@ -363,3 +366,117 @@ class TestSnapchatMemoriesRealisticFixtures:
         # Overlay files should exist
         assert (memories_dir / "overlays" / "overlay_001.png").exists()
         assert (memories_dir / "overlays" / "overlay_002.png").exists()
+
+
+class TestSnapchatMemoriesGPSHandling:
+    """Tests for GPS coordinate handling in metadata requests."""
+
+    @pytest.fixture
+    def base_media_data(self):
+        """Base media data for GPS tests."""
+        return {
+            "date": "2021-01-01 12:00:00 UTC",
+            "canonical_timestamp": "2021-01-01T12:00:00Z",
+        }
+
+    def test_gps_zero_zero_is_skipped(self, base_media_data, tmp_path):
+        """GPS (0.0, 0.0) should be treated as missing, not embedded."""
+        # Create a test file
+        test_file = tmp_path / "test.jpg"
+        test_file.write_bytes(b"\xff\xd8\xff\xe0")  # Minimal JPEG header
+
+        media_data = {
+            **base_media_data,
+            "latitude": 0.0,
+            "longitude": 0.0,
+        }
+
+        file_info = [
+            (str(test_file), media_data, "testuser", "hash123", "original.jpg")
+        ]
+
+        requests = _build_metadata_requests(file_info)
+
+        assert len(requests) == 1
+        assert requests[0].gps is None  # GPS should not be set
+
+    def test_valid_gps_is_included(self, base_media_data, tmp_path):
+        """Valid GPS coordinates should be embedded."""
+        test_file = tmp_path / "test.jpg"
+        test_file.write_bytes(b"\xff\xd8\xff\xe0")
+
+        media_data = {
+            **base_media_data,
+            "latitude": 37.7749,
+            "longitude": -122.4194,
+        }
+
+        file_info = [
+            (str(test_file), media_data, "testuser", "hash123", "original.jpg")
+        ]
+
+        requests = _build_metadata_requests(file_info)
+
+        assert len(requests) == 1
+        assert requests[0].gps is not None
+        assert requests[0].gps.latitude == 37.7749
+        assert requests[0].gps.longitude == -122.4194
+
+    def test_gps_out_of_range_is_skipped(self, base_media_data, tmp_path):
+        """GPS coordinates out of valid range should be skipped."""
+        test_file = tmp_path / "test.jpg"
+        test_file.write_bytes(b"\xff\xd8\xff\xe0")
+
+        # Latitude out of range
+        media_data = {
+            **base_media_data,
+            "latitude": 95.0,  # Invalid: > 90
+            "longitude": -122.4194,
+        }
+
+        file_info = [
+            (str(test_file), media_data, "testuser", "hash123", "original.jpg")
+        ]
+
+        requests = _build_metadata_requests(file_info)
+
+        assert len(requests) == 1
+        assert requests[0].gps is None
+
+    def test_gps_missing_is_skipped(self, base_media_data, tmp_path):
+        """Missing GPS coordinates should result in no GPS data."""
+        test_file = tmp_path / "test.jpg"
+        test_file.write_bytes(b"\xff\xd8\xff\xe0")
+
+        # No latitude/longitude in media_data
+        file_info = [
+            (str(test_file), base_media_data, "testuser", "hash123", "original.jpg")
+        ]
+
+        requests = _build_metadata_requests(file_info)
+
+        assert len(requests) == 1
+        assert requests[0].gps is None
+
+    def test_gps_boundary_values_are_valid(self, base_media_data, tmp_path):
+        """GPS at boundary values (-90/90, -180/180) should be valid."""
+        test_file = tmp_path / "test.jpg"
+        test_file.write_bytes(b"\xff\xd8\xff\xe0")
+
+        # Test at boundaries
+        media_data = {
+            **base_media_data,
+            "latitude": 90.0,
+            "longitude": 180.0,
+        }
+
+        file_info = [
+            (str(test_file), media_data, "testuser", "hash123", "original.jpg")
+        ]
+
+        requests = _build_metadata_requests(file_info)
+
+        assert len(requests) == 1
+        assert requests[0].gps is not None
+        assert requests[0].gps.latitude == 90.0
+        assert requests[0].gps.longitude == 180.0

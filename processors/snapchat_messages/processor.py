@@ -20,6 +20,7 @@ from common.dedup.description import (
     SERVICE_MESSAGES,
 )
 from common.files.utils import copy_file
+from common.detection import detect_from_dirname
 from common.media.exiftool import (
     DEFAULT_PREAMBLE,
     DescriptionWriteSpec,
@@ -163,6 +164,7 @@ class SnapchatMessagesProcessor(ProcessorBase):
         input_path = Path(input_dir)
         cache_path = Path(cache_dir)
         workers = kwargs.get("workers")
+        username_override = None
 
         # Check for consolidated export structure (messages/chat_media/)
         # If found, preprocess from the messages/ subdirectory
@@ -175,6 +177,8 @@ class SnapchatMessagesProcessor(ProcessorBase):
                     "Detected consolidated export structure, preprocessing from: %s",
                     messages_subdir,
                 )
+                # Extract username from parent directory BEFORE switching
+                username_override = detect_from_dirname(input_path, "snapchat")
                 input_path = messages_subdir
 
         logger.info("Preprocessing Snapchat Messages export to: %s", cache_path)
@@ -185,6 +189,7 @@ class SnapchatMessagesProcessor(ProcessorBase):
             export_path=input_path,
             output_dir=cache_path,
             workers=workers,
+            username_override=username_override,
         )
 
         if preprocessor.run():

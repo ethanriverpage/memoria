@@ -31,7 +31,7 @@ from common.media.exiftool import (
     PREAMBLE_WITH_IGNORE_ERRORS,
     build_datetime_tags,
 )
-from common.processing import print_processing_summary
+from common.processing import process_batches_parallel, print_processing_summary
 from common.detection import detect_from_dirname
 from common.utils import (
     FilenameGenerator,
@@ -59,9 +59,15 @@ class InstagramPublicMediaProcessor(ProcessorBase):
     def detect(input_path: Path) -> bool:
         """Check if this processor can handle the input directory.
 
-        Detection criteria for Instagram Public Media (New Format):
+        Detection criteria for Instagram Public Media:
         - Directory contains 'media/posts/' or 'media/archived_posts/'
         - These directories contain YYYYMM date-organized folders
+        - HTML metadata directory exists with at least one HTML file
+          (either 'your_instagram_activity/media/' or 'content/')
+
+        The HTML metadata requirement ensures we only detect exports that
+        the preprocessor can actually handle. Exports with only JSON sidecars
+        (no HTML metadata) will not be detected.
         """
         try:
             media_dir = input_path / "media"
@@ -81,6 +87,7 @@ class InstagramPublicMediaProcessor(ProcessorBase):
 
             # Verify date-organized structure (YYYYMM folders)
             date_folder_pattern = re.compile(r"^\d{6}$")  # YYYYMM format
+            has_date_folders = False
 
             # Check posts directory for date folders
             if has_posts:
@@ -90,19 +97,41 @@ class InstagramPublicMediaProcessor(ProcessorBase):
                     if d.is_dir() and date_folder_pattern.match(d.name)
                 ]
                 if len(date_folders) > 0:
-                    return True
+                    has_date_folders = True
 
             # Check archived_posts directory for date folders
-            if has_archived:
+            if not has_date_folders and has_archived:
                 date_folders = [
                     d
                     for d in archived_posts_dir.iterdir()
                     if d.is_dir() and date_folder_pattern.match(d.name)
                 ]
                 if len(date_folders) > 0:
-                    return True
+                    has_date_folders = True
 
-            return False
+            if not has_date_folders:
+                return False
+
+            # Verify HTML metadata directory exists with at least one HTML file
+            # The preprocessor requires HTML metadata to function
+            new_format_html_dir = input_path / "your_instagram_activity" / "media"
+            legacy_format_html_dir = input_path / "content"
+
+            html_dir = None
+            if new_format_html_dir.exists() and new_format_html_dir.is_dir():
+                html_dir = new_format_html_dir
+            elif legacy_format_html_dir.exists() and legacy_format_html_dir.is_dir():
+                html_dir = legacy_format_html_dir
+
+            if html_dir is None:
+                return False
+
+            # Check for at least one HTML file in the metadata directory
+            html_files = list(html_dir.glob("*.html"))
+            if len(html_files) == 0:
+                return False
+
+            return True
 
         except Exception as e:
             log.detection_failed("Instagram Public Media", e)

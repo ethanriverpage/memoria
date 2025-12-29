@@ -148,6 +148,40 @@ class TestInstagramPublicDetection:
         (other_dir / "story.jpg").write_bytes(b"test")
         assert instagram_public_processor.detect(temp_export_dir) is False
 
+    def test_reject_media_structure_without_html_metadata(
+        self, instagram_public_processor, temp_export_dir
+    ):
+        """Should reject export with media/posts structure but no HTML metadata.
+
+        This tests the fix for the detect/preprocess mismatch bug:
+        exports must have HTML metadata directories to be detected.
+        """
+        # Create media structure with YYYYMM folders
+        posts_dir = temp_export_dir / "media" / "posts" / "202101"
+        posts_dir.mkdir(parents=True)
+        (posts_dir / "photo.jpg").write_bytes(b"test")
+
+        # No HTML metadata directory (your_instagram_activity/media or content)
+        assert instagram_public_processor.detect(temp_export_dir) is False
+
+    def test_reject_empty_html_metadata_dir(
+        self, instagram_public_processor, temp_export_dir
+    ):
+        """Should reject export with empty HTML metadata directory.
+
+        HTML metadata directory must contain at least one .html file.
+        """
+        # Create media structure
+        posts_dir = temp_export_dir / "media" / "posts" / "202101"
+        posts_dir.mkdir(parents=True)
+        (posts_dir / "photo.jpg").write_bytes(b"test")
+
+        # Create empty HTML metadata directory
+        html_dir = temp_export_dir / "your_instagram_activity" / "media"
+        html_dir.mkdir(parents=True)
+
+        assert instagram_public_processor.detect(temp_export_dir) is False
+
 
 class TestInstaloaderDetection:
     """Tests for Instaloader processor detection."""

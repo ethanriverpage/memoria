@@ -107,7 +107,7 @@ The standardized schema is defined in `common/metadata/schema.py` and validated 
 - `file_hashes`: mapping of output filename → content hash (supports cross-processor dedup)
 - exactly one of: `conversations`, `media`, or `media_files`
 - all media references must include `source_path` (direct file path) so processors and dedup can operate without relying on temp copies
-- optional: `unmatched_media` (files processable but lacking full context)
+- optional: `unmatched_media` (files processable but lacking full context; see terminology in `docs/Failure-Handling.md`)
 - optional: `ambiguous_cases` (e.g., overlay matching ambiguity - materialized by processor into `output_dir/issues/needs_matching/`)
 
 #### Implementing a preprocessor (current template)

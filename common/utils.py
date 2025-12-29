@@ -9,6 +9,8 @@ import re
 from datetime import datetime
 from typing import Optional, Set
 
+from common.validation.invariants import InvariantViolation
+
 # Re-export logging functions from centralized logging module for backwards compatibility
 
 
@@ -151,6 +153,48 @@ def sanitize_filename(name: str, max_length: int = 50) -> str:
     return sanitized
 
 
+def _parse_timestamp_flexible(
+    timestamp_str: str,
+    fallback_format: str = "%Y-%m-%d %H:%M:%S",
+) -> Optional[datetime]:
+    """Parse a timestamp string flexibly, supporting ISO-8601 and legacy formats.
+
+    Attempts to parse timestamps in the following order:
+    1. ISO-8601 format via fromisoformat() (handles +00:00, Z, T separator)
+    2. Fallback format via strptime()
+
+    Args:
+        timestamp_str: The timestamp string to parse.
+        fallback_format: Format string for strptime fallback.
+
+    Returns:
+        datetime object if parsing succeeded, None otherwise.
+    """
+    if not timestamp_str:
+        return None
+
+    # Clean common suffixes
+    clean = timestamp_str.strip()
+    if clean.endswith(" UTC"):
+        clean = clean[:-4]
+
+    # Try ISO-8601 first (handles Z, +00:00, T separator)
+    try:
+        # Normalize 'Z' to '+00:00' for fromisoformat compatibility
+        iso_str = clean.replace("Z", "+00:00") if clean.endswith("Z") else clean
+        return datetime.fromisoformat(iso_str)
+    except ValueError:
+        pass
+
+    # Fallback to provided format
+    try:
+        return datetime.strptime(clean, fallback_format)
+    except ValueError:
+        pass
+
+    return None
+
+
 class FilenameGenerator:
     """Generate unique filenames with sequence numbers for duplicates.
 
@@ -168,9 +212,10 @@ class FilenameGenerator:
         timestamp_format: str = "%Y-%m-%d %H:%M:%S",
         sequence_start: int = 2,
     ):
-        self.platform = platform
-        self.username = username
-        self.service = service
+        # Sanitize components for safe filenames (lowercase, no special chars)
+        self.platform = sanitize_filename(platform)
+        self.username = sanitize_filename(username)
+        self.service = sanitize_filename(service) if service else None
         self.timestamp_format = timestamp_format
         self.sequence_start = sequence_start
         self.used_filenames: Set[str] = set()
@@ -193,14 +238,25 @@ class FilenameGenerator:
         return self._ensure_unique(base, extension)
 
     def _parse_date(self, timestamp_str: Optional[str]) -> str:
-        """Parse timestamp to YYYYMMDD format, or "00000000" if unparseable."""
+        """Parse timestamp to YYYYMMDD format.
+
+        Raises:
+            InvariantViolation: If timestamp is missing or unparseable.
+                This indicates a bug in the calling code - processors must
+                ensure valid timestamps before calling generate().
+        """
         if not timestamp_str:
-            return "00000000"
-        try:
-            dt = datetime.strptime(timestamp_str, self.timestamp_format)
+            raise InvariantViolation(
+                f"FilenameGenerator.generate() called with missing timestamp "
+                f"(platform={self.platform}, username={self.username})"
+            )
+        dt = _parse_timestamp_flexible(timestamp_str, self.timestamp_format)
+        if dt:
             return dt.strftime("%Y%m%d")
-        except ValueError:
-            return "00000000"
+        raise InvariantViolation(
+            f"FilenameGenerator.generate() called with unparseable timestamp "
+            f"'{timestamp_str}' (platform={self.platform}, username={self.username})"
+        )
 
     def _ensure_unique(self, base: str, extension: str) -> str:
         """Add sequence number if filename already used."""
@@ -247,7 +303,11 @@ def update_file_timestamps(
     timestamp_str: Optional[str],
     timestamp_format: str = "%Y-%m-%d %H:%M:%S",
 ) -> bool:
-    """Set file atime/mtime to match the given timestamp string."""
+    """Set file atime/mtime to match the given timestamp string.
+
+    Supports ISO-8601 timestamps (including timezone offsets like +00:00, Z suffix,
+    and T separator) as well as legacy formats via the timestamp_format parameter.
+    """
     logger = logging.getLogger(__name__)
 
     try:
@@ -255,18 +315,14 @@ def update_file_timestamps(
         if not timestamp_str:
             return False
 
-        # Handle common timestamp suffixes
-        clean_timestamp = timestamp_str
-        if clean_timestamp.endswith(" UTC"):
-            clean_timestamp = clean_timestamp[:-4]
-        if clean_timestamp.endswith("Z"):
-            clean_timestamp = clean_timestamp[:-1]
-            # Adjust format if it was ISO 8601
-            if "T" in clean_timestamp and timestamp_format == "%Y-%m-%d %H:%M:%S":
-                timestamp_format = "%Y-%m-%dT%H:%M:%S"
-
-        # Parse the timestamp
-        date_obj = datetime.strptime(clean_timestamp, timestamp_format)
+        # Use flexible parsing that handles ISO-8601 and legacy formats
+        date_obj = _parse_timestamp_flexible(timestamp_str, timestamp_format)
+        if date_obj is None:
+            logger.warning(
+                f"Failed to update timestamps for {file_path}: "
+                f"could not parse '{timestamp_str}'"
+            )
+            return False
 
         # Convert to Unix timestamp
         timestamp = date_obj.timestamp()
@@ -275,6 +331,6 @@ def update_file_timestamps(
         os.utime(file_path, (timestamp, timestamp))
         return True
 
-    except (ValueError, TypeError, OSError) as e:
+    except (TypeError, OSError) as e:
         logger.warning(f"Failed to update timestamps for {file_path}: {e}")
         return False

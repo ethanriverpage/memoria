@@ -15,10 +15,14 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from common.detection import resolve_username, DetectionResult
 from common.files.scanner import iter_media_files
+from common.media.probe import (
+    quick_isobmff_header_check,
+    get_video_metadata_with_failure,
+)
 from common.preprocess.context_mergers import merge_imessage_context
 from common.processing import print_preprocessing_stats, process_parallel_threaded
 from common.output.progress import PHASE_PREPROCESS, progress_bar
@@ -26,6 +30,9 @@ from common.utils import get_media_type
 from common.output.logging import get_processor_logger
 from processors.imessage.vcard_parser import VCardParser
 from processors.preprocess_base import CopyTask, PreprocessorBase
+
+# Video extensions that may be iCloud placeholder attachments
+_ISOBMFF_EXTENSIONS = {".mov", ".mp4", ".m4v"}
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -361,6 +368,44 @@ class IMessagePreprocessor(PreprocessorBase):
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _is_placeholder_video(self, file_path: Path) -> Tuple[bool, str]:
+        """Check if a video file is an iCloud placeholder attachment.
+
+        iCloud "Optimize Storage" can leave placeholder blobs on disk that
+        appear to be MOV/MP4 files but contain encrypted or incomplete data.
+        These files exist in the filesystem and pass basic checks, but ffprobe
+        fails with "moov atom not found" because they lack a valid container.
+
+        Detection strategy (two-stage for speed + accuracy):
+        1. Fast header check: scan first 64KB for 'ftyp' atom
+        2. If suspicious, run ffprobe for authoritative verdict
+
+        Args:
+            file_path: Path to the video file
+
+        Returns:
+            (is_placeholder, reason_code)
+            - is_placeholder: True if this is a placeholder (should be skipped)
+            - reason_code: Diagnostic code for failure tracking
+        """
+        # Stage 1: Fast header heuristic
+        header_ok, header_reason = quick_isobmff_header_check(file_path)
+
+        if header_ok:
+            # Header looks normal, assume it's a real video
+            return False, header_reason
+
+        # Stage 2: Header is suspicious, confirm with ffprobe (short timeout)
+        metadata, failure = get_video_metadata_with_failure(file_path, timeout=2)
+
+        if metadata is not None:
+            # ffprobe succeeded despite suspicious header - it's a real video
+            return False, "ffprobe_ok_despite_header"
+
+        # ffprobe failed - this is a placeholder
+        reason = failure.reason_code if failure else "unknown_failure"
+        return True, reason
+
     def _resolve_attachment_path(
         self, db_path: str, export_path: Path
     ) -> Optional[Path]:
@@ -602,6 +647,7 @@ class IMessagePreprocessor(PreprocessorBase):
         attachments = []
         export_type = self._detect_export_type(export_path)
         attachments_not_found = 0
+        placeholders_detected = 0
 
         for row in rows:
             # Resolve file path
@@ -628,6 +674,27 @@ class IMessagePreprocessor(PreprocessorBase):
             # Skip non-media files
             if not get_media_type(str(file_path)):
                 continue
+
+            # Check for iCloud placeholder videos (MOV/MP4/M4V with missing container)
+            if file_path.suffix.lower() in _ISOBMFF_EXTENSIONS:
+                is_placeholder, reason = self._is_placeholder_video(file_path)
+                if is_placeholder:
+                    placeholders_detected += 1
+                    self.failure_tracker.add_orphaned_metadata(
+                        metadata_entry={
+                            "attachment_id": row["attachment_id"],
+                            "filename": row["filename"],
+                            "transfer_name": row["transfer_name"],
+                            "message_date": row["message_date"],
+                            "chat_identifier": row["chat_identifier"],
+                        },
+                        reason="Placeholder attachment (iCloud incomplete download)",
+                        context={
+                            "source_path": str(file_path),
+                            "detection_reason": reason,
+                        },
+                    )
+                    continue
 
             # Convert timestamp
             msg_date = convert_apple_timestamp(row["message_date"])
@@ -703,6 +770,11 @@ class IMessagePreprocessor(PreprocessorBase):
 
         if attachments_not_found > 0:
             logger.debug("Attachments not found: %d", attachments_not_found)
+        if placeholders_detected > 0:
+            logger.info(
+                "Detected %d placeholder attachments (iCloud incomplete downloads)",
+                placeholders_detected,
+            )
 
         return attachments
 
@@ -869,27 +941,31 @@ class IMessagePreprocessor(PreprocessorBase):
 
         return conversations
 
-    def _detect_orphaned_media(self, processed_attachments: List[Dict]) -> List[Dict]:
-        """Detect media files in Attachments folder that aren't in the database.
+    def _detect_orphaned_media(
+        self, processed_attachments: List[Dict]
+    ) -> List[Dict[str, Any]]:
+        """Detect and track orphaned media files in Attachments folder.
 
-        Scans the Attachments directory for all media files and compares against
-        the list of attachments that were found in the database query.
+        Scans the Attachments directory for media files not referenced in the
+        iMessage database. These files have no timestamp (no database entry),
+        so they are tracked via FailureTracker only (not unmatched_media).
+        Per Failure-Handling.md: orphaned_media = no timestamp = invalid.
 
         Args:
             processed_attachments: List of attachment dicts from database query
-
-        Returns:
-            List of orphaned media entries for metadata.json
         """
-        # Build set of processed file paths (resolved paths from database)
-        processed_paths: set = set()
+        # Build set of processed file paths (resolved paths from database).
+        # Some call sites/tests pass "source_path" instead of "resolved_path".
+        processed_paths: set[Path] = set()
         for attachment in processed_attachments:
-            resolved_path = attachment.get("resolved_path")
+            resolved_path = attachment.get("resolved_path") or attachment.get(
+                "source_path"
+            )
             if resolved_path:
                 processed_paths.add(Path(resolved_path).resolve())
 
-        orphaned_media: List[Dict] = []
         orphaned_count = 0
+        orphaned_entries: List[Dict[str, Any]] = []
 
         # Scan all export paths for media files not in the database
         for export_path in self.export_paths:
@@ -915,10 +991,18 @@ class IMessagePreprocessor(PreprocessorBase):
                 # Check if this file was processed from the database
                 resolved_path = file_path.resolve()
                 if resolved_path not in processed_paths:
-                    # This is an orphaned media file
+                    # This is an orphaned media file - no database entry means no
+                    # timestamp, so it goes to FailureTracker only (not unmatched_media).
+                    # Per Failure-Handling.md: orphaned_media = no timestamp = invalid.
                     orphaned_count += 1
+                    orphaned_entries.append(
+                        {
+                            "filename": file_path.name,
+                            "source_path": str(file_path),
+                            "export_path": str(export_path),
+                        }
+                    )
 
-                    # Track with FailureTracker
                     self.failure_tracker.add_orphaned_media(
                         media_path=file_path,
                         reason="Media file not referenced in iMessage database",
@@ -928,24 +1012,9 @@ class IMessagePreprocessor(PreprocessorBase):
                         },
                     )
 
-                    # Create orphaned media entry for metadata.json
-                    orphaned_entry = {
-                        "conversation_id": None,
-                        "conversation_type": None,
-                        "conversation_title": None,
-                        "sender": None,
-                        "media_type": get_media_type(str(file_path)),
-                        "created": None,
-                        "content": "",
-                        "filename": file_path.name,
-                        "source_path": str(file_path),
-                    }
-                    orphaned_media.append(orphaned_entry)
-
         if orphaned_count > 0:
             logger.info("Found %d orphaned media files", orphaned_count)
-
-        return orphaned_media
+        return orphaned_entries
 
     def _generate_output_filename(self, source_path: Path, attachment: Dict) -> str:
         """Generate output filename from attachment metadata.
@@ -1048,12 +1117,12 @@ class IMessagePreprocessor(PreprocessorBase):
         )
 
         # Phase 3b: Detect orphaned media (files in Attachments not in database)
-        orphaned_media = self._detect_orphaned_media(all_attachments)
+        # These go to FailureTracker only (no timestamp = invalid for processing)
+        _ = self._detect_orphaned_media(all_attachments)
 
         # Phase 4: Save metadata
         logger.info("Saving metadata.json")
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.set_unmatched_media(orphaned_media)
         self.save_metadata(
             conversations,
             extra_export_info={
