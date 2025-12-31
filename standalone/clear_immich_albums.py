@@ -11,16 +11,21 @@ Matching modes:
 1. Album-based (default): Match albums with pattern {Platform}/{username}[/{service}]
 2. Filename-based (--by-filename): Match files with Memoria filename prefixes
 
-Filename prefixes used by Memoria:
-    gphotos-     Google Photos
-    gchat-       Google Chat
-    gvoice-      Google Voice
+Filename format: {platform}-{username}[-{service}]-{YYYYMMDD}[_seq].ext
+
+Platform prefixes:
+    google-      Google (Photos, Chat, Voice)
     discord-     Discord
-    insta-       Instagram Public Media
-    insta-messages-  Instagram Messages
-    snap-memories-   Snapchat Memories
-    snap-messages-   Snapchat Messages
+    insta-       Instagram (Public Media, Messages)
+    snap-        Snapchat (Memories, Messages)
     imessage-    iMessage
+
+Filter keys for --prefix:
+    google, google-photos, google-chat, google-voice
+    discord
+    insta, insta-public, insta-msgs
+    snap, snap-memories, snap-msgs
+    imessage
 
 Usage:
     # List matching albums (dry-run, default)
@@ -33,7 +38,7 @@ Usage:
     python standalone/clear_immich_albums.py --by-filename --delete
 
     # Filter by prefix (filename mode only)
-    python standalone/clear_immich_albums.py --by-filename --prefix gphotos --delete
+    python standalone/clear_immich_albums.py --by-filename --prefix google-photos --delete
 
     # Use custom credentials
     python standalone/clear_immich_albums.py --url https://immich.local/api --key YOUR_KEY
@@ -67,25 +72,54 @@ except ImportError:
 # Known platforms that Memoria creates albums for
 KNOWN_PLATFORMS = {"Discord", "Google", "Instagram", "Snapchat", "iMessage"}
 
-# Filename prefixes used by Memoria processors
-# Maps prefix to description for display
-FILENAME_PREFIXES = {
-    "gphotos": "Google Photos",
-    "gchat": "Google Chat",
-    "gvoice": "Google Voice",
-    "discord": "Discord",
-    "insta": "Instagram Public Media",
-    "insta-messages": "Instagram Messages",
-    "snap-memories": "Snapchat Memories",
-    "snap-messages": "Snapchat Messages",
-    "imessage": "iMessage",
+# Filename patterns used by Memoria processors
+# Format: {platform}-{username}[-{service}]-{YYYYMMDD}[_seq].ext
+#
+# Platform prefixes (first component of filename):
+#   google-    Google services (Photos, Chat, Voice)
+#   discord-   Discord
+#   insta-     Instagram services (Public Media, Messages)
+#   snap-      Snapchat services (Memories, Messages)
+#   imessage-  iMessage
+#
+# Service suffixes (after username, for multi-service platforms):
+#   google:  -photos-, -chat-, -voice-
+#   insta:   -posts-, -reels-, -stories-, -archived_posts-, -profile-, -other-, -msgs-
+#   snap:    -memories-, -msgs-
+
+# Maps filter key to (description, platform, service_pattern)
+# service_pattern is a regex pattern to match after the username, or None for any
+FILENAME_FILTERS = {
+    # Google services
+    "google": ("Google (all)", "google", None),
+    "google-photos": ("Google Photos", "google", r"-photos-"),
+    "google-chat": ("Google Chat", "google", r"-chat-"),
+    "google-voice": ("Google Voice", "google", r"-voice-"),
+    # Discord (no service variants)
+    "discord": ("Discord", "discord", None),
+    # Instagram services
+    "insta": ("Instagram (all)", "insta", None),
+    "insta-public": (
+        "Instagram Public Media",
+        "insta",
+        r"-(posts|reels|stories|archived_posts|profile|other)-",
+    ),
+    "insta-msgs": ("Instagram Messages", "insta", r"-msgs-"),
+    # Snapchat services
+    "snap": ("Snapchat (all)", "snap", None),
+    "snap-memories": ("Snapchat Memories", "snap", r"-memories-"),
+    "snap-msgs": ("Snapchat Messages", "snap", r"-msgs-"),
+    # iMessage (no service variants)
+    "imessage": ("iMessage", "imessage", None),
 }
 
+# All known platform prefixes (for matching any Memoria file)
+PLATFORM_PREFIXES = {"google", "discord", "insta", "snap", "imessage"}
+
 # Regex pattern to match any Memoria filename
-# Matches: prefix-identifier-YYYYMMDD_HHMMSS[_seq].ext
-# The prefix must be one of the known prefixes
+# Format: {platform}-{username}[-{service}]-{YYYYMMDD}[_seq].ext
 MEMORIA_FILENAME_PATTERN = re.compile(
-    r"^(" + "|".join(re.escape(p) for p in sorted(FILENAME_PREFIXES.keys(), key=len, reverse=True)) + r")-"
+    r"^(" + "|".join(re.escape(p) for p in sorted(PLATFORM_PREFIXES, key=len, reverse=True)) + r")-"
 )
 
 
@@ -362,12 +396,12 @@ def is_memoria_album(album_name: str, platform_filter: Optional[str] = None) -> 
     return True
 
 
-def is_memoria_filename(filename: str, prefix_filter: Optional[str] = None) -> bool:
+def is_memoria_filename(filename: str, filter_key: Optional[str] = None) -> bool:
     """Check if a filename matches Memoria naming conventions.
 
     Args:
         filename: Filename to check (without path)
-        prefix_filter: Optional prefix to filter by (e.g., "gphotos")
+        filter_key: Optional filter key (e.g., "google-photos", "discord")
 
     Returns:
         True if filename matches Memoria pattern
@@ -375,24 +409,62 @@ def is_memoria_filename(filename: str, prefix_filter: Optional[str] = None) -> b
     if not filename:
         return False
 
-    if prefix_filter:
-        return filename.startswith(f"{prefix_filter}-")
+    if filter_key:
+        if filter_key not in FILENAME_FILTERS:
+            return False
+        _desc, platform, service_pattern = FILENAME_FILTERS[filter_key]
+
+        # Must start with the platform prefix
+        if not filename.startswith(f"{platform}-"):
+            return False
+
+        # If service pattern specified, must match after username
+        if service_pattern:
+            # Pattern: {platform}-{username}{service_pattern}{date}
+            # Service pattern includes the leading dash
+            pattern = re.compile(
+                r"^" + re.escape(platform) + r"-[^-]+" + service_pattern
+            )
+            return bool(pattern.match(filename))
+
+        return True
 
     return bool(MEMORIA_FILENAME_PATTERN.match(filename))
 
 
-def get_filename_prefix(filename: str) -> Optional[str]:
-    """Extract the Memoria prefix from a filename.
+def get_filename_filter_key(filename: str) -> Optional[str]:
+    """Determine which filter key a filename matches.
+
+    Finds the most specific matching filter key for categorization.
 
     Args:
         filename: Filename to check
 
     Returns:
-        The prefix if matched, None otherwise
+        The most specific matching filter key, or None if no match
     """
     match = MEMORIA_FILENAME_PATTERN.match(filename)
-    if match:
-        return match.group(1)
+    if not match:
+        return None
+
+    platform = match.group(1)
+
+    # Try to find a specific service match first
+    for key, (_desc, key_platform, service_pattern) in FILENAME_FILTERS.items():
+        if key_platform != platform:
+            continue
+        if service_pattern:
+            # Check if service pattern matches
+            pattern = re.compile(
+                r"^" + re.escape(platform) + r"-[^-]+" + service_pattern
+            )
+            if pattern.match(filename):
+                return key
+
+    # Fall back to platform-only match
+    if platform in FILENAME_FILTERS:
+        return platform
+
     return None
 
 
@@ -548,30 +620,30 @@ def run_filename_mode(client: ImmichClient, args) -> int:
 
     # Filter to Memoria assets by filename
     matching_assets = []
-    prefix_counts: dict[str, int] = {}
+    filter_counts: dict[str, int] = {}
 
     for asset in all_assets:
         filename = asset.get("originalFileName", "")
         if is_memoria_filename(filename, args.prefix):
             matching_assets.append(asset)
-            prefix = get_filename_prefix(filename)
-            if prefix:
-                prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
+            filter_key = get_filename_filter_key(filename)
+            if filter_key:
+                filter_counts[filter_key] = filter_counts.get(filter_key, 0) + 1
 
     if not matching_assets:
-        prefix_msg = f" with prefix '{args.prefix}'" if args.prefix else ""
+        prefix_msg = f" with filter '{args.prefix}'" if args.prefix else ""
         print(f"No Memoria assets found{prefix_msg}.")
         return 0
 
     # Display summary
-    prefix_msg = f" (prefix: {args.prefix})" if args.prefix else ""
+    prefix_msg = f" (filter: {args.prefix})" if args.prefix else ""
     print(f"Found {len(matching_assets)} Memoria asset(s){prefix_msg}:\n")
 
-    # Show breakdown by prefix
-    for prefix in sorted(prefix_counts.keys()):
-        count = prefix_counts[prefix]
-        description = FILENAME_PREFIXES.get(prefix, "Unknown")
-        print(f"  {prefix}- : {count} assets ({description})")
+    # Show breakdown by filter key
+    for filter_key in sorted(filter_counts.keys()):
+        count = filter_counts[filter_key]
+        description = FILENAME_FILTERS.get(filter_key, ("Unknown",))[0]
+        print(f"  {filter_key}: {count} assets ({description})")
 
     print()
 
@@ -635,21 +707,26 @@ Examples:
     python standalone/clear_immich_albums.py --by-filename --delete
 
     # Filter by prefix (filename mode)
-    python standalone/clear_immich_albums.py --by-filename --prefix gphotos --delete
+    python standalone/clear_immich_albums.py --by-filename --prefix google-photos --delete
 
     # Filter by platform (album mode)
     python standalone/clear_immich_albums.py --platform Google --delete
 
-Filename Prefixes:
-    gphotos-         Google Photos
-    gchat-           Google Chat
-    gvoice-          Google Voice
-    discord-         Discord
-    insta-           Instagram Public Media
-    insta-messages-  Instagram Messages
-    snap-memories-   Snapchat Memories
-    snap-messages-   Snapchat Messages
-    imessage-        iMessage
+Filename format: {platform}-{username}[-{service}]-{YYYYMMDD}[_seq].ext
+
+Filter keys for --prefix:
+    google           Google (all services)
+    google-photos    Google Photos
+    google-chat      Google Chat
+    google-voice     Google Voice
+    discord          Discord
+    insta            Instagram (all services)
+    insta-public     Instagram Public Media (posts, reels, stories, etc.)
+    insta-msgs       Instagram Messages
+    snap             Snapchat (all services)
+    snap-memories    Snapchat Memories
+    snap-msgs        Snapchat Messages
+    imessage         iMessage
 
 Environment Variables:
     IMMICH_INSTANCE_URL    Immich server URL
@@ -685,8 +762,8 @@ Environment Variables:
     )
     parser.add_argument(
         "--prefix",
-        choices=sorted(FILENAME_PREFIXES.keys()),
-        help="Filter by filename prefix (filename mode only)",
+        choices=sorted(FILENAME_FILTERS.keys()),
+        help="Filter by filename pattern (filename mode only)",
     )
 
     # Actions

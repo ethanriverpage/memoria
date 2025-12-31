@@ -24,7 +24,7 @@ from collections import defaultdict
 # Add parent directory to path for imports when running standalone
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from common.output.logging import setup_logging
+from common.output.logging import setup_logging, get_logs_dir
 from common.utils import ALL_MEDIA_EXTENSIONS
 
 # Try to import tqdm for progress bars
@@ -686,7 +686,7 @@ Examples:
     parser.add_argument("dir2", type=Path, help="Second export directory")
 
     # Create logs directory for default log file
-    logs_dir = Path("logs")
+    logs_dir = get_logs_dir()
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     parser.add_argument(

@@ -218,7 +218,7 @@ def add_export_log_handler(
 
     # Create log filename with export name and timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = logs_dir / f"log-{export_name}-{timestamp}.log"
+    log_file = logs_dir / f"{export_name}_{timestamp}.memoria.log"
 
     # Create file handler for this export
     file_handler = StreamingFileHandler(log_file, mode="a", encoding="utf-8")

@@ -73,11 +73,11 @@ IMMICH_INSTANCE_URL=https://your-immich-server.com
 IMMICH_API_KEY=your_api_key_here
 IMMICH_UPLOAD_CONCURRENCY=4
 
-# Optional: Custom temp directory
-TEMP_DIR=../pre
+# Optional: Custom preprocessing directory
+PREPROCESSING_DIR=../pre
 
-# Optional: Keep temp files for debugging
-DISABLE_TEMP_CLEANUP=false
+# Optional: Keep preprocessing output for debugging
+DISABLE_PREPROCESSING_CLEANUP=false
 ```
 
 ## Code Style and Standards

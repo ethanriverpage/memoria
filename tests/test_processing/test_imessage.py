@@ -218,6 +218,7 @@ class TestIMessageLivePhotoPairing:
     Verifies that:
     1. Live photo pairs (image + MOV sidecar) get matching base filenames
     2. Collision prevention works when regular files share timestamps with live photos
+    3. Pairing uses stable live_photo_pair_keys (not DB IDs)
     """
 
     def test_live_photo_pair_same_base_filename(self, tmp_path):
@@ -232,32 +233,32 @@ class TestIMessageLivePhotoPairing:
         )
 
         # Simulate metadata from preprocessing:
-        # - Image with attachment_id=1
-        # - Video with is_live_photo_video=True, live_photo_image_id=1
+        # - Image with live_photo_pair_keys
+        # - Video with is_live_photo_video=True and same live_photo_pair_keys
+        pair_key = "/path/to/attachments/lp/00/LIVEPHOTO-UUID"
         filename_index = {
             "lp_image.HEIC": {
-                "attachment_id": "1",
+                "live_photo_pair_keys": [pair_key],
                 "created": "2023-05-26 12:00:00 UTC",
             },
             "lp_image.MOV": {
                 "is_live_photo_video": True,
-                "live_photo_image_id": "1",
+                "live_photo_pair_keys": [pair_key],
                 "created": "2023-05-26 12:00:00 UTC",
             },
         }
 
-        # Build live photo pairing map
-        live_photo_videos_by_image = {}
+        # Build live photo pairing map (key -> set of video filenames)
+        live_photo_videos_by_key: dict[str, set[str]] = {}
         for media_filename, message in filename_index.items():
             if message.get("is_live_photo_video"):
-                image_id = message.get("live_photo_image_id")
-                if image_id:
-                    if image_id not in live_photo_videos_by_image:
-                        live_photo_videos_by_image[image_id] = set()
-                    live_photo_videos_by_image[image_id].add(media_filename)
+                for pk in message.get("live_photo_pair_keys", []):
+                    if pk not in live_photo_videos_by_key:
+                        live_photo_videos_by_key[pk] = set()
+                    live_photo_videos_by_key[pk].add(media_filename)
 
         # Two-pass filename generation
-        live_photo_bases = {}
+        live_photo_bases_by_key: dict[str, str] = {}
         results = {}
 
         # Pass A: non-live-video items
@@ -270,10 +271,13 @@ class TestIMessageLivePhotoPairing:
             output_filename = filename_gen.generate(canonical_ts, file_ext)
 
             # Store base and reserve .mov for paired video
-            attachment_id = message.get("attachment_id")
-            if attachment_id and attachment_id in live_photo_videos_by_image:
+            pair_keys = message.get("live_photo_pair_keys", [])
+            has_video_pair = any(pk in live_photo_videos_by_key for pk in pair_keys)
+            if has_video_pair:
                 base = output_filename[: -len(file_ext)]
-                live_photo_bases[attachment_id] = base
+                for pk in pair_keys:
+                    if pk in live_photo_videos_by_key:
+                        live_photo_bases_by_key[pk] = base
                 filename_gen.used_filenames.add(f"{base}.mov")
 
             results[media_filename] = output_filename
@@ -284,11 +288,15 @@ class TestIMessageLivePhotoPairing:
                 continue
 
             file_ext = ".mov"
-            image_id = message.get("live_photo_image_id")
+            pair_keys = message.get("live_photo_pair_keys", [])
+            matched_base = None
+            for pk in pair_keys:
+                if pk in live_photo_bases_by_key:
+                    matched_base = live_photo_bases_by_key[pk]
+                    break
 
-            if image_id and image_id in live_photo_bases:
-                base = live_photo_bases[image_id]
-                output_filename = f"{base}{file_ext}"
+            if matched_base:
+                output_filename = f"{matched_base}{file_ext}"
                 filename_gen.used_filenames.add(output_filename)
             else:
                 output_filename = filename_gen.generate(
@@ -318,18 +326,19 @@ class TestIMessageLivePhotoPairing:
         )
 
         # Same timestamp for all three files:
-        # - Live photo image (attachment_id=1)
-        # - Live photo video (linked to attachment_id=1)
-        # - Regular video (not a live photo)
+        # - Live photo image (with pair key)
+        # - Live photo video (with same pair key)
+        # - Regular video (not a live photo, no pair keys)
         timestamp = "2023-05-26 12:00:00 UTC"
+        pair_key = "/path/to/attachments/lp/00/LIVEPHOTO-UUID"
         filename_index = {
             "lp_image.HEIC": {
-                "attachment_id": "1",
+                "live_photo_pair_keys": [pair_key],
                 "created": timestamp,
             },
             "lp_image.MOV": {
                 "is_live_photo_video": True,
-                "live_photo_image_id": "1",
+                "live_photo_pair_keys": [pair_key],
                 "created": timestamp,
             },
             "regular_video.MOV": {
@@ -338,17 +347,16 @@ class TestIMessageLivePhotoPairing:
         }
 
         # Build live photo pairing map
-        live_photo_videos_by_image = {}
+        live_photo_videos_by_key: dict[str, set[str]] = {}
         for media_filename, message in filename_index.items():
             if message.get("is_live_photo_video"):
-                image_id = message.get("live_photo_image_id")
-                if image_id:
-                    if image_id not in live_photo_videos_by_image:
-                        live_photo_videos_by_image[image_id] = set()
-                    live_photo_videos_by_image[image_id].add(media_filename)
+                for pk in message.get("live_photo_pair_keys", []):
+                    if pk not in live_photo_videos_by_key:
+                        live_photo_videos_by_key[pk] = set()
+                    live_photo_videos_by_key[pk].add(media_filename)
 
         # Two-pass filename generation
-        live_photo_bases = {}
+        live_photo_bases_by_key: dict[str, str] = {}
         results = {}
 
         # Pass A: non-live-video items (including regular video)
@@ -361,10 +369,13 @@ class TestIMessageLivePhotoPairing:
             output_filename = filename_gen.generate(canonical_ts, file_ext)
 
             # Store base and reserve .mov for paired live photo video
-            attachment_id = message.get("attachment_id")
-            if attachment_id and attachment_id in live_photo_videos_by_image:
+            pair_keys = message.get("live_photo_pair_keys", [])
+            has_video_pair = any(pk in live_photo_videos_by_key for pk in pair_keys)
+            if has_video_pair:
                 base = output_filename[: -len(file_ext)]
-                live_photo_bases[attachment_id] = base
+                for pk in pair_keys:
+                    if pk in live_photo_videos_by_key:
+                        live_photo_bases_by_key[pk] = base
                 filename_gen.used_filenames.add(f"{base}.mov")
 
             results[media_filename] = output_filename
@@ -375,11 +386,15 @@ class TestIMessageLivePhotoPairing:
                 continue
 
             file_ext = ".mov"
-            image_id = message.get("live_photo_image_id")
+            pair_keys = message.get("live_photo_pair_keys", [])
+            matched_base = None
+            for pk in pair_keys:
+                if pk in live_photo_bases_by_key:
+                    matched_base = live_photo_bases_by_key[pk]
+                    break
 
-            if image_id and image_id in live_photo_bases:
-                base = live_photo_bases[image_id]
-                output_filename = f"{base}{file_ext}"
+            if matched_base:
+                output_filename = f"{matched_base}{file_ext}"
                 filename_gen.used_filenames.add(output_filename)
             else:
                 output_filename = filename_gen.generate(
@@ -416,17 +431,17 @@ class TestIMessageLivePhotoPairing:
             timestamp_format="%Y-%m-%d %H:%M:%S UTC",
         )
 
-        # Video claims to be live photo but references non-existent image
+        # Video claims to be live photo but references non-existent pair key
         filename_index = {
             "orphan_video.MOV": {
                 "is_live_photo_video": True,
-                "live_photo_image_id": "999",  # No matching image
+                "live_photo_pair_keys": ["/nonexistent/path"],  # No matching image
                 "created": "2023-05-26 12:00:00 UTC",
             },
         }
 
-        # No images, so live_photo_videos_by_image won't find any matches
-        live_photo_bases = {}
+        # No images, so live_photo_bases_by_key will be empty
+        live_photo_bases_by_key: dict[str, str] = {}
         results = {}
 
         # Pass A: no non-live-video items
@@ -436,11 +451,15 @@ class TestIMessageLivePhotoPairing:
                 continue
 
             file_ext = ".mov"
-            image_id = message.get("live_photo_image_id")
+            pair_keys = message.get("live_photo_pair_keys", [])
+            matched_base = None
+            for pk in pair_keys:
+                if pk in live_photo_bases_by_key:
+                    matched_base = live_photo_bases_by_key[pk]
+                    break
 
-            if image_id and image_id in live_photo_bases:
-                base = live_photo_bases[image_id]
-                output_filename = f"{base}{file_ext}"
+            if matched_base:
+                output_filename = f"{matched_base}{file_ext}"
             else:
                 # Fallback: generate independent name
                 output_filename = filename_gen.generate(
@@ -839,3 +858,79 @@ class TestIMessageRealisticFixtures:
         assert "FN:John Doe" in vcf_content
         assert "TEL" in vcf_content
         assert "+14045551234" in vcf_content
+
+
+class TestIMessageLivePhotoPairingPreprocessing:
+    """Regression tests for Live Photo pairing via preprocessing.
+
+    These tests verify that:
+    1. Preprocessing emits live_photo_pair_keys for both still and MOV
+    2. The pair keys match so the processor can pair them at runtime
+    """
+
+    def test_preprocessing_emits_live_photo_pair_keys(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
+        """Preprocessing should emit live_photo_pair_keys for Live Photo pairs."""
+        import json
+        from tests.fixtures.export_tree import copy_export_fixture
+        from processors.imessage.preprocess import IMessagePreprocessor
+
+        # Copy the live photo fixture
+        copy_export_fixture("imessage", "live_photo_lp_image_pair", temp_export_dir)
+
+        # Rename directory to match expected pattern for username detection
+        import shutil
+        renamed_dir = temp_export_dir.parent / "imessage-testdev-20251230"
+        if renamed_dir.exists():
+            shutil.rmtree(renamed_dir)
+        shutil.move(str(temp_export_dir), str(renamed_dir))
+
+        # Run preprocessing
+        preprocessor = IMessagePreprocessor(
+            export_paths=[renamed_dir],
+            output_dir=temp_output_dir,
+        )
+        success = preprocessor.run()
+        assert success, "Preprocessing should succeed"
+
+        # Load generated metadata.json
+        metadata_file = temp_output_dir / "metadata.json"
+        assert metadata_file.exists(), "metadata.json should be created"
+
+        with open(metadata_file, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+
+        # Find still and MOV entries by source_paths
+        conversations = metadata.get("conversations", {})
+        still_entry = None
+        mov_entry = None
+
+        for conv_id, conv in conversations.items():
+            for msg in conv.get("messages", []):
+                source_paths = msg.get("source_paths", {})
+                for filename, path in source_paths.items():
+                    if "lp_image.HEIC" in path:
+                        still_entry = msg
+                    elif "lp_image.MOV" in path:
+                        mov_entry = msg
+
+        assert still_entry is not None, "Should find still image entry"
+        assert mov_entry is not None, "Should find MOV video entry"
+
+        # Verify both have live_photo_pair_keys
+        still_keys = still_entry.get("live_photo_pair_keys", [])
+        mov_keys = mov_entry.get("live_photo_pair_keys", [])
+
+        assert len(still_keys) > 0, "Still image should have live_photo_pair_keys"
+        assert len(mov_keys) > 0, "MOV video should have live_photo_pair_keys"
+
+        # Verify the keys have non-empty intersection (they should match)
+        assert set(still_keys) & set(mov_keys), (
+            f"Pair keys should overlap: still={still_keys}, mov={mov_keys}"
+        )
+
+        # Verify MOV is marked as live photo video
+        assert mov_entry.get("is_live_photo_video") is True, (
+            "MOV should be marked as is_live_photo_video=True"
+        )

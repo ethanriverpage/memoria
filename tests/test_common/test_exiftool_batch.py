@@ -389,6 +389,37 @@ class TestDatetimeAndGPS:
         assert "-GPSLongitude=-122.4194" in argfile_content[0]
 
 
+class TestUnsupportedFormatsSkipped:
+    """Test that ExifTool-unsupported write formats are skipped (not failed)."""
+
+    def test_mp3_is_skipped_without_invoking_exiftool(self, tmp_path: Path) -> None:
+        """MP3 files should be skipped since ExifTool cannot write metadata to them."""
+        test_file = tmp_path / "audio.mp3"
+        test_file.touch()
+
+        request = MetadataWriteRequest(
+            file_path=str(test_file),
+            arg_preamble=DEFAULT_PREAMBLE,
+            datetime_tags=[("DateTimeOriginal", "2024:01:15 14:30:00")],
+            gps=None,
+            description=DescriptionWriteSpec(default_description="Audio description"),
+            processor_name="test",
+        )
+        existing_metadata_map = {str(test_file): {}}
+
+        with patch("common.media.exiftool.subprocess.run") as mock_run:
+            outcome = batch_write_metadata_requests(
+                [request],
+                existing_metadata_map,
+                dedup_manifest=None,
+            )
+
+        mock_run.assert_not_called()
+        assert str(test_file) in outcome.skipped
+        assert str(test_file) not in outcome.successes
+        assert outcome.failures == []
+
+
 class TestMetadataWriteRequestModel:
     """Test the MetadataWriteRequest data model."""
 
@@ -466,7 +497,7 @@ class TestOriginalFilename:
     def test_original_filename_skipped_for_unsupported_formats(
         self, tmp_path: Path
     ) -> None:
-        """XMP:PreservedFileName should NOT be written for BMP and WebM."""
+        """BMP/WebM should skip metadata writing entirely (ExifTool limitation)."""
         test_file = tmp_path / "test_image.bmp"
         test_file.touch()
 
@@ -481,26 +512,17 @@ class TestOriginalFilename:
         )
 
         existing_metadata_map = {str(test_file): {}}
-
-        argfile_content = []
-
-        def capture_argfile(*args, **kwargs):
-            argfile_path = args[0][2] if len(args) > 0 and len(args[0]) > 2 else None
-            if argfile_path and Path(argfile_path).exists():
-                argfile_content.append(Path(argfile_path).read_text())
-            return MagicMock(returncode=0, stdout="", stderr="")
-
-        with patch(
-            "common.media.exiftool.subprocess.run", side_effect=capture_argfile
-        ), patch("common.media.exiftool.get_media_type", return_value="image"):
-            batch_write_metadata_requests(
+        with patch("common.media.exiftool.subprocess.run") as mock_run, patch(
+            "common.media.exiftool.get_media_type", return_value="image"
+        ):
+            outcome = batch_write_metadata_requests(
                 [request],
                 existing_metadata_map,
                 dedup_manifest=None,
             )
 
-        assert len(argfile_content) == 1
-        assert "-XMP:PreservedFileName" not in argfile_content[0]
+        mock_run.assert_not_called()
+        assert str(test_file) in outcome.skipped
 
     def test_original_filename_not_written_when_none(self, tmp_path: Path) -> None:
         """XMP:PreservedFileName should not be written when original_filename is None."""
@@ -788,7 +810,7 @@ class TestBatchWriteOutcomes:
         assert len(outcome.successes) == 1
 
     def test_warning_messages_also_tracked(self, tmp_path: Path) -> None:
-        """Warning messages with file paths should also mark files as failed."""
+        """Warning messages should NOT mark files as failed (avoid false positives)."""
         good = tmp_path / "good.jpg"
         warned = tmp_path / "warned.jpg"
         good.touch()
@@ -818,12 +840,11 @@ class TestBatchWriteOutcomes:
                 dedup_manifest=None,
             )
 
-        # Warned file should be in failures
-        assert len(outcome.failures) == 1
-        assert outcome.failures[0].file_path == str(warned)
-
-        # Good file should be in successes
+        # No failures - warnings are ignored for per-file failure attribution
+        assert outcome.failures == []
+        # Both files should be considered successful
         assert str(good) in outcome.successes
+        assert str(warned) in outcome.successes
 
 
 class TestBatchReadResult:
@@ -861,15 +882,13 @@ class TestParseExiftoolFailedFiles:
         assert "Not a valid JPG" in result["/tmp/bad.jpg"]
 
     def test_parse_warning_with_file_path(self) -> None:
-        """Parse warning message with file path."""
+        """Warnings are ignored (only Error: lines are treated as failures)."""
         stderr = "Warning: Bad EXIF data - /path/to/warned.jpg"
         result = _parse_exiftool_failed_files(stderr)
-
-        assert "/path/to/warned.jpg" in result
-        assert result["/path/to/warned.jpg"] == "Bad EXIF data"
+        assert result == {}
 
     def test_parse_multiple_errors(self) -> None:
-        """Parse multiple error messages."""
+        """Parse multiple error messages (warnings ignored)."""
         stderr = (
             "Error: File not found - /path/to/missing.jpg\n"
             "Error: Not a valid JPG - /path/to/corrupt.jpg\n"
@@ -877,10 +896,10 @@ class TestParseExiftoolFailedFiles:
         )
         result = _parse_exiftool_failed_files(stderr)
 
-        assert len(result) == 3
+        assert len(result) == 2
         assert "/path/to/missing.jpg" in result
         assert "/path/to/corrupt.jpg" in result
-        assert "/path/to/warned.jpg" in result
+        assert "/path/to/warned.jpg" not in result
 
     def test_parse_empty_stderr(self) -> None:
         """Empty stderr should return empty dict."""
@@ -905,3 +924,273 @@ class TestParseExiftoolFailedFiles:
         assert "/path/to/file.jpg" in result
         assert "First error" in result["/path/to/file.jpg"]
         assert "Second error" in result["/path/to/file.jpg"]
+
+
+class TestLargeVideoFfmpegFallback:
+    """Tests for ffmpeg remux fallback when ExifTool fails on large videos."""
+
+    def test_atom_too_large_triggers_ffmpeg_fallback_success(
+        self, tmp_path: Path
+    ) -> None:
+        """ExifTool 'atom is too large' error should trigger ffmpeg fallback."""
+        large_video = tmp_path / "large_video.mp4"
+        large_video.touch()
+
+        request = MetadataWriteRequest(
+            file_path=str(large_video),
+            arg_preamble=DEFAULT_PREAMBLE,
+            datetime_tags=[("DateTimeOriginal", "2024:01:15 12:30:00")],
+            description=DescriptionWriteSpec(default_description="Test video"),
+            processor_name="test",
+        )
+
+        # First call is exiftool (fails), second is ffmpeg (succeeds)
+        call_count = [0]
+
+        def mock_subprocess_run(*args, **kwargs):
+            call_count[0] += 1
+            cmd = args[0]
+            if cmd[0] == "exiftool":
+                # ExifTool fails with large file error
+                return MagicMock(
+                    returncode=1,
+                    stdout="",
+                    stderr=f"Error: '0x6f091e88' atom is too large for rewriting (3541 MB) - {large_video}",
+                )
+            elif cmd[0] == "ffmpeg":
+                # FFmpeg succeeds - create the temp output file with content
+                # The temp file path is the last argument
+                output_path = Path(cmd[-1])
+                output_path.write_bytes(b"fake video content for test")
+                return MagicMock(returncode=0, stdout="", stderr="")
+            elif cmd[0] == "ffprobe":
+                # Return matching duration for both original and remuxed file
+                return MagicMock(returncode=0, stdout="10.5\n", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run
+        ):
+            outcome = batch_write_metadata_requests(
+                [request],
+                existing_metadata_map={str(large_video): {}},
+                dedup_manifest=None,
+            )
+
+        # File should be in successes, not failures
+        assert str(large_video) in outcome.successes
+        assert len(outcome.failures) == 0
+        # Both exiftool and ffmpeg should have been called
+        assert call_count[0] >= 2
+
+    def test_sidx_box_error_triggers_ffmpeg_fallback_success(
+        self, tmp_path: Path
+    ) -> None:
+        """ExifTool 'sidx box' error should trigger ffmpeg fallback."""
+        video = tmp_path / "video_with_sidx.mp4"
+        video.touch()
+
+        request = MetadataWriteRequest(
+            file_path=str(video),
+            arg_preamble=DEFAULT_PREAMBLE,
+            datetime_tags=[("DateTimeOriginal", "2024:01:15 12:30:00")],
+            processor_name="test",
+        )
+
+        call_count = [0]
+
+        def mock_subprocess_run(*args, **kwargs):
+            call_count[0] += 1
+            cmd = args[0]
+            if cmd[0] == "exiftool":
+                return MagicMock(
+                    returncode=1,
+                    stdout="",
+                    stderr=f"Error: Can't yet handle sidx box - {video}",
+                )
+            elif cmd[0] == "ffmpeg":
+                output_path = Path(cmd[-1])
+                output_path.write_bytes(b"fake video content for test")
+                return MagicMock(returncode=0, stdout="", stderr="")
+            elif cmd[0] == "ffprobe":
+                # Return matching duration for both original and remuxed file
+                return MagicMock(returncode=0, stdout="10.5\n", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run
+        ):
+            outcome = batch_write_metadata_requests(
+                [request],
+                existing_metadata_map={str(video): {}},
+                dedup_manifest=None,
+            )
+
+        assert str(video) in outcome.successes
+        assert len(outcome.failures) == 0
+        assert call_count[0] >= 2
+
+    def test_ffmpeg_fallback_failure_records_remux_error(
+        self, tmp_path: Path
+    ) -> None:
+        """When ffmpeg remux also fails, record the remux failure."""
+        video = tmp_path / "problem_video.mp4"
+        video.touch()
+
+        request = MetadataWriteRequest(
+            file_path=str(video),
+            arg_preamble=DEFAULT_PREAMBLE,
+            datetime_tags=[("DateTimeOriginal", "2024:01:15 12:30:00")],
+            processor_name="test",
+        )
+
+        def mock_subprocess_run(*args, **kwargs):
+            cmd = args[0]
+            if cmd[0] == "exiftool":
+                return MagicMock(
+                    returncode=1,
+                    stdout="",
+                    stderr=f"Error: atom is too large for rewriting - {video}",
+                )
+            elif cmd[0] == "ffmpeg":
+                # FFmpeg also fails
+                return MagicMock(
+                    returncode=1,
+                    stdout="",
+                    stderr="Error: codec not supported for remux",
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run
+        ):
+            outcome = batch_write_metadata_requests(
+                [request],
+                existing_metadata_map={str(video): {}},
+                dedup_manifest=None,
+            )
+
+        # File should be in failures with remux failure reason
+        assert str(video) not in outcome.successes
+        assert len(outcome.failures) == 1
+        assert "video_metadata_remux_failed" in outcome.failures[0].reason_code
+
+    def test_non_video_file_no_ffmpeg_fallback(self, tmp_path: Path) -> None:
+        """Large file errors on non-video files should not trigger ffmpeg fallback."""
+        image = tmp_path / "big_image.jpg"
+        image.touch()
+
+        request = MetadataWriteRequest(
+            file_path=str(image),
+            arg_preamble=DEFAULT_PREAMBLE,
+            processor_name="test",
+        )
+
+        call_count = [0]
+
+        def mock_subprocess_run(*args, **kwargs):
+            call_count[0] += 1
+            cmd = args[0]
+            if cmd[0] == "exiftool":
+                return MagicMock(
+                    returncode=1,
+                    stdout="",
+                    stderr=f"Error: atom is too large for rewriting - {image}",
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run
+        ):
+            outcome = batch_write_metadata_requests(
+                [request],
+                existing_metadata_map={str(image): {}},
+                dedup_manifest=None,
+            )
+
+        # Should fail without ffmpeg fallback (jpg not eligible)
+        assert str(image) not in outcome.successes
+        assert len(outcome.failures) == 1
+        # Only exiftool should have been called
+        assert call_count[0] == 1
+
+    def test_mov_file_eligible_for_ffmpeg_fallback(self, tmp_path: Path) -> None:
+        """MOV files should also be eligible for ffmpeg fallback."""
+        video = tmp_path / "large_video.mov"
+        video.touch()
+
+        request = MetadataWriteRequest(
+            file_path=str(video),
+            arg_preamble=DEFAULT_PREAMBLE,
+            datetime_tags=[("DateTimeOriginal", "2024:01:15 12:30:00")],
+            processor_name="test",
+        )
+
+        def mock_subprocess_run(*args, **kwargs):
+            cmd = args[0]
+            if cmd[0] == "exiftool":
+                return MagicMock(
+                    returncode=1,
+                    stdout="",
+                    stderr=f"Error: atom is too large for rewriting - {video}",
+                )
+            elif cmd[0] == "ffmpeg":
+                output_path = Path(cmd[-1])
+                output_path.write_bytes(b"fake video content for test")
+                return MagicMock(returncode=0, stdout="", stderr="")
+            elif cmd[0] == "ffprobe":
+                # Return matching duration for both original and remuxed file
+                return MagicMock(returncode=0, stdout="10.5\n", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run
+        ):
+            outcome = batch_write_metadata_requests(
+                [request],
+                existing_metadata_map={str(video): {}},
+                dedup_manifest=None,
+            )
+
+        assert str(video) in outcome.successes
+        assert len(outcome.failures) == 0
+
+    def test_regular_exiftool_error_no_fallback(self, tmp_path: Path) -> None:
+        """Regular ExifTool errors should not trigger ffmpeg fallback."""
+        video = tmp_path / "corrupt_video.mp4"
+        video.touch()
+
+        request = MetadataWriteRequest(
+            file_path=str(video),
+            arg_preamble=DEFAULT_PREAMBLE,
+            processor_name="test",
+        )
+
+        call_count = [0]
+
+        def mock_subprocess_run(*args, **kwargs):
+            call_count[0] += 1
+            cmd = args[0]
+            if cmd[0] == "exiftool":
+                return MagicMock(
+                    returncode=1,
+                    stdout="",
+                    stderr=f"Error: Not a valid MP4 - {video}",
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run
+        ):
+            outcome = batch_write_metadata_requests(
+                [request],
+                existing_metadata_map={str(video): {}},
+                dedup_manifest=None,
+            )
+
+        # Should fail without ffmpeg fallback (not a large file error)
+        assert str(video) not in outcome.successes
+        assert len(outcome.failures) == 1
+        assert outcome.failures[0].reason_code == "format_error"
+        # Only exiftool should have been called
+        assert call_count[0] == 1

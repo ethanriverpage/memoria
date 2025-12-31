@@ -980,20 +980,6 @@ def create_video_with_overlay(
             logger.error(f"[{video_path.name}] Pass 3 failed: {e}")
             return False
 
-        summary_bitrate = original_bitrate or video_meta.bitrate
-        logger.debug(
-            "proc=overlay video=%s rotate=%s dims=%sx%s->%sx%s bitrate=%s encoder=%s overlay=%s out=%s",
-            video_path.name,
-            video_meta.rotation or 0,
-            video_meta.width or "?",
-            video_meta.height or "?",
-            final_width,
-            final_height,
-            summary_bitrate if summary_bitrate is not None else "n/a",
-            get_encoder_name(),
-            overlay_path.name,
-            output_path.name,
-        )
         return True
 
     except OverlayProcessingError:

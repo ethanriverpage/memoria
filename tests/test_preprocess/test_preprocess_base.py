@@ -536,7 +536,7 @@ class TestTempOutputDir:
         """Should clean up directory on exit (when cleanup enabled)."""
         base_dir = tmp_path / "base"
 
-        with patch.dict(os.environ, {"DISABLE_TEMP_CLEANUP": ""}):
+        with patch.dict(os.environ, {"DISABLE_PREPROCESSING_CLEANUP": ""}):
             with ConcretePreprocessor.temp_output_dir(base_dir, "test") as temp_dir:
                 _temp_path = temp_dir  # noqa: F841 - Captured for potential debugging
 

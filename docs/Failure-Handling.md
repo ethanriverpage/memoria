@@ -203,12 +203,28 @@ These are real patterns seen in `logs/media_processor_20251227_184304.log` that 
   - If source file is missing: **soft-fail (media-level)** as a matching failure (orphaned metadata) and ensure it’s in `issues/failed-matching/metadata/`.
   - If file exists but is not a supported media type: **warning** or **soft-fail** depending on whether the file should have been filtered earlier.
 
-### D) ExifTool reports “File format error” / probe failures (“moov atom not found”)
+### D) ExifTool reports "File format error" / probe failures ("moov atom not found")
 
-- **Observed pattern**: ExifTool stderr contains “File format error”; FFprobe reports “moov atom not found”.
+- **Observed pattern**: ExifTool stderr contains "File format error"; FFprobe reports "moov atom not found".
 - **Proposed policy**:
   - If EXIF embed is required for correctness (timestamps, attribution): **soft-fail (media-level)** → `issues/failed-processing/`.
-  - If EXIF embed is optional for that format: **warning** with explicit “skipping EXIF for unsupported/corrupt file”.
+  - If EXIF embed is optional for that format: **warning** with explicit "skipping EXIF for unsupported/corrupt file".
+
+### D.1) Large video files: ExifTool cannot rewrite in-place
+
+- **Observed pattern**: ExifTool stderr contains "atom is too large for rewriting" or "Can't yet handle sidx box".
+- **Root cause**: ExifTool has inherent limitations when rewriting metadata in very large MP4/MOV containers (typically >250 MB).
+- **Policy**: **automatic ffmpeg remux fallback**.
+  - When ExifTool fails with these specific errors on MP4/MOV/M4V files, the system automatically retries metadata embedding via ffmpeg stream-copy remux.
+  - FFmpeg writes container-level metadata (`creation_time`, `comment`, `description`, `location`) without re-encoding.
+  - If ffmpeg remux succeeds: the file is treated as **success** (not moved to `issues/failed-processing/`).
+  - If ffmpeg remux also fails: **soft-fail (media-level)** with reason `video_metadata_remux_failed` → `issues/failed-processing/`.
+- **Metadata parity**: The ffmpeg fallback writes:
+  - Timestamp as `creation_time` (ISO format)
+  - Description as `comment` and `description` tags
+  - GPS as ISO 6709 `location` tag (if present)
+  - Note: `XMP:PreservedFileName` is not written via ffmpeg (ExifTool-specific XMP tag)
+- **Affected processors**: Google Photos and Discord processors now require `ffmpeg` as a dependency for this fallback.
 
 ### E) Placeholder attachments (iMessage optimized/iCloud stubs)
 
@@ -274,6 +290,7 @@ Two distinct cases appear in logs:
 - **EXIF batch outcomes** (`common/media/exiftool.py`):
   - `BatchWriteOutcome` - structured result with successes and `ExifWriteFailure` list
   - `batch_read_existing_metadata()` - returns `BatchReadResult` with `missing_files` list
+  - **FFmpeg remux fallback**: For large video files where ExifTool fails with "atom is too large" or "sidx box" errors, the module automatically retries via `_remux_video_with_metadata()` using ffmpeg stream copy
 
 - **Overlay handling** (`common/media/overlay.py`):
   - Missing overlay: logs warning, returns True with base media (no overlay)

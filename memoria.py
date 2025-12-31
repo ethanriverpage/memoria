@@ -18,6 +18,7 @@ import sys
 import os
 import threading
 import multiprocessing
+import uuid
 from pathlib import Path
 from importlib import import_module
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -36,6 +37,7 @@ from common.output.logging import (  # noqa: E402
     setup_logging,
     add_export_log_handler,
     remove_export_log_handler,
+    get_logs_dir,
 )
 from common.config.env import load_dotenv_file  # noqa: E402
 from common.dependency_checker import (  # noqa: E402
@@ -342,6 +344,7 @@ def run_phased_dedup_processing(
     args,
     temp_dir: str,
     log_file: Optional[Path] = None,
+    run_id: Optional[str] = None,
 ) -> tuple[int, int, list, list]:
     """Run phased processing with cross-processor deduplication.
 
@@ -360,13 +363,12 @@ def run_phased_dedup_processing(
         args: Command line arguments
         temp_dir: Directory for temporary files
         log_file: Optional path to log file for worker process logging
+        run_id: Unique identifier for this processing run
 
     Returns:
         Tuple of (success_count, failed_count, results_list, upload_targets)
         where upload_targets is a list of (path, album, processor_name) tuples
     """
-    import uuid
-
     config = get_dedup_config()
     phase_header("CROSS-PROCESSOR DEDUPLICATION MODE")
     logger.info("Database: %s", config.database_path)
@@ -374,10 +376,6 @@ def run_phased_dedup_processing(
         "Perceptual hashing: %s", "enabled" if config.use_perceptual else "disabled"
     )
     logger.info("Perceptual threshold: %s", config.perceptual_threshold)
-
-    # Generate unique run_id for this processing session
-    run_id = f"run_{uuid.uuid4().hex[:12]}"
-    logger.info("Run ID: %s", run_id)
 
     # Initialize database
     db = HashDatabase(config.database_path)
@@ -1357,12 +1355,12 @@ def upload_only_mode(
         logger.info("Original export (legacy detection): %s", original_export)
 
     # Create logs directory and upload log file
-    logs_dir = Path("logs")
+    logs_dir = get_logs_dir()
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_prefix = "upload_only_legacy" if original_export is not None else "upload_only"
-    log_filename = f"{log_prefix}_{upload_path.name}_{timestamp}.log"
+    log_prefix = "upload-legacy" if original_export is not None else "upload"
+    log_filename = f"{log_prefix}_{upload_path.name}_{timestamp}.memoria.log"
     log_file = logs_dir / log_filename
 
     logger.info("Upload log will be saved to: %s", log_file)
@@ -1656,17 +1654,20 @@ Examples:
     # Load .env early (CLI > env > .env precedence is enforced later when reading values)
     load_dotenv_file(args.env_file)
 
+    # Generate unique run_id for this processing session
+    run_id = f"run_{uuid.uuid4().hex[:12]}"
+
     # Configure logging
     log_file = None
     if args.verbosity:
         from datetime import datetime
 
         # Create logs directory if it doesn't exist
-        logs_dir = Path("logs")
+        logs_dir = get_logs_dir()
         logs_dir.mkdir(parents=True, exist_ok=True)
 
         log_file = (
-            logs_dir / f"media_processor_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+            logs_dir / f"{run_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.memoria.log"
         )
     # Map string log level to logging constant
     file_log_level = logging.DEBUG if args.file_log_level == "debug" else logging.INFO
@@ -1675,6 +1676,7 @@ Examples:
         log_file=str(log_file) if log_file else None,
         file_log_level=file_log_level,
     )
+    logger.info("Run ID: %s", run_id)
 
     # Initialize registry and load all processors
     registry = ProcessorRegistry()
@@ -1828,7 +1830,7 @@ Examples:
     )
 
     # Read temp_dir from environment variable
-    temp_dir = os.environ.get("TEMP_DIR", "../pre")
+    temp_dir = os.environ.get("PREPROCESSING_DIR", "../pre")
 
     # Read consolidation mode from environment variable (defaults to True)
     env_consolidate = os.environ.get("CONSOLIDATE_EXPORTS")
@@ -1905,6 +1907,7 @@ Examples:
                 args,
                 temp_dir,
                 log_file,
+                run_id,
             )
         )
 

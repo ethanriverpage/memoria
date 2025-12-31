@@ -293,9 +293,9 @@ def parse_bool_env(value: Optional[str], default: bool = False) -> bool:
     return value.lower() in ("true", "1", "yes", "on")
 
 
-def should_cleanup_temp() -> bool:
-    """Return False if DISABLE_TEMP_CLEANUP is set, True otherwise."""
-    return not parse_bool_env(os.getenv("DISABLE_TEMP_CLEANUP", ""))
+def should_cleanup_preprocessing() -> bool:
+    """Return False if DISABLE_PREPROCESSING_CLEANUP is set, True otherwise."""
+    return not parse_bool_env(os.getenv("DISABLE_PREPROCESSING_CLEANUP", ""))
 
 
 def update_file_timestamps(

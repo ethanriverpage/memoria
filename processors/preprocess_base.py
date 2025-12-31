@@ -364,8 +364,8 @@ class PreprocessorBase(ABC):
         Directories are created under `base_dir` with a unique suffix and are
         automatically cleaned up on context exit unless temp cleanup is disabled.
 
-        Cleanup behavior is controlled by `DISABLE_TEMP_CLEANUP` via
-        `common.utils.should_cleanup_temp()`.
+        Cleanup behavior is controlled by `DISABLE_PREPROCESSING_CLEANUP` via
+        `common.utils.should_cleanup_preprocessing()`.
 
         Args:
             base_dir: Base directory under which to create the temp directory.

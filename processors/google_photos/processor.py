@@ -96,6 +96,12 @@ class GooglePhotosProcessor(ProcessorBase):
         return True
 
     @staticmethod
+    def get_required_dependencies() -> List[str]:
+        # Requires ffmpeg for large video metadata fallback when ExifTool
+        # cannot rewrite in-place (e.g., "atom is too large for rewriting")
+        return ["exiftool", "ffmpeg"]
+
+    @staticmethod
     def needs_preprocessing(input_dir: str) -> bool:
         """Check if Google Photos export needs preprocessing."""
         # Google Photos can be processed directly from raw exports

@@ -395,8 +395,9 @@ Live Photos are Apple's format combining a still image (HEIC) with a short video
 ### How Memoria Handles Them
 
 1. **Detection**: Looks for `lp_image.*` files (HEIC or JPEG) with corresponding `lp_image.MOV` sidecars
-2. **Processing**: Both files are processed with linked metadata
-3. **Marking**: Video components are marked with `is_live_photo_video: true`
+2. **Pairing**: A stable pairing key (derived from the attachment directory path) links the still image and video component. This key persists through preprocessing and survives cross-export deduplication, ensuring the pair stays linked even when multiple exports are consolidated.
+3. **Processing**: Both files are processed with linked metadata. The video component reuses the still image's generated base filename.
+4. **Marking**: Video components are marked with `is_live_photo_video: true` and both components share `live_photo_pair_keys` for pairing.
 
 ### Output
 

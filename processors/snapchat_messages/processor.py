@@ -528,7 +528,13 @@ def _create_file_worker(args_tuple):
 
     Returns:
         Tuple of (success, output_path, is_mkv, message, export_username, content_hash,
-        original_filename)
+        original_filename, overlay_failure_context)
+
+        overlay_failure_context is None on success, or a dict with:
+            - error: str - the exception message
+            - source_media_path: str - original media file path
+            - overlay_source_path: str - the overlay that failed
+            - intended_mkv_path: str - what the MKV would have been
     """
     (
         media_path,
@@ -600,6 +606,7 @@ def _create_file_worker(args_tuple):
                             export_username,
                             content_hash,
                             original_filename,
+                            None,  # No overlay failure
                         )
                     else:
                         # Fallback: copy original video with original extension
@@ -616,9 +623,11 @@ def _create_file_worker(args_tuple):
                             export_username,
                             content_hash,
                             original_filename,
+                            None,  # No overlay failure (just returned False)
                         )
                 except OverlayProcessingError as e:
-                    # Overlay corrupt - soft-fail, copy base video
+                    # Overlay processing failed - copy base video as fallback
+                    # Return success with fallback path and failure context for tracking
                     logger.warning(
                         "Overlay processing failed for %s: %s - copying base video",
                         media_path.name,
@@ -628,7 +637,23 @@ def _create_file_worker(args_tuple):
                     fallback_path = output_dir / fallback_filename
                     copy_file(media_path, fallback_path)
                     _update_snapchat_timestamps(fallback_path, message)
-                    raise  # Re-raise for outer exception handler to track
+                    # Return success with fallback path and failure context
+                    overlay_failure_context = {
+                        "error": str(e),
+                        "source_media_path": str(media_path),
+                        "overlay_source_path": str(overlay_path),
+                        "intended_mkv_path": str(output_path),
+                    }
+                    return (
+                        True,
+                        str(fallback_path),
+                        False,
+                        message,
+                        export_username,
+                        content_hash,
+                        original_filename,
+                        overlay_failure_context,
+                    )
 
             elif is_image:
                 # Image with overlay - composite
@@ -646,9 +671,11 @@ def _create_file_worker(args_tuple):
                         export_username,
                         content_hash,
                         original_filename,
+                        None,  # No overlay failure
                     )
                 except OverlayProcessingError as e:
-                    # Overlay corrupt - soft-fail, copy base image
+                    # Overlay processing failed - copy base image as fallback
+                    # Return success with fallback path and failure context for tracking
                     logger.warning(
                         "Overlay processing failed for %s: %s - copying base image",
                         media_path.name,
@@ -656,7 +683,23 @@ def _create_file_worker(args_tuple):
                     )
                     copy_file(media_path, output_path)
                     _update_snapchat_timestamps(output_path, message)
-                    raise  # Re-raise for outer exception handler to track
+                    # Return success with failure context
+                    overlay_failure_context = {
+                        "error": str(e),
+                        "source_media_path": str(media_path),
+                        "overlay_source_path": str(overlay_path),
+                        "intended_output_path": str(output_path),
+                    }
+                    return (
+                        True,
+                        str(output_path),
+                        False,
+                        message,
+                        export_username,
+                        content_hash,
+                        original_filename,
+                        overlay_failure_context,
+                    )
             else:
                 # Unknown file type with overlay - just copy
                 copy_file(media_path, output_path)
@@ -669,6 +712,7 @@ def _create_file_worker(args_tuple):
                     export_username,
                     content_hash,
                     original_filename,
+                    None,  # No overlay failure
                 )
         else:
             # No overlay - just copy
@@ -683,20 +727,9 @@ def _create_file_worker(args_tuple):
                 export_username,
                 content_hash,
                 original_filename,
+                None,  # No overlay failure
             )
 
-    except OverlayProcessingError:
-        # Overlay corrupt - base file was already copied by inner handler
-        # Treat as success (file was produced) but log warning was already emitted
-        return (
-            True,
-            str(output_path),
-            False,
-            message,
-            export_username,
-            content_hash,
-            original_filename,
-        )
     except Exception as e:
         logger.error("Error processing %s: %s", media_path.name, e)
         return (
@@ -707,6 +740,7 @@ def _create_file_worker(args_tuple):
             export_username,
             content_hash,
             original_filename,
+            None,  # No overlay failure context for general errors
         )
 
 
@@ -999,8 +1033,36 @@ def _process_snapchat_working_directory(
         initargs=(log_filename, worker_app_modules),
     )
 
-    # Phase 2: Collect non-MKV files for batch EXIF processing
-    # Result tuple: (success, output_path, is_mkv, message, exp_username, content_hash, original_filename)
+    # Phase 2: Track overlay failures and collect non-MKV files for batch EXIF processing
+    # Result tuple: (success, output_path, is_mkv, message, exp_username, content_hash,
+    #                original_filename, overlay_failure_context)
+    # Track overlay failures before collecting results (fallback files still go through EXIF)
+    overlay_failure_count = 0
+    for r in results:
+        success = r[0]
+        output_path = r[1]
+        overlay_failure_context = r[7] if len(r) > 7 else None
+
+        if success and output_path and overlay_failure_context:
+            # Overlay embedding failed - track as processing failure
+            # The fallback output will still go through EXIF processing,
+            # and FailureTracker will move it to issues/failed-processing/
+            failure_tracker.add_processing_failure(
+                media_path=Path(output_path),
+                metadata=r[3],  # message
+                reason="overlay_embed_failed",
+                error_details=overlay_failure_context.get("error", "Unknown error"),
+                context={
+                    "source_media_path": overlay_failure_context.get("source_media_path"),
+                    "overlay_source_path": overlay_failure_context.get("overlay_source_path"),
+                    "intended_mkv_path": overlay_failure_context.get("intended_mkv_path"),
+                },
+            )
+            overlay_failure_count += 1
+
+    if overlay_failure_count > 0:
+        logger.info("Tracked %d overlay embedding failures", overlay_failure_count)
+
     # Skip MKV files in file_info (they already have metadata from overlay creation)
     def extract_non_mkv_info(r):
         is_mkv = r[2]

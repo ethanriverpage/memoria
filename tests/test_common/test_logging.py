@@ -233,7 +233,7 @@ class TestAddExportLogHandler:
         handler = add_export_log_handler("test-export", enabled=True)
 
         try:
-            log_files = list(tmp_path.glob("log-test-export-*.log"))
+            log_files = list(tmp_path.glob("test-export_*.memoria.log"))
             assert len(log_files) == 1
         finally:
             if handler:

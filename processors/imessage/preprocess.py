@@ -756,13 +756,20 @@ class IMessagePreprocessor(PreprocessorBase):
             ) and not transfer_name.lower().endswith(".mov"):
                 mov_path = file_path.parent / "lp_image.MOV"
                 if mov_path.exists():
+                    # Compute stable pairing key from attachment directory
+                    # This key is used at runtime to pair still + MOV even after dedup
+                    pair_key = str(file_path.parent.resolve())
+
+                    # Add pair key to the still image
+                    attachment["live_photo_pair_key"] = pair_key
+
                     # Create linked attachment entry for the MOV
                     mov_attachment = attachment.copy()
                     mov_attachment["resolved_path"] = str(mov_path)
                     mov_attachment["transfer_name"] = "lp_image.MOV"
                     mov_attachment["mime_type"] = "video/quicktime"
                     mov_attachment["is_live_photo_video"] = True
-                    mov_attachment["live_photo_image_id"] = row["attachment_id"]
+                    mov_attachment["live_photo_pair_key"] = pair_key
                     attachments.append(mov_attachment)
                     self.stats["live_photos"] += 1
 
@@ -813,6 +820,7 @@ class IMessagePreprocessor(PreprocessorBase):
                 "is_sender": att["is_sender"],
                 "mime_type": att.get("mime_type"),
                 "is_live_photo_video": att.get("is_live_photo_video", False),
+                "live_photo_pair_key": att.get("live_photo_pair_key"),
             }
 
             copy_tasks.append(
@@ -878,6 +886,14 @@ class IMessagePreprocessor(PreprocessorBase):
             mime_type = primary_context.get("mime_type") or ""
             media_type = "IMAGE" if "image" in mime_type else "VIDEO"
 
+            # Collect live_photo_pair_keys from all merged contexts (sorted unique)
+            all_pair_keys: set[str] = set()
+            for ctx in merged_contexts:
+                pair_key = ctx.get("live_photo_pair_key")
+                if pair_key:
+                    all_pair_keys.add(pair_key)
+            live_photo_pair_keys = sorted(all_pair_keys) if all_pair_keys else None
+
             # Check if this has merged duplicates
             if len(merged_contexts) > 1:
                 # Create merged message with messages array
@@ -893,6 +909,10 @@ class IMessagePreprocessor(PreprocessorBase):
                 # Add Live Photo marker if applicable
                 if primary_context.get("is_live_photo_video"):
                     merged_message["is_live_photo_video"] = True
+
+                # Add live_photo_pair_keys if present
+                if live_photo_pair_keys:
+                    merged_message["live_photo_pair_keys"] = live_photo_pair_keys
 
                 # Add all occurrences to messages array
                 for ctx in merged_contexts:
@@ -931,6 +951,10 @@ class IMessagePreprocessor(PreprocessorBase):
                 # Add Live Photo marker if applicable
                 if primary_context.get("is_live_photo_video"):
                     message["is_live_photo_video"] = True
+
+                # Add live_photo_pair_keys if present
+                if live_photo_pair_keys:
+                    message["live_photo_pair_keys"] = live_photo_pair_keys
 
                 conversations[primary_conv_id]["messages"].append(message)
                 conversations[primary_conv_id]["message_count"] += 1

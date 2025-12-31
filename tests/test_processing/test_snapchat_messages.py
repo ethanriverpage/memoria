@@ -6,291 +6,54 @@ Tests cover edge cases including:
 - Orphaned media (no metadata match)
 - Ambiguous overlay matching (multiple videos/overlays same timestamp)
 - Overlay timestamp matching
+- Overlay embedding failure handling
 """
 
 import json
+from unittest.mock import patch
 
-
-from tests.fixtures.generators import create_snapchat_messages_export
+from tests.fixtures.export_tree import copy_export_fixture
 from tests.fixtures.media_samples import write_media_file
 
 
-class TestSnapchatMessagesMatching:
-    """Tests for media-to-conversation matching in Snapchat Messages."""
+class TestSnapchatMessagesPreprocessing:
+    """Tests that run the preprocessor and verify output."""
 
-    def test_media_matched_to_conversation(
+    def test_raw_format_preprocessing(
         self, snapchat_messages_processor, temp_export_dir, temp_output_dir
     ):
-        """Should match media file to conversation via metadata."""
-        create_snapchat_messages_export(
-            temp_export_dir,
-            conversations={
-                "other_user": {
-                    "title": "Other User",
-                    "type": "dm",
-                    "messages": [
-                        {
-                            "created": "2021-01-01 12:00:00 UTC",
-                            "sender": "Other User",
-                            "media_id": "b~abc123",
-                            "media_file": "2021-01-01_b~abc123.jpg",
-                        }
-                    ],
-                }
-            },
-            raw_format=False,
+        """Should preprocess raw Snapchat Messages export."""
+        from processors.snapchat_messages.preprocess import SnapchatMessagesPreprocessor
+
+        copy_export_fixture(
+            "snapchat_messages", "raw_conversation_id_map", temp_export_dir
         )
 
-        assert (temp_export_dir / "media" / "2021-01-01_b~abc123.jpg").exists()
-
-        metadata = json.loads((temp_export_dir / "metadata.json").read_text())
-        assert "other_user" in metadata["conversations"]
-
-    def test_orphaned_media(
-        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should handle orphaned media (no matching metadata)."""
-        media_dir = temp_export_dir / "media"
-        overlays_dir = temp_export_dir / "overlays"
-        media_dir.mkdir(parents=True)
-        overlays_dir.mkdir(parents=True)
-
-        # Create media file without matching metadata
-        write_media_file(media_dir / "orphaned_photo.jpg", "jpeg")
-
-        metadata = {
-            "export_info": {"export_username": "testuser"},
-            "conversations": {},
-            "unmatched_media": [
-                {
-                    "media_files": ["orphaned_photo.jpg"],
-                    "source_paths": {"orphaned_photo.jpg": str(media_dir / "orphaned_photo.jpg")},
-                    "created": "2021-01-01 12:00:00 UTC",
-                }
-            ],
-            "file_hashes": {},
-        }
-        (temp_export_dir / "metadata.json").write_text(json.dumps(metadata))
-
-        assert (media_dir / "orphaned_photo.jpg").exists()
-
-
-class TestSnapchatMessagesOverlays:
-    """Tests for overlay matching in Snapchat Messages."""
-
-    def test_media_with_overlay(
-        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should match media with corresponding overlay."""
-        media_dir = temp_export_dir / "media"
-        overlays_dir = temp_export_dir / "overlays"
-        media_dir.mkdir(parents=True)
-        overlays_dir.mkdir(parents=True)
-
-        write_media_file(media_dir / "2021-01-01_b~abc123.jpg", "jpeg")
-        write_media_file(overlays_dir / "2021-01-01_b~abc123_overlay.png", "png")
-
-        metadata = {
-            "export_info": {"export_username": "testuser"},
-            "conversations": {
-                "other_user": {
-                    "title": "Other User",
-                    "type": "dm",
-                    "messages": [
-                        {
-                            "created": "2021-01-01 12:00:00 UTC",
-                            "sender": "Other User",
-                            "media_id": "b~abc123",
-                            "media_files": ["2021-01-01_b~abc123.jpg"],
-                            "source_paths": {"2021-01-01_b~abc123.jpg": str(media_dir / "2021-01-01_b~abc123.jpg")},
-                            "overlay_file": "2021-01-01_b~abc123_overlay.png",
-                        }
-                    ],
-                }
-            },
-            "unmatched_media": [],
-            "file_hashes": {},
-        }
-        (temp_export_dir / "metadata.json").write_text(json.dumps(metadata))
-
-        assert (media_dir / "2021-01-01_b~abc123.jpg").exists()
-        assert (overlays_dir / "2021-01-01_b~abc123_overlay.png").exists()
-
-    def test_timestamp_based_overlay_matching(
-        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should match overlays based on timestamp when media_id matching fails."""
-        media_dir = temp_export_dir / "media"
-        overlays_dir = temp_export_dir / "overlays"
-        media_dir.mkdir(parents=True)
-        overlays_dir.mkdir(parents=True)
-
-        # Files with matching timestamps but different naming
-        write_media_file(media_dir / "2021-01-01_video.mp4", "mp4")
-        write_media_file(overlays_dir / "2021-01-01_overlay.png", "png")
-
-        metadata = {
-            "export_info": {"export_username": "testuser"},
-            "conversations": {},
-            "unmatched_media": [],
-            "file_hashes": {},
-        }
-        (temp_export_dir / "metadata.json").write_text(json.dumps(metadata))
-
-        assert (media_dir / "2021-01-01_video.mp4").exists()
-        assert (overlays_dir / "2021-01-01_overlay.png").exists()
-
-
-class TestSnapchatMessagesAmbiguousCases:
-    """Tests for ambiguous matching scenarios."""
-
-    def test_multiple_videos_same_timestamp(
-        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should handle multiple videos with same timestamp."""
-        media_dir = temp_export_dir / "media"
-        overlays_dir = temp_export_dir / "overlays"
-        media_dir.mkdir(parents=True)
-        overlays_dir.mkdir(parents=True)
-
-        # Multiple videos with same date prefix
-        write_media_file(media_dir / "2021-01-01_b~abc123.mp4", "mp4")
-        write_media_file(media_dir / "2021-01-01_b~def456.mp4", "mp4")
-
-        # Multiple overlays with same date prefix
-        write_media_file(overlays_dir / "2021-01-01_overlay1.png", "png")
-        write_media_file(overlays_dir / "2021-01-01_overlay2.png", "png")
-
-        metadata = {
-            "export_info": {"export_username": "testuser"},
-            "conversations": {},
-            "unmatched_media": [],
-            "file_hashes": {},
-        }
-        (temp_export_dir / "metadata.json").write_text(json.dumps(metadata))
-
-        # Both videos should exist
-        assert (media_dir / "2021-01-01_b~abc123.mp4").exists()
-        assert (media_dir / "2021-01-01_b~def456.mp4").exists()
-
-
-class TestSnapchatMessagesRawFormat:
-    """Tests for raw export format processing."""
-
-    def test_raw_export_structure(
-        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should process raw export with json/ directory."""
-        create_snapchat_messages_export(temp_export_dir, raw_format=True)
-
-        json_dir = temp_export_dir / "json"
-        assert (json_dir / "chat_history.json").exists()
-        assert (json_dir / "snap_history.json").exists()
-
-    def test_chat_history_structure(
-        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should parse chat history with received and sent sections."""
-        create_snapchat_messages_export(temp_export_dir, raw_format=True)
-
-        chat_history = json.loads(
-            (temp_export_dir / "json" / "chat_history.json").read_text()
+        preprocessor = SnapchatMessagesPreprocessor(
+            export_path=temp_export_dir,
+            output_dir=temp_output_dir,
         )
-        assert "Received Saved Chat History" in chat_history
-        assert "Sent Saved Chat History" in chat_history
+        result = preprocessor.run()
+        assert result is True, "Preprocessing should succeed"
 
-    def test_snap_history_structure(
-        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should parse snap history with received and sent sections."""
-        create_snapchat_messages_export(temp_export_dir, raw_format=True)
+        # Verify metadata.json was created
+        metadata_file = temp_output_dir / "metadata.json"
+        assert metadata_file.exists(), "metadata.json should be created"
 
-        snap_history = json.loads(
-            (temp_export_dir / "json" / "snap_history.json").read_text()
-        )
-        assert "Received Snap History" in snap_history
+        with open(metadata_file) as f:
+            output_metadata = json.load(f)
 
-
-class TestSnapchatMessagesConsolidated:
-    """Tests for consolidated export structure."""
-
-    def test_consolidated_messages_structure(
-        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should handle consolidated export with messages/ subdirectory."""
-        messages_dir = temp_export_dir / "messages"
-        create_snapchat_messages_export(messages_dir, raw_format=True)
-
-        # Verify structure is within messages/ subdirectory
-        assert (messages_dir / "json" / "chat_history.json").exists()
-        assert (messages_dir / "json" / "snap_history.json").exists()
+        assert "export_info" in output_metadata
+        assert output_metadata["export_info"]["platform"] == "Snapchat"
 
 
-class TestSnapchatMessagesConversationTypes:
-    """Tests for different conversation types."""
-
-    def test_dm_conversation(
-        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should process DM conversations."""
-        create_snapchat_messages_export(
-            temp_export_dir,
-            conversations={
-                "user1": {
-                    "title": "User One",
-                    "type": "dm",
-                    "messages": [
-                        {
-                            "created": "2021-01-01 12:00:00 UTC",
-                            "sender": "User One",
-                            "media_id": "b~abc123",
-                            "media_file": "2021-01-01_b~abc123.jpg",
-                        }
-                    ],
-                }
-            },
-            raw_format=False,
-        )
-
-        metadata = json.loads((temp_export_dir / "metadata.json").read_text())
-        assert metadata["conversations"]["user1"]["type"] == "dm"
-
-    def test_group_conversation(
-        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should process group conversations."""
-        create_snapchat_messages_export(
-            temp_export_dir,
-            conversations={
-                "group_abc": {
-                    "title": "Friend Group",
-                    "type": "group",
-                    "messages": [
-                        {
-                            "created": "2021-01-01 12:00:00 UTC",
-                            "sender": "Friend One",
-                            "media_id": "b~xyz789",
-                            "media_file": "2021-01-01_b~xyz789.jpg",
-                        }
-                    ],
-                }
-            },
-            raw_format=False,
-        )
-
-        metadata = json.loads((temp_export_dir / "metadata.json").read_text())
-        assert metadata["conversations"]["group_abc"]["type"] == "group"
-
-
-class TestSnapchatMessagesRealisticFixtures:
-    """Processing tests using committed schema-faithful Snapchat Messages fixtures."""
+class TestSnapchatMessagesFixtureStructure:
+    """Tests that verify schema-faithful fixture structures match docs."""
 
     def test_raw_conversation_id_map_structure(
         self, snapchat_messages_processor, temp_export_dir, temp_output_dir
     ):
         """Should correctly parse conversation-ID-keyed chat_history.json."""
-        from tests.fixtures.export_tree import copy_export_fixture
-
         copy_export_fixture(
             "snapchat_messages", "raw_conversation_id_map", temp_export_dir
         )
@@ -317,8 +80,6 @@ class TestSnapchatMessagesRealisticFixtures:
         self, snapchat_messages_processor, temp_export_dir, temp_output_dir
     ):
         """Should correctly parse pipe-separated Media IDs."""
-        from tests.fixtures.export_tree import copy_export_fixture
-
         copy_export_fixture(
             "snapchat_messages", "raw_media_ids_pipe_separated", temp_export_dir
         )
@@ -339,9 +100,6 @@ class TestSnapchatMessagesRealisticFixtures:
         self, snapchat_messages_processor, temp_export_dir, temp_output_dir
     ):
         """Should have multiple videos and overlays with same timestamps."""
-        from tests.fixtures.export_tree import copy_export_fixture
-        import os
-
         copy_export_fixture(
             "snapchat_messages", "overlay_ambiguous_mtime", temp_export_dir
         )
@@ -355,15 +113,10 @@ class TestSnapchatMessagesRealisticFixtures:
         assert len(videos) == 2
         assert len(overlays) == 2
 
-        # Note: mtime ambiguity is set up in the fixture
-        # Tests can verify the scenario exists for needs_matching logic
-
     def test_snap_history_format(
         self, snapchat_messages_processor, temp_export_dir, temp_output_dir
     ):
         """Should correctly parse snap_history.json with simplified schema."""
-        from tests.fixtures.export_tree import copy_export_fixture
-
         copy_export_fixture(
             "snapchat_messages", "raw_conversation_id_map", temp_export_dir
         )
@@ -378,3 +131,187 @@ class TestSnapchatMessagesRealisticFixtures:
         # No Media IDs or Content in snap_history
         assert "Media IDs" not in snap_msg
         assert "Content" not in snap_msg
+
+
+class TestSnapchatMessagesOverlays:
+    """Tests for overlay matching in Snapchat Messages."""
+
+    def test_media_with_overlay_in_fixture(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should have overlay files alongside media in fixtures."""
+        copy_export_fixture(
+            "snapchat_messages", "overlay_ambiguous_mtime", temp_export_dir
+        )
+
+        chat_media = temp_export_dir / "messages" / "chat_media"
+
+        # Verify overlay files exist
+        overlays = list(chat_media.glob("*_overlay~*.png"))
+        assert len(overlays) > 0, "Should have overlay files"
+
+
+class TestSnapchatMessagesMatching:
+    """Tests for media-to-conversation matching."""
+
+    def test_orphaned_media_structure(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should handle orphaned media (no matching metadata)."""
+        media_dir = temp_export_dir / "media"
+        overlays_dir = temp_export_dir / "overlays"
+        media_dir.mkdir(parents=True)
+        overlays_dir.mkdir(parents=True)
+
+        # Create media file without matching metadata
+        write_media_file(media_dir / "orphaned_photo.jpg", "jpeg")
+
+        metadata = {
+            "export_info": {
+                "export_path": str(temp_export_dir),
+                "export_username": "testuser",
+                "processed_date": "2021-01-01T12:00:00",
+            },
+            "conversations": {},
+            "unmatched_media": [
+                {
+                    "media_files": ["orphaned_photo.jpg"],
+                    "source_paths": {
+                        "orphaned_photo.jpg": str(media_dir / "orphaned_photo.jpg")
+                    },
+                    "created": "2021-01-01 12:00:00 UTC",
+                }
+            ],
+            "file_hashes": {},
+        }
+        (temp_export_dir / "metadata.json").write_text(json.dumps(metadata))
+
+        assert (media_dir / "orphaned_photo.jpg").exists()
+
+
+class TestSnapchatMessagesOverlayFailure:
+    """Tests for overlay embedding failure handling.
+
+    Regression tests for the bug where overlay failures were misreported as
+    'exif_target_missing' for non-existent .mkv files.
+    """
+
+    def test_overlay_failure_produces_fallback_and_tracks_correctly(
+        self, snapchat_messages_processor, temp_export_dir, temp_output_dir
+    ):
+        """When overlay embedding fails, should produce fallback .mp4 and track as overlay_embed_failed.
+
+        This is a regression test for:
+        - Bug: OverlayProcessingError was returning wrong path (.mkv instead of fallback .mp4)
+        - Result: EXIF batch reported 'exif_target_missing' for non-existent .mkv files
+        - Fix: Worker now returns fallback path and failure context; tracked as overlay_embed_failed
+        """
+        from common.media.overlay import OverlayProcessingError
+
+        # Create preprocessed export with a video that has an overlay
+        media_dir = temp_export_dir / "media"
+        overlays_dir = temp_export_dir / "overlays"
+        media_dir.mkdir(parents=True)
+        overlays_dir.mkdir(parents=True)
+
+        # Create media and overlay files
+        write_media_file(media_dir / "2021-01-01_b~abc123.mp4", "mp4")
+        write_media_file(overlays_dir / "2021-01-01_overlay.png", "png")
+
+        # Build a valid preprocessed metadata.json
+        metadata = {
+            "export_info": {
+                "export_path": str(temp_export_dir),
+                "export_username": "testuser",
+                "processed_date": "2021-01-01T12:00:00",
+            },
+            "conversations": {
+                "other_user": {
+                    "title": "Other User",
+                    "type": "dm",
+                    "messages": [
+                        {
+                            "created": "2021-01-01 12:00:00 UTC",
+                            "sender": "Other User",
+                            "media_id": "b~abc123",
+                            "media_files": ["2021-01-01_b~abc123.mp4"],
+                            "source_paths": {
+                                "2021-01-01_b~abc123.mp4": str(
+                                    media_dir / "2021-01-01_b~abc123.mp4"
+                                )
+                            },
+                            "overlay_file": "2021-01-01_overlay.png",
+                            "overlay_source_path": str(
+                                overlays_dir / "2021-01-01_overlay.png"
+                            ),
+                        }
+                    ],
+                }
+            },
+            "unmatched_media": [],
+            "file_hashes": {"2021-01-01_b~abc123.mp4": "abc123hash"},
+        }
+        (temp_export_dir / "metadata.json").write_text(json.dumps(metadata))
+
+        # Mock create_video_with_overlay to raise OverlayProcessingError
+        with patch(
+            "processors.snapchat_messages.processor.create_video_with_overlay"
+        ) as mock_overlay:
+            mock_overlay.side_effect = OverlayProcessingError(
+                "FFmpeg overlay embedding failed: test error"
+            )
+
+            # Run the processor
+            result = snapchat_messages_processor.process(
+                input_dir=str(temp_export_dir),
+                output_dir=str(temp_output_dir),
+            )
+
+        assert result is True, "Processor should succeed even with overlay failures"
+
+        # Check that a fallback .mp4 was produced (not .mkv)
+        messages_dir = temp_output_dir / "messages"
+        mp4_files = list(messages_dir.glob("*.mp4")) + list(
+            (messages_dir / "issues" / "failed-processing").glob("*.mp4")
+            if (messages_dir / "issues" / "failed-processing").exists()
+            else []
+        )
+        mkv_files = list(messages_dir.glob("*.mkv"))
+
+        # There should be no .mkv files (overlay failed)
+        assert len(mkv_files) == 0, f"Should have no MKV files, found: {mkv_files}"
+
+        # Check failure report exists and contains overlay_embed_failed
+        failure_report_path = messages_dir / "issues" / "failure-report.json"
+        assert failure_report_path.exists(), "Failure report should exist"
+
+        failure_report = json.loads(failure_report_path.read_text())
+
+        # Check for overlay_embed_failed entries
+        processing_failures = failure_report.get("failed_processing", [])
+        overlay_failures = [
+            f for f in processing_failures if f.get("reason") == "overlay_embed_failed"
+        ]
+        assert (
+            len(overlay_failures) == 1
+        ), f"Should have 1 overlay_embed_failed, found: {processing_failures}"
+
+        # Verify there are NO exif_target_missing failures for .mkv paths
+        exif_missing_failures = [
+            f
+            for f in processing_failures
+            if f.get("reason") == "exif_target_missing"
+            and ".mkv" in f.get("file_path", "")
+        ]
+        assert len(exif_missing_failures) == 0, (
+            f"Should have no exif_target_missing for .mkv files, found: {exif_missing_failures}"
+        )
+
+        # Verify the overlay failure has proper context
+        overlay_failure = overlay_failures[0]
+        assert "FFmpeg overlay embedding failed" in overlay_failure.get(
+            "error_details", ""
+        )
+        context = overlay_failure.get("context", {})
+        assert context.get("intended_mkv_path") is not None
+        assert context.get("overlay_source_path") is not None

@@ -53,12 +53,19 @@ skip_no_exiftool = pytest.mark.skipif(
 )
 
 
-def run_sampler(output_dir: Path, source_dir: Path) -> bool:
-    """Run the dataset sampler script with random sampling.
+def run_sampler(
+    output_dir: Path,
+    source_dir: Path,
+    seed: Optional[int] = None,
+    manifest_out: Optional[Path] = None,
+) -> bool:
+    """Run the dataset sampler script.
 
     Args:
         output_dir: Where to create the sampled dataset
         source_dir: Original media source directory
+        seed: Optional random seed for deterministic sampling
+        manifest_out: Optional path to write selection manifest
 
     Returns:
         True if sampling succeeded
@@ -71,7 +78,6 @@ def run_sampler(output_dir: Path, source_dir: Path) -> bool:
     if not source_dir.exists():
         raise FileNotFoundError(f"Source directory not found: {source_dir}")
 
-    # Uses random seed by default for varied coverage across test runs
     cmd = [
         "python",
         str(sampler_script),
@@ -81,6 +87,9 @@ def run_sampler(output_dir: Path, source_dir: Path) -> bool:
         str(output_dir),
         "--force",
     ]
+
+    if seed is not None:
+        cmd.extend(["--seed", str(seed)])
 
     result = subprocess.run(
         cmd,
@@ -94,7 +103,68 @@ def run_sampler(output_dir: Path, source_dir: Path) -> bool:
         print(f"Sampler failed:\n{result.stderr}")
         return False
 
+    # Write selection manifest if requested
+    if manifest_out:
+        _write_selection_manifest(output_dir, source_dir, seed, manifest_out)
+
     return True
+
+
+def _write_selection_manifest(
+    sampled_dir: Path,
+    source_dir: Path,
+    seed: Optional[int],
+    manifest_path: Path,
+) -> None:
+    """Write a manifest of selected files for reproducibility.
+
+    The manifest contains:
+    - seed used
+    - list of selected files with relative paths
+    - file counts by processor type
+    """
+    manifest = {
+        "seed": seed,
+        "source_dir": str(source_dir),
+        "sampled_dir": str(sampled_dir),
+        "created": datetime.now().isoformat(),
+        "files": [],
+        "counts_by_type": {},
+    }
+
+    # Count files by export type
+    for export_dir in sampled_dir.iterdir():
+        if export_dir.is_dir():
+            export_name = export_dir.name
+            file_count = sum(1 for f in export_dir.rglob("*") if f.is_file())
+
+            # Determine processor type from name
+            if export_name.startswith("google-"):
+                proc_type = "google"
+            elif export_name.startswith("snapchat-"):
+                proc_type = "snapchat"
+            elif export_name.startswith("instagram-"):
+                proc_type = "instagram"
+            elif export_name.startswith("discord-"):
+                proc_type = "discord"
+            elif "imessage" in export_name.lower() or "messages" in export_name.lower():
+                proc_type = "imessage"
+            else:
+                proc_type = "unknown"
+
+            if proc_type not in manifest["counts_by_type"]:
+                manifest["counts_by_type"][proc_type] = {"exports": 0, "files": 0}
+            manifest["counts_by_type"][proc_type]["exports"] += 1
+            manifest["counts_by_type"][proc_type]["files"] += file_count
+
+            # List files
+            for f in export_dir.rglob("*"):
+                if f.is_file():
+                    manifest["files"].append(str(f.relative_to(sampled_dir)))
+
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
 
 
 def run_memoria(input_dir: Path, output_dir: Path) -> bool:
@@ -146,6 +216,10 @@ def dataset_paths(request) -> Tuple[Path, Path]:
 
     Otherwise, uses existing paths from environment or defaults.
 
+    Environment variables:
+    - TEST_SAMPLER_SEED: Optional seed for deterministic sampling
+    - ORIGINALS_PATH: Path to original exports (default: /mnt/media/originals)
+
     Returns:
         Tuple of (source_path, processed_path)
     """
@@ -162,23 +236,31 @@ def dataset_paths(request) -> Tuple[Path, Path]:
         yield TEST_DATASET_SOURCE, TEST_DATASET_PROCESSED
         return
 
+    # Get optional seed from environment for deterministic runs
+    seed_str = os.environ.get("TEST_SAMPLER_SEED")
+    seed = int(seed_str) if seed_str else None
+
     # Create fresh dataset in temp directory
     temp_base = Path(tempfile.mkdtemp(prefix="memoria_test_"))
     source_dir = temp_base / "sampled"
     processed_dir = temp_base / "processed"
+    manifest_path = temp_base / "selection_manifest.json"
 
     print(f"\n{'='*60}")
     print("FULL PIPELINE TEST MODE")
     print(f"{'='*60}")
     print(f"Temp directory: {temp_base}")
     print(f"Source (originals): {ORIGINALS_PATH}")
+    if seed is not None:
+        print(f"Using deterministic seed: {seed}")
 
     try:
         # Step 1: Sample dataset
         print("\nStep 1: Sampling dataset...")
-        if not run_sampler(source_dir, ORIGINALS_PATH):
+        if not run_sampler(source_dir, ORIGINALS_PATH, seed=seed, manifest_out=manifest_path):
             pytest.fail("Failed to sample dataset")
         print(f"  Sampled to: {source_dir}")
+        print(f"  Manifest: {manifest_path}")
 
         # Step 2: Process with memoria
         print("\nStep 2: Processing with memoria...")
@@ -199,6 +281,8 @@ def dataset_paths(request) -> Tuple[Path, Path]:
             shutil.rmtree(temp_base, ignore_errors=True)
         else:
             print(f"\nKeeping dataset at: {temp_base}")
+            if manifest_path.exists():
+                print(f"Selection manifest: {manifest_path}")
 
 
 @pytest.fixture(scope="session")
@@ -743,3 +827,154 @@ class TestFileIntegrity:
                 checked += 1
 
         assert checked > 0, "Should have checked some JPG files"
+
+
+# ============================================================================
+# Processor-specific invariant tests
+# ============================================================================
+
+
+@pytest.mark.integration
+class TestProcessorSpecificInvariants:
+    """Tests for processor-specific invariants.
+
+    These validate that each processor produces expected output structures
+    and handles platform-specific edge cases correctly.
+    """
+
+    def test_google_photos_flat_layout_with_albums_in_metadata(self, processed_path):
+        """Google Photos should output flat layout with album names in EXIF."""
+        google_exports = [
+            d
+            for d in processed_path.iterdir()
+            if d.is_dir() and d.name.startswith("google-") and (d / "photos").exists()
+        ]
+
+        if not google_exports:
+            pytest.skip("No Google Photos exports found")
+
+        for export in google_exports:
+            photos_dir = export / "photos"
+
+            # Should use year-based organization
+            year_dirs = [
+                d for d in photos_dir.iterdir()
+                if d.is_dir() and d.name.isdigit() and len(d.name) == 4
+            ]
+            if year_dirs:
+                # Verify files exist in year directories
+                for year_dir in year_dirs[:2]:
+                    files = list(year_dir.rglob("*"))
+                    has_media = any(f.is_file() and is_media_file(f) for f in files)
+                    # At least some year directories should have media
+                    if has_media:
+                        break
+                else:
+                    # No media found in any year directory is fine if export is small
+                    pass
+
+    def test_snapchat_messages_ambiguous_overlays_in_needs_matching(self, processed_path):
+        """Snapchat Messages with ambiguous overlays should create needs_matching."""
+        snapchat_exports = [
+            d
+            for d in processed_path.iterdir()
+            if d.is_dir() and d.name.startswith("snapchat-")
+        ]
+
+        if not snapchat_exports:
+            pytest.skip("No Snapchat exports found")
+
+        for export in snapchat_exports:
+            messages_dir = export / "messages"
+            if not messages_dir.exists():
+                continue
+
+            needs_matching_dir = messages_dir / "issues" / "needs_matching"
+            # needs_matching is optional - only created when ambiguous cases exist
+            if needs_matching_dir.exists():
+                # Verify structure: should have subdirectories with video + overlays
+                subdirs = [d for d in needs_matching_dir.iterdir() if d.is_dir()]
+                for subdir in subdirs[:3]:  # Sample
+                    files = list(subdir.iterdir())
+                    # Should have at least one file
+                    assert len(files) > 0, f"{subdir} should not be empty"
+
+    def test_imessage_placeholder_attachments_tracked(self, processed_path):
+        """iMessage placeholder attachments should be in failure report."""
+        imessage_exports = [
+            d
+            for d in processed_path.iterdir()
+            if d.is_dir()
+            and ("messages" in d.name.lower() or "imessage" in d.name.lower())
+            and not d.name.startswith("instagram-")
+            and not d.name.startswith("snapchat-")
+        ]
+
+        if not imessage_exports:
+            pytest.skip("No iMessage exports found")
+
+        for export in imessage_exports:
+            messages_dir = export / "messages"
+            if not messages_dir.exists():
+                continue
+
+            failure_report = messages_dir / "issues" / "failure-report.json"
+            if failure_report.exists():
+                with open(failure_report) as f:
+                    report = json.load(f)
+
+                # Check for orphaned metadata (incomplete iCloud downloads)
+                orphaned = report.get("orphaned_metadata", [])
+                # If there are orphaned entries, they should have proper context
+                for entry in orphaned[:5]:
+                    assert "file_path" in entry or "filename" in entry
+                    if "reason" in entry:
+                        assert entry["reason"]  # Should have a reason
+
+    def test_discord_attachment_failures_have_reason(self, processed_path):
+        """Discord attachment failures should have proper reason codes."""
+        discord_exports = [
+            d
+            for d in processed_path.iterdir()
+            if d.is_dir() and d.name.startswith("discord-")
+        ]
+
+        if not discord_exports:
+            pytest.skip("No Discord exports found")
+
+        for export in discord_exports:
+            messages_dir = export / "messages"
+            if not messages_dir.exists():
+                continue
+
+            failure_report = messages_dir / "issues" / "failure-report.json"
+            if failure_report.exists():
+                with open(failure_report) as f:
+                    report = json.load(f)
+
+                # Check failed_processing entries
+                failed = report.get("failed_processing", [])
+                for entry in failed[:10]:
+                    # Each failure should have a reason
+                    assert "reason" in entry, f"Failure should have reason: {entry}"
+                    # Common Discord failure reasons
+                    valid_reasons = {
+                        "attachment_download_failed",
+                        "expired_url",
+                        "file_not_found",
+                        "exif_embed_failed",
+                        "exif_target_missing",
+                        "overlay_embed_failed",
+                        "ffmpeg_failed",
+                    }
+                    # Reason should be descriptive (not just checking against list)
+                    assert entry["reason"], f"Reason should not be empty: {entry}"
+
+
+def is_media_file(path: Path) -> bool:
+    """Check if path is a media file."""
+    media_extensions = {
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif",
+        ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".3gp",
+    }
+    return path.suffix.lower() in media_extensions

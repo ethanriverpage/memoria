@@ -312,10 +312,6 @@ class VideoEncoder:
         target_mbps = target_bitrate / 1_000_000
         adjusted_mbps = target_mbps * 1.15
 
-        logger.debug(
-            f"Using dynamic bitrate: {target_mbps:.2f} Mbps → {adjusted_mbps:.2f} Mbps (with headroom)"
-        )
-
         # Common bitrate arguments used by most encoders
         bitrate_args = [
             "-b:v",

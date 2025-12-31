@@ -7,7 +7,7 @@ Supports various NAS systems (QNAP, Synology), photo management tools, and OS-sp
 """
 
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 
 class BannedFilesFilter:
@@ -27,20 +27,42 @@ class BannedFilesFilter:
     ]
 
     # Banned file extensions (with leading dot, lowercase)
-    BANNED_EXTENSIONS = [
+    DEFAULT_BANNED_EXTENSIONS = [
         ".unknown",  # Snapchat export metadata files with unrecognized type
     ]
 
-    def __init__(self, additional_patterns: Optional[List[str]] = None):
+    # File extensions that ExifTool cannot write metadata to (tool limitation).
+    # These should still be copied/kept, but metadata embedding should be skipped.
+    EXIFTOOL_WRITE_UNSUPPORTED_EXTENSIONS = [
+        ".mp3",
+        ".webm",
+        ".bmp",
+    ]
+
+    def __init__(
+        self,
+        additional_patterns: Optional[List[str]] = None,
+        additional_extensions: Optional[Sequence[str]] = None,
+    ):
         """
         Initialize the filter with optional additional patterns
 
         Args:
             additional_patterns: Optional list of additional patterns to ban
+            additional_extensions: Optional list of additional file extensions to ban.
+                Each entry may be provided with or without a leading dot.
         """
         self.patterns = self.BANNED_PATTERNS.copy()
         if additional_patterns:
             self.patterns.extend(additional_patterns)
+
+        self.extensions = {ext.lower() for ext in self.DEFAULT_BANNED_EXTENSIONS}
+        if additional_extensions:
+            for ext in additional_extensions:
+                normalized = ext.lower()
+                if not normalized.startswith("."):
+                    normalized = f".{normalized}"
+                self.extensions.add(normalized)
 
     def is_banned(self, path: Path) -> bool:
         """
@@ -61,7 +83,7 @@ class BannedFilesFilter:
 
         # Check banned extensions
         ext = path.suffix.lower()
-        if ext in self.BANNED_EXTENSIONS:
+        if ext in self.extensions:
             return True
 
         return False

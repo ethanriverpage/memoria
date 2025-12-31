@@ -7,34 +7,82 @@ This directory contains the pytest-based test infrastructure for Memoria.
 ```
 tests/
 ├── conftest.py                    # Shared fixtures and configuration
+├── helpers/
+│   ├── __init__.py
+│   └── processing.py              # Processing test helpers and assertions
 ├── fixtures/
 │   ├── __init__.py
-│   ├── generators.py              # Test export generator functions
-│   └── media_samples.py           # Minimal valid media file bytes
-├── test_exports/                  # Generated test data (gitignored)
-│   └── .gitkeep
-├── test_detection/
-│   ├── test_google_detection.py   # Google Photos, Chat, Voice detection
-│   ├── test_snapchat_detection.py # Snapchat Memories, Messages detection
-│   ├── test_instagram_detection.py # Instagram Messages, Public, Old detection
-│   ├── test_discord_detection.py  # Discord detection
-│   └── test_imessage_detection.py # iMessage Mac/iPhone detection
-├── test_processing/
-│   ├── test_google_photos.py      # Google Photos edge cases
-│   ├── test_google_chat.py        # Google Chat edge cases
-│   ├── test_google_voice.py       # Google Voice edge cases
-│   ├── test_snapchat_memories.py  # Snapchat Memories edge cases
-│   ├── test_snapchat_messages.py  # Snapchat Messages edge cases
-│   ├── test_instagram_messages.py # Instagram Messages edge cases
-│   ├── test_instagram_public.py   # Instagram Public Media edge cases
-│   ├── test_instaloader.py        # Instaloader edge cases
-│   ├── test_discord.py            # Discord edge cases
-│   └── test_imessage.py           # iMessage edge cases
-├── test_integration/
-│   ├── test_cli.py                # CLI integration tests
-│   └── test_multi_processor.py    # Multi-processor detection
+│   ├── generators.py              # Test export generator functions (internal use)
+│   ├── media_samples.py           # Minimal valid media file bytes
+│   ├── export_tree.py             # Utilities for committed fixtures
+│   └── exports/                   # Schema-faithful export fixtures
+│       ├── google_photos/
+│       ├── google_chat/
+│       ├── discord/
+│       ├── snapchat_memories/
+│       ├── snapchat_messages/
+│       ├── instagram_messages/
+│       ├── instagram_public/
+│       ├── instaloader/
+│       ├── imessage/
+│       ├── imessage_imazing/
+│       └── README.md
+├── test_detection/                # Processor detect() tests
+├── test_processing/               # Processor preprocess/process tests
+├── test_fixtures/                 # Fixture fidelity tests
+│   └── test_export_fixtures_fidelity.py
+├── test_integration/              # Full pipeline integration tests
+│   ├── test_dataset_validation.py # Originals-based validation (opt-in)
+│   └── test_cli.py                # CLI integration tests
 └── README.md                      # This file
 ```
+
+## Fixture Strategy
+
+The test suite uses two complementary fixture approaches:
+
+### 1. Schema-Faithful Fixtures (Preferred for Export Tests)
+
+Located in `tests/fixtures/exports/`, these are committed directory trees that
+match the documented export schemas in `docs/`. Use these for:
+
+- Detection tests
+- Preprocessing tests
+- Any test that validates real export structure parsing
+
+```python
+from tests.fixtures.export_tree import copy_export_fixture
+
+def test_google_photos_detection(self, processor, tmp_path):
+    copy_export_fixture("google_photos", "takeout_basic", tmp_path)
+    assert processor.detect(tmp_path) is True
+```
+
+### 2. Generator Fixtures (For Internal/Preprocessed Formats)
+
+Located in `tests/fixtures/generators.py`, these create synthetic structures for:
+
+- Internal preprocessed metadata formats
+- Targeted edge case testing
+- Scenarios not covered by committed fixtures
+
+```python
+from tests.fixtures.generators import create_imessage_mac_export
+
+def test_imessage_database_schema(self, tmp_path):
+    create_imessage_mac_export(tmp_path, conversations=[...])
+    # Test database queries, not export structure
+```
+
+**When to use which:**
+
+| Scenario | Use Schema Fixtures | Use Generators |
+|----------|---------------------|----------------|
+| Detection tests | Yes | No |
+| Export structure validation | Yes | No |
+| Preprocessing tests | Yes | Rarely |
+| Internal metadata format tests | No | Yes |
+| Synthetic edge cases | Sometimes | Yes |
 
 ## Running Tests
 
@@ -66,12 +114,37 @@ pytest tests/test_detection/test_google_detection.py::TestGooglePhotosDetection:
 # Skip slow tests
 pytest -m "not slow"
 
-# Skip integration tests (require exiftool, ffmpeg)
+# Skip integration tests (require exiftool, ffmpeg, or originals)
 pytest -m "not integration"
 
 # Run only integration tests
 pytest -m integration
 ```
+
+### Integration Tests with Real Originals (Opt-in)
+
+The `test_dataset_validation.py` tests can validate against real export data,
+but require explicit opt-in:
+
+```bash
+# Run with auto-generated dataset from originals
+ORIGINALS_PATH=/mnt/media/originals pytest -m integration --run-full-pipeline
+
+# Use deterministic sampling for reproducible results
+TEST_SAMPLER_SEED=12345 pytest -m integration --run-full-pipeline
+
+# Keep the generated dataset for debugging
+pytest -m integration --run-full-pipeline --keep-dataset
+```
+
+**Environment Variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ORIGINALS_PATH` | `/mnt/media/originals` | Path to original exports |
+| `TEST_DATASET_SOURCE` | `/mnt/media/temp/test_dataset` | Pre-sampled dataset |
+| `TEST_DATASET_PROCESSED` | `/mnt/media/temp/test_dataset_proc` | Pre-processed output |
+| `TEST_SAMPLER_SEED` | Random | Seed for deterministic sampling |
 
 ### Coverage Reports
 
@@ -92,7 +165,7 @@ pytest -n auto
 
 ## Test Categories
 
-### Detection Tests
+### Detection Tests (`test_detection/`)
 
 Test each processor's `detect()` function with:
 - Valid export structures (should return True)
@@ -101,30 +174,71 @@ Test each processor's `detect()` function with:
 - Wrong structure (should return False)
 - Consolidated structure variants
 
-### Processing Tests
+### Processing Tests (`test_processing/`)
 
-Test `process()` function edge cases per processor:
+Test `preprocess()` and `process()` functions with AAA pattern:
+- **Arrange**: Copy schema fixture to temp directory
+- **Act**: Run preprocessor/processor
+- **Assert**: Verify output files, metadata, failure reports
 
 | Processor | Key Edge Cases |
 |-----------|---------------|
 | Google Photos | Missing JSON metadata, duplicate files, Live Photo pairs |
-| Google Chat | Group conversations, DM conversations, empty folders |
+| Google Chat | Group conversations, DM conversations, file naming patterns |
 | Google Voice | Text conversations, HTML parsing, orphaned media |
-| Snapchat Memories | Missing overlays, video overlays, empty metadata |
-| Snapchat Messages | Orphaned media, ambiguous overlay matching |
+| Snapchat Memories | Missing overlays, video overlays, GPS filtering |
+| Snapchat Messages | Orphaned media, ambiguous overlay matching, failure tracking |
 | Instagram Messages | Current vs legacy format, expired media |
 | Instagram Public | Carousel posts, YYYYMM organization |
 | Instaloader | UTC timestamp pattern, carousel numbering |
-| Discord | Expired CDN URLs, channel type detection |
+| Discord | Expired CDN URLs, channel type detection, SPOILER filenames |
 | iMessage | Mac vs iPhone structure, Live Photo linking, deduplication |
 
-### Integration Tests
+### Fixture Fidelity Tests (`test_fixtures/`)
 
-Test full processing via CLI:
-- Single export processing
-- Multi-processor detection (Google with Photos + Chat)
-- Output directory structure validation
-- Error handling for invalid inputs
+Validate that committed fixtures:
+- Match documented export schemas
+- Are detected by exactly one processor
+- Have all required files/structure
+
+### Integration Tests (`test_integration/`)
+
+Test full processing pipelines:
+- CLI integration
+- Multi-processor detection
+- Output validation against real originals (opt-in)
+- Processor-specific invariants
+
+## Test Helpers
+
+Import from `tests/helpers`:
+
+```python
+from tests.helpers import (
+    run_preprocessor,
+    run_processor,
+    ProcessingResult,
+    assert_no_failures,
+    assert_has_media_files,
+    assert_metadata_json_valid,
+)
+
+def test_preprocessing_produces_metadata(self, tmp_path):
+    from processors.google_photos.preprocess import GooglePhotosPreprocessor
+    from tests.fixtures.export_tree import copy_export_fixture
+
+    copy_export_fixture("google_photos", "takeout_basic", tmp_path / "export")
+    
+    result = run_preprocessor(
+        GooglePhotosPreprocessor,
+        tmp_path / "export",
+        tmp_path / "output",
+    )
+
+    assert_no_failures(result)
+    assert_metadata_json_valid(result)
+    assert_has_media_files(result, min_count=1)
+```
 
 ## Fixtures
 
@@ -133,15 +247,17 @@ Test full processing via CLI:
 - `project_root`: Project root directory
 - `test_exports_dir`: Shared test export directory
 - `processor_registry`: Pre-populated processor registry
+- `exiftool_available`: Whether exiftool is installed
+- `ffmpeg_available`: Whether ffmpeg is installed
 
 ### Function-scoped Fixtures
 
 - `temp_output_dir`: Temporary output directory per test
 - `temp_export_dir`: Temporary export directory per test
 
-### Export Generator Fixtures
+### Export Fixtures
 
-Each processor has a corresponding fixture that creates a minimal valid export:
+Each processor has a fixture that copies the default schema-faithful export:
 - `google_photos_export`
 - `google_chat_export`
 - `google_voice_export`
@@ -153,6 +269,7 @@ Each processor has a corresponding fixture that creates a minimal valid export:
 - `discord_export`
 - `imessage_mac_export`
 - `imessage_iphone_export`
+- `imessage_imazing_export`
 
 ### Processor Class Fixtures
 
@@ -170,41 +287,50 @@ Direct access to processor classes:
 
 ## Writing New Tests
 
-### Adding a Detection Test
-
-```python
-def test_detect_new_case(self, processor_class, temp_export_dir):
-    """Should detect the new case."""
-    from tests.fixtures.generators import create_export_function
-    create_export_function(temp_export_dir, special_option=True)
-    assert processor_class.detect(temp_export_dir) is True
-```
-
 ### Adding a Processing Test
 
 ```python
 def test_process_edge_case(self, processor_class, temp_export_dir, temp_output_dir):
     """Should handle the edge case correctly."""
-    from tests.fixtures.generators import create_export_function
-    create_export_function(temp_export_dir, edge_case=True)
-    
-    # Verify setup
-    assert (temp_export_dir / "expected_file").exists()
+    from tests.fixtures.export_tree import copy_export_fixture
+    from tests.helpers import run_preprocessor, assert_no_failures
+
+    # Arrange: copy schema fixture
+    copy_export_fixture("processor_name", "case_name", temp_export_dir)
+
+    # Act: run preprocessing
+    from processors.example.preprocess import ExamplePreprocessor
+    result = run_preprocessor(ExamplePreprocessor, temp_export_dir, temp_output_dir)
+
+    # Assert: verify outputs
+    assert_no_failures(result)
+    assert result.metadata is not None
+    assert len(result.metadata.get("media_files", [])) > 0
 ```
+
+### Adding a New Fixture
+
+1. Create directory under `tests/fixtures/exports/<processor>/<case_name>/`
+2. Add files matching documented schema (see `docs/*.md`)
+3. Add media files using `tests/fixtures/media_samples.py` helpers
+4. Add fidelity test in `tests/test_fixtures/test_export_fixtures_fidelity.py`
 
 ### Creating New Media Samples
 
 Add to `tests/fixtures/media_samples.py`:
 
 ```python
-# Base64-encoded minimal valid file
+# For committed minimal samples (base64-encoded)
 MINIMAL_NEW_FORMAT = base64.b64decode("...")
 
-def write_new_format_file(path: Path) -> Path:
-    """Write minimal new format file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(MINIMAL_NEW_FORMAT)
-    return path
+# For runtime-generated samples (with tool dependencies)
+def write_real_new_format_if_available(path: Path) -> bool:
+    """Generate real format file using external tool if available."""
+    if shutil.which("tool") is None:
+        write_media_file(path, "fallback")
+        return False
+    # Generate real file
+    return True
 ```
 
 ## Edge Cases Checklist
@@ -218,14 +344,18 @@ Based on documentation, these edge cases are covered:
 | Google Photos | Live Photo pairs | test_google_photos.py |
 | Snapchat Memories | Missing overlay file | test_snapchat_memories.py |
 | Snapchat Memories | Video with overlay | test_snapchat_memories.py |
+| Snapchat Memories | GPS 0,0 filtering | test_snapchat_memories.py |
 | Snapchat Messages | Orphaned media | test_snapchat_messages.py |
 | Snapchat Messages | Ambiguous overlay match | test_snapchat_messages.py |
+| Snapchat Messages | Overlay embed failure | test_snapchat_messages.py |
 | Instagram | Current vs legacy format | test_instagram_messages.py |
 | Instagram | Expired media placeholder | test_instagram_messages.py |
 | Instaloader | Carousel numbering | test_instaloader.py |
+| Instaloader | Orphaned metadata | test_instaloader.py |
 | Discord | Expired CDN URLs | test_discord.py |
 | Discord | Channel type detection | test_discord.py |
+| Discord | SPOILER filenames | test_discord.py |
 | iMessage | Mac vs iPhone structure | test_imessage.py |
 | iMessage | Live Photo linking | test_imessage.py |
 | iMessage | Cross-export dedup | test_imessage.py |
-
+| iMessage | Placeholder attachments | test_imessage.py |

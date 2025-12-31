@@ -402,8 +402,8 @@ IMMICH_UPLOAD_CONCURRENCY=4
 IMMICH_IGNORE_PATTERNS=**/issues/**,**/needs matching/**
 
 # Processing Configuration
-TEMP_DIR=../pre
-DISABLE_TEMP_CLEANUP=0
+PREPROCESSING_DIR=../pre
+DISABLE_PREPROCESSING_CLEANUP=0
 
 # Cross-Processor Deduplication (optional)
 CROSS_PROCESSOR_DEDUP=true
@@ -426,8 +426,8 @@ DEDUP_PERCEPTUAL_THRESHOLD=0.92
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TEMP_DIR` | `../pre` | Directory for temporary preprocessing files |
-| `DISABLE_TEMP_CLEANUP` | `false` | Set to `true` to preserve temp files |
+| `PREPROCESSING_DIR` | `../pre` | Directory for preprocessing output |
+| `DISABLE_PREPROCESSING_CLEANUP` | `false` | Set to `true` to preserve preprocessing output |
 
 **Cross-Processor Deduplication**
 
@@ -452,7 +452,7 @@ Enable deduplication across different platform exports. See [Deduplication](Dedu
 Enable verbose logging and preserve temporary files:
 
 ```bash
-DISABLE_TEMP_CLEANUP=1 ./memoria.py /path/to/export --verbose
+DISABLE_PREPROCESSING_CLEANUP=1 ./memoria.py /path/to/export --verbose
 ```
 
 This creates:
@@ -463,10 +463,10 @@ This creates:
 
 ### Custom Temporary Directory
 
-Use a different location for temporary files:
+Use a different location for preprocessing output:
 
 ```bash
-TEMP_DIR=/mnt/fast-storage/temp ./memoria.py /path/to/export
+PREPROCESSING_DIR=/mnt/fast-storage/pre ./memoria.py /path/to/export
 ```
 
 Useful for:
@@ -517,7 +517,7 @@ While there's no formal dry-run mode, you can:
 ## Performance Tips
 
 1. **Workers**: Start with default, increase if CPU usage is low
-2. **Temp Directory**: Use SSD storage for `TEMP_DIR` if available
+2. **Preprocessing Directory**: Use SSD storage for `PREPROCESSING_DIR` if available
 3. **Upload Concurrency**: Increase for faster uploads if network can handle it
 4. **Parallel Exports**: Only use if you have sufficient RAM (2-4 GB per export)
 5. **Disk Space**: Ensure 2x the export size is available for temporary files

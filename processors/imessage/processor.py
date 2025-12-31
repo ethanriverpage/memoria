@@ -740,20 +740,20 @@ def _process_working_directory(
     )
 
     # Build live photo pairing maps from metadata
-    # Map: image_attachment_id -> set of video media_filenames that reference it
-    live_photo_videos_by_image: dict[str, set[str]] = {}
+    # Map: pair_key -> set of video media_filenames that have that key
+    live_photo_videos_by_key: dict[str, set[str]] = {}
     for media_filename, message in filename_index.items():
         if message.get("is_live_photo_video"):
-            image_id = message.get("live_photo_image_id")
-            if image_id:
-                if image_id not in live_photo_videos_by_image:
-                    live_photo_videos_by_image[image_id] = set()
-                live_photo_videos_by_image[image_id].add(media_filename)
+            pair_keys = message.get("live_photo_pair_keys", [])
+            for pair_key in pair_keys:
+                if pair_key not in live_photo_videos_by_key:
+                    live_photo_videos_by_key[pair_key] = set()
+                live_photo_videos_by_key[pair_key].add(media_filename)
 
     # Two-pass filename generation for deterministic live photo pairing
     # Pass A: non-live-video items (images and regular files)
     # Pass B: live-photo video items (reuse base from paired image)
-    live_photo_bases: dict[str, str] = {}  # image_attachment_id -> base filename
+    live_photo_bases_by_key: dict[str, str] = {}  # pair_key -> base filename
     pending_items: list[tuple[str, dict]] = []  # items to process
     live_video_items: list[tuple[str, dict]] = []  # deferred for Pass B
 
@@ -806,10 +806,14 @@ def _process_working_directory(
         output_filename = filename_gen.generate(canonical_ts, file_ext)
 
         # If this image has a live-photo video pair, store base and reserve .mov
-        attachment_id = message.get("attachment_id")
-        if attachment_id and attachment_id in live_photo_videos_by_image:
+        pair_keys = message.get("live_photo_pair_keys", [])
+        has_video_pair = any(pk in live_photo_videos_by_key for pk in pair_keys)
+        if has_video_pair:
             base = output_filename[: -len(file_ext)] if file_ext else output_filename
-            live_photo_bases[attachment_id] = base
+            # Store base for each pair key so the video can find it
+            for pk in pair_keys:
+                if pk in live_photo_videos_by_key:
+                    live_photo_bases_by_key[pk] = base
             # Reserve .mov extension for the paired video to prevent collisions
             reserved_mov = f"{base}.mov"
             filename_gen.used_filenames.add(reserved_mov)
@@ -828,20 +832,25 @@ def _process_working_directory(
         canonical_ts = get_canonical_timestamp(dedup_manifest, content_hash, timestamp)
         message["canonical_timestamp"] = canonical_ts
 
-        # Try to reuse base from paired image
-        image_id = message.get("live_photo_image_id")
-        if image_id and image_id in live_photo_bases:
-            base = live_photo_bases[image_id]
-            output_filename = f"{base}{file_ext}"
+        # Try to reuse base from paired image using live_photo_pair_keys
+        pair_keys = message.get("live_photo_pair_keys", [])
+        matched_base = None
+        for pk in pair_keys:
+            if pk in live_photo_bases_by_key:
+                matched_base = live_photo_bases_by_key[pk]
+                break
+
+        if matched_base:
+            output_filename = f"{matched_base}{file_ext}"
             # Ensure filename is registered (belt-and-suspenders)
             filename_gen.used_filenames.add(output_filename)
         else:
             # Fallback: no paired image found (corrupted metadata or image was skipped)
             logger.warning(
-                "Live photo video %s has no paired image (live_photo_image_id=%s), "
+                "Live photo video %s has no paired image (live_photo_pair_keys=%s), "
                 "generating independent filename",
                 media_filename,
-                image_id,
+                pair_keys,
             )
             output_filename = filename_gen.generate(canonical_ts, file_ext)
 

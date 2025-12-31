@@ -145,6 +145,8 @@ Memoria processes both components and links them with appropriate metadata.
 
 **Timestamp discrepancies**: If the JSON timestamp differs from EXIF data, JSON takes precedence as it represents the "taken time" in Google Photos.
 
+**Padded video files**: Some Google Photos exports contain video files padded to exact megabyte boundaries (e.g., 2 MB, 3 MB). The padding consists of garbage bytes after the valid MP4 `mdat` atom. This is likely an artifact of Google's internal storage chunking. These files play correctly but have inflated file sizes. When Memoria remuxes such files (for metadata embedding), ffmpeg strips the padding, producing smaller but identical-content output files.
+
 ## Google Chat
 
 ### Structure

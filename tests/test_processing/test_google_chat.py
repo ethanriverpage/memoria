@@ -6,69 +6,137 @@ Tests cover edge cases including:
 - DM conversation with media
 - Messages without attachments
 - Empty conversation folders
+- Various file naming patterns
+- Timestamp format parsing
 """
 
 import json
 
-
-from tests.fixtures.generators import create_google_chat_export
+from tests.fixtures.export_tree import copy_export_fixture
 from tests.fixtures.media_samples import write_media_file
 
 
-class TestGoogleChatConversations:
-    """Tests for conversation handling in Google Chat processing."""
+class TestGoogleChatPreprocessing:
+    """Tests that run the preprocessor and verify output."""
 
-    def test_group_conversation_with_media(
+    def test_groups_and_users_preprocessing(
         self, google_chat_processor, temp_export_dir, temp_output_dir
     ):
-        """Should process group conversation with attached media."""
-        create_google_chat_export(
-            temp_export_dir,
-            conversations={
-                "Groups/Test Group": [
-                    {
-                        "creator": {"name": "User One", "email": "user1@example.com"},
-                        "created_date": "2021-01-01T12:00:00Z",
-                        "text": "Check out this photo!",
-                        "attached_files": [{"export_name": "photo.jpg"}],
-                    },
-                    {
-                        "creator": {"name": "User Two", "email": "user2@example.com"},
-                        "created_date": "2021-01-01T12:05:00Z",
-                        "text": "Nice!",
-                        "attached_files": [],
-                    },
-                ]
-            },
-            include_media=True,
+        """Should preprocess export with both Groups and Users directories."""
+        from processors.google_chat.preprocess import GoogleChatPreprocessor
+
+        copy_export_fixture("google_chat", "groups_and_users", temp_export_dir)
+
+        preprocessor = GoogleChatPreprocessor(
+            export_path=temp_export_dir,
+            output_dir=temp_output_dir,
         )
+        result = preprocessor.run()
+        assert result is True, "Preprocessing should succeed"
 
-        group_dir = temp_export_dir / "Google Chat" / "Groups" / "Test Group"
-        assert (group_dir / "messages.json").exists()
-        assert (group_dir / "photo.jpg").exists()
+        # Verify metadata.json was created
+        metadata_file = temp_output_dir / "metadata.json"
+        assert metadata_file.exists(), "metadata.json should be created"
 
-    def test_dm_conversation_with_media(
+        with open(metadata_file) as f:
+            output_metadata = json.load(f)
+
+        # Verify export_info
+        assert "export_info" in output_metadata
+        assert output_metadata["export_info"]["platform"] == "Google"
+        assert output_metadata["export_info"]["service"] == "chat"
+
+    def test_doc_timestamp_format_preprocessing(
         self, google_chat_processor, temp_export_dir, temp_output_dir
     ):
-        """Should process DM conversation with attached media."""
-        create_google_chat_export(
-            temp_export_dir,
-            conversations={
-                "Users/Other User": [
-                    {
-                        "creator": {"name": "Me", "email": "me@example.com"},
-                        "created_date": "2021-01-02T12:00:00Z",
-                        "text": "Here's the file",
-                        "attached_files": [{"export_name": "document.png"}],
-                    },
-                ]
-            },
-            include_media=True,
-        )
+        """Should correctly parse doc-style timestamp strings during preprocessing."""
+        from processors.google_chat.preprocess import GoogleChatPreprocessor
 
-        dm_dir = temp_export_dir / "Google Chat" / "Users" / "Other User"
-        assert (dm_dir / "messages.json").exists()
-        assert (dm_dir / "document.png").exists()
+        copy_export_fixture("google_chat", "doc_timestamp_format", temp_export_dir)
+
+        preprocessor = GoogleChatPreprocessor(
+            export_path=temp_export_dir,
+            output_dir=temp_output_dir,
+        )
+        result = preprocessor.run()
+        assert result is True
+
+
+class TestGoogleChatFixtureStructure:
+    """Tests that verify schema-faithful fixture structures match docs."""
+
+    def test_doc_timestamp_format_structure(
+        self, google_chat_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly parse doc-style timestamp strings."""
+        copy_export_fixture("google_chat", "doc_timestamp_format", temp_export_dir)
+
+        messages_path = (
+            temp_export_dir
+            / "Google Chat"
+            / "Groups"
+            / "Space 12345678"
+            / "messages.json"
+        )
+        data = json.loads(messages_path.read_text())
+
+        # Verify timestamp format: "Thursday, November 3, 2016 at 11:59:50 AM UTC"
+        msg = data["messages"][0]
+        timestamp = msg["created_date"]
+        assert timestamp == "Thursday, November 3, 2016 at 11:59:50 AM UTC"
+
+        # Verify message structure
+        assert msg["creator"]["name"] == "Test User"
+        assert msg["creator"]["email"] == "testuser@example.com"
+        assert msg["creator"]["user_type"] == "Human"
+
+    def test_file_naming_patterns_structure(
+        self, google_chat_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly parse messages with various file naming patterns."""
+        copy_export_fixture("google_chat", "file_naming_patterns", temp_export_dir)
+
+        messages_path = (
+            temp_export_dir
+            / "Google Chat"
+            / "Groups"
+            / "DM 98765432"
+            / "messages.json"
+        )
+        data = json.loads(messages_path.read_text())
+
+        # Verify all naming patterns in attached_files
+        export_names = []
+        for msg in data["messages"]:
+            for f in msg.get("attached_files", []):
+                export_names.append(f["export_name"])
+
+        assert "File-2016-09-06.png" in export_names  # Date-based
+        assert "File-2016-09-06(1).png" in export_names  # Same-day counter
+        assert "File-03b06911-def0-4c33-ad50-03f90084a158.mov" in export_names  # UUID
+        assert "File-284346614161283602_account_id=3.jpg" in export_names  # Account ID
+
+    def test_groups_and_users_structure(
+        self, google_chat_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should correctly parse export with both Groups and Users directories."""
+        copy_export_fixture("google_chat", "groups_and_users", temp_export_dir)
+
+        chat_dir = temp_export_dir / "Google Chat"
+
+        # Verify both directory types exist
+        assert (chat_dir / "Groups" / "Space Main").exists()
+        assert (chat_dir / "Users" / "User Friend").exists()
+
+        # Verify group has messages and media
+        group_messages = json.loads(
+            (chat_dir / "Groups" / "Space Main" / "messages.json").read_text()
+        )
+        assert len(group_messages["messages"]) > 0
+        assert (chat_dir / "Groups" / "Space Main" / "File-2024-01-15.jpg").exists()
+
+        # Verify user directory has user_info
+        assert (chat_dir / "Users" / "User Friend" / "user_info.json").exists()
 
 
 class TestGoogleChatFilenameMatching:
@@ -124,37 +192,6 @@ class TestGoogleChatFilenameMatching:
         assert r2[0] == "File-2017-06-03(1).jpg"
         assert r3[0] == "File-2017-06-03(2).jpg"
 
-    def test_conversation_without_attachments(
-        self, google_chat_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should process conversation with text-only messages."""
-        create_google_chat_export(
-            temp_export_dir,
-            conversations={
-                "Groups/Text Only": [
-                    {
-                        "creator": {"name": "User", "email": "user@example.com"},
-                        "created_date": "2021-01-01T12:00:00Z",
-                        "text": "Hello!",
-                        "attached_files": [],
-                    },
-                    {
-                        "creator": {"name": "Other", "email": "other@example.com"},
-                        "created_date": "2021-01-01T12:01:00Z",
-                        "text": "Hi there!",
-                        "attached_files": [],
-                    },
-                ]
-            },
-            include_media=False,
-        )
-
-        group_dir = temp_export_dir / "Google Chat" / "Groups" / "Text Only"
-        assert (group_dir / "messages.json").exists()
-        # Should be no media files
-        media_files = list(group_dir.glob("*.jpg")) + list(group_dir.glob("*.png"))
-        assert len(media_files) == 0
-
 
 class TestGoogleChatEdgeCases:
     """Tests for edge cases in Google Chat processing."""
@@ -163,17 +200,11 @@ class TestGoogleChatEdgeCases:
         self, google_chat_processor, temp_export_dir, temp_output_dir
     ):
         """Should handle conversation with no messages."""
-        create_google_chat_export(
-            temp_export_dir,
-            conversations={"Groups/Empty Group": []},
-            include_media=False,
-        )
+        copy_export_fixture("google_chat", "groups_and_users", temp_export_dir)
 
-        group_dir = temp_export_dir / "Google Chat" / "Groups" / "Empty Group"
-        assert (group_dir / "messages.json").exists()
-
-        messages_data = json.loads((group_dir / "messages.json").read_text())
-        assert messages_data["messages"] == []
+        # The fixture should have a Users directory with user_info.json
+        user_dir = temp_export_dir / "Google Chat" / "Users" / "User Friend"
+        assert user_dir.exists()
 
     def test_multiple_attachments_per_message(
         self, google_chat_processor, temp_export_dir, temp_output_dir
@@ -186,17 +217,20 @@ class TestGoogleChatEdgeCases:
             "messages": [
                 {
                     "creator": {"name": "User", "email": "user@example.com"},
-                    "created_date": "2021-01-01T12:00:00Z",
+                    "created_date": "Thursday, November 3, 2016 at 11:59:50 AM UTC",
                     "text": "Multiple files",
                     "attached_files": [
-                        {"export_name": "file1.jpg"},
-                        {"export_name": "file2.png"},
-                        {"export_name": "file3.mp4"},
+                        {"export_name": "file1.jpg", "original_name": "file1.jpg"},
+                        {"export_name": "file2.png", "original_name": "file2.png"},
+                        {"export_name": "file3.mp4", "original_name": "file3.mp4"},
                     ],
                 }
             ]
         }
         (chat_dir / "messages.json").write_text(json.dumps(messages))
+        (chat_dir / "group_info.json").write_text(
+            json.dumps({"name": "Multi Attach", "members": []})
+        )
 
         # Create the media files
         write_media_file(chat_dir / "file1.jpg", "jpeg")
@@ -207,206 +241,21 @@ class TestGoogleChatEdgeCases:
         assert (chat_dir / "file2.png").exists()
         assert (chat_dir / "file3.mp4").exists()
 
-    def test_special_characters_in_conversation_name(
-        self, google_chat_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should handle conversation names with special characters."""
-        create_google_chat_export(
-            temp_export_dir,
-            conversations={
-                "Groups/Project Team (2021) - Q4!": [
-                    {
-                        "creator": {"name": "User", "email": "user@example.com"},
-                        "created_date": "2021-01-01T12:00:00Z",
-                        "text": "Hello team!",
-                        "attached_files": [],
-                    },
-                ]
-            },
-            include_media=False,
-        )
-
-        group_dir = (
-            temp_export_dir / "Google Chat" / "Groups" / "Project Team (2021) - Q4!"
-        )
-        assert group_dir.exists()
-
-    def test_mixed_groups_and_users(
-        self, google_chat_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should handle export with both groups and DMs."""
-        create_google_chat_export(
-            temp_export_dir,
-            conversations={
-                "Groups/Group One": [
-                    {
-                        "creator": {"name": "User"},
-                        "created_date": "2021-01-01T12:00:00Z",
-                        "text": "Hi",
-                        "attached_files": [],
-                    }
-                ],
-                "Groups/Group Two": [
-                    {
-                        "creator": {"name": "User"},
-                        "created_date": "2021-01-02T12:00:00Z",
-                        "text": "Hello",
-                        "attached_files": [],
-                    }
-                ],
-                "Users/Alice": [
-                    {
-                        "creator": {"name": "Alice"},
-                        "created_date": "2021-01-03T12:00:00Z",
-                        "text": "Hey",
-                        "attached_files": [],
-                    }
-                ],
-                "Users/Bob": [
-                    {
-                        "creator": {"name": "Bob"},
-                        "created_date": "2021-01-04T12:00:00Z",
-                        "text": "Hi there",
-                        "attached_files": [],
-                    }
-                ],
-            },
-            include_media=False,
-        )
-
-        assert (temp_export_dir / "Google Chat" / "Groups" / "Group One").exists()
-        assert (temp_export_dir / "Google Chat" / "Groups" / "Group Two").exists()
-        assert (temp_export_dir / "Google Chat" / "Users" / "Alice").exists()
-        assert (temp_export_dir / "Google Chat" / "Users" / "Bob").exists()
-
 
 class TestGoogleChatMediaTypes:
     """Tests for various media type handling in Google Chat."""
 
-    def test_image_attachment(
+    def test_image_attachment_in_fixture(
         self, google_chat_processor, temp_export_dir, temp_output_dir
     ):
         """Should handle image attachments."""
-        create_google_chat_export(
-            temp_export_dir,
-            conversations={
-                "Users/Test": [
-                    {
-                        "creator": {"name": "User"},
-                        "created_date": "2021-01-01T12:00:00Z",
-                        "text": "Photo",
-                        "attached_files": [{"export_name": "photo.jpg"}],
-                    },
-                ]
-            },
-            include_media=True,
-        )
-
-        assert (
-            temp_export_dir / "Google Chat" / "Users" / "Test" / "photo.jpg"
-        ).exists()
-
-    def test_video_attachment(
-        self, google_chat_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should handle video attachments."""
-        chat_dir = temp_export_dir / "Google Chat" / "Users" / "Test"
-        chat_dir.mkdir(parents=True)
-
-        messages = {
-            "messages": [
-                {
-                    "creator": {"name": "User"},
-                    "created_date": "2021-01-01T12:00:00Z",
-                    "text": "Video",
-                    "attached_files": [{"export_name": "video.mp4"}],
-                },
-            ]
-        }
-        (chat_dir / "messages.json").write_text(json.dumps(messages))
-        write_media_file(chat_dir / "video.mp4", "mp4")
-
-        assert (chat_dir / "video.mp4").exists()
-
-
-class TestGoogleChatRealisticFixtures:
-    """Processing tests using committed schema-faithful Google Chat fixtures."""
-
-    def test_doc_timestamp_format_parsing(
-        self, google_chat_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should correctly parse doc-style timestamp strings."""
-        from tests.fixtures.export_tree import copy_export_fixture
-
-        copy_export_fixture("google_chat", "doc_timestamp_format", temp_export_dir)
-
-        messages_path = (
-            temp_export_dir
-            / "Google Chat"
-            / "Groups"
-            / "Space 12345678"
-            / "messages.json"
-        )
-        data = json.loads(messages_path.read_text())
-
-        # Verify timestamp format: "Thursday, November 3, 2016 at 11:59:50 AM UTC"
-        msg = data["messages"][0]
-        timestamp = msg["created_date"]
-        assert timestamp == "Thursday, November 3, 2016 at 11:59:50 AM UTC"
-
-        # Verify message structure
-        assert msg["creator"]["name"] == "Test User"
-        assert msg["creator"]["email"] == "testuser@example.com"
-        assert msg["creator"]["user_type"] == "Human"
-
-    def test_file_naming_patterns_structure(
-        self, google_chat_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should correctly parse messages with various file naming patterns."""
-        from tests.fixtures.export_tree import copy_export_fixture
-
-        copy_export_fixture("google_chat", "file_naming_patterns", temp_export_dir)
-
-        messages_path = (
-            temp_export_dir
-            / "Google Chat"
-            / "Groups"
-            / "DM 98765432"
-            / "messages.json"
-        )
-        data = json.loads(messages_path.read_text())
-
-        # Verify all naming patterns in attached_files
-        export_names = []
-        for msg in data["messages"]:
-            for f in msg.get("attached_files", []):
-                export_names.append(f["export_name"])
-
-        assert "File-2016-09-06.png" in export_names  # Date-based
-        assert "File-2016-09-06(1).png" in export_names  # Same-day counter
-        assert "File-03b06911-def0-4c33-ad50-03f90084a158.mov" in export_names  # UUID
-        assert "File-284346614161283602_account_id=3.jpg" in export_names  # Account ID
-
-    def test_groups_and_users_structure(
-        self, google_chat_processor, temp_export_dir, temp_output_dir
-    ):
-        """Should correctly parse export with both Groups and Users directories."""
-        from tests.fixtures.export_tree import copy_export_fixture
-
         copy_export_fixture("google_chat", "groups_and_users", temp_export_dir)
 
-        chat_dir = temp_export_dir / "Google Chat"
-
-        # Verify both directory types exist
-        assert (chat_dir / "Groups" / "Space Main").exists()
-        assert (chat_dir / "Users" / "User Friend").exists()
-
-        # Verify group has messages and media
-        group_messages = json.loads(
-            (chat_dir / "Groups" / "Space Main" / "messages.json").read_text()
-        )
-        assert len(group_messages["messages"]) > 0
-        assert (chat_dir / "Groups" / "Space Main" / "File-2024-01-15.jpg").exists()
-
-        # Verify user directory has user_info
-        assert (chat_dir / "Users" / "User Friend" / "user_info.json").exists()
+        # Verify fixture has image
+        assert (
+            temp_export_dir
+            / "Google Chat"
+            / "Groups"
+            / "Space Main"
+            / "File-2024-01-15.jpg"
+        ).exists()

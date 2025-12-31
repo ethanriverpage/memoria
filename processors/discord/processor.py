@@ -103,6 +103,12 @@ class DiscordProcessor(ProcessorBase):
         return True
 
     @staticmethod
+    def get_required_dependencies() -> List[str]:
+        # Requires ffmpeg for large video metadata fallback when ExifTool
+        # cannot rewrite in-place (e.g., "Can't yet handle sidx box")
+        return ["exiftool", "ffmpeg"]
+
+    @staticmethod
     def needs_preprocessing(input_dir: str) -> bool:
         """Check if Discord export needs preprocessing."""
         input_path = Path(input_dir)

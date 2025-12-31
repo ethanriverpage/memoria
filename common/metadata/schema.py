@@ -175,6 +175,7 @@ class MessageEntry(TypedDict, total=False):
     is_live_photo_video: bool  # True if this is a Live Photo video component
     source_export: str  # Which export this came from (cross-export dedup)
     is_duplicate: bool  # True if this is a duplicate occurrence
+    live_photo_pair_keys: List[str]  # Stable keys for pairing Live Photo still + video
 
     # Platform-specific metadata
     metadata: Dict[str, Any]

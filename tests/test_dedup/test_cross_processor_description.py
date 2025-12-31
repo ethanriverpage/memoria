@@ -441,6 +441,64 @@ class TestMergedDescriptionWiring:
 
         assert result == default_description
 
+    def test_get_description_for_file_uses_xml_entity_newlines(self):
+        """Test that _get_description_for_file uses &#xa; (not literal newlines) to join lines.
+
+        Regression test for cross-processor-dedup-description-not-embedded bug.
+        Literal newlines break exiftool argfile format, causing secondary source
+        lines to be silently dropped.
+        """
+        from common.media.exiftool import _get_description_for_file
+
+        # Create a manifest where iMessage is best quality with Google Photos secondary
+        manifest = {
+            "duplicates": {
+                "abc123": {
+                    "primary": {
+                        "processor": "iMessage",
+                        "source_path": "/exports/imessage/photo.jpg",
+                    },
+                    "best_quality": {
+                        "processor": "iMessage",
+                        "source_path": "/exports/imessage/photo.jpg",
+                    },
+                    "secondary": [
+                        {
+                            "processor": "Google Photos",
+                            "source_path": "/exports/google/photo.jpg",
+                            "context": {
+                                "username": "user@gmail.com",
+                                "service": "photos",
+                            },
+                        },
+                    ],
+                    "merged_metadata": {},
+                },
+            },
+        }
+
+        default_description = "Source: iMessage/iph13p"
+        result = _get_description_for_file(
+            default_description,
+            dedup_manifest=manifest,
+            content_hash="abc123",
+            processor_name="iMessage",
+        )
+
+        # Result should contain secondary source
+        assert "+Google" in result
+
+        # Must use XML entity for newline, not literal newline
+        # Literal \n breaks exiftool argfile format
+        assert "&#xa;" in result, (
+            "Description must use &#xa; (XML entity) for newlines, not literal \\n. "
+            f"Got: {repr(result)}"
+        )
+        assert "\n" not in result, (
+            "Description must not contain literal newlines (breaks exiftool argfile). "
+            f"Got: {repr(result)}"
+        )
+
     def test_batch_process_exif_accepts_dedup_manifest_parameter(self):
         """Test that ProcessorBase.batch_process_exif accepts a dedup_manifest parameter."""
         from processors.base import ProcessorBase

@@ -30,7 +30,7 @@ from common.output.progress import (
 
 T = TypeVar("T")
 R = TypeVar("R")
-from common.utils import should_cleanup_temp
+from common.utils import should_cleanup_preprocessing
 
 
 def get_preprocessing_cache_path(input_dir: Path, processor_name: str) -> Path:
@@ -108,7 +108,7 @@ def temp_processing_directory(
         yield temp_dir
     finally:
         if temp_dir.exists():
-            if should_cleanup_temp():
+            if should_cleanup_preprocessing():
                 shutil.rmtree(temp_dir)
             # If cleanup is disabled, directory is preserved (no logging here,
             # caller should log if needed)

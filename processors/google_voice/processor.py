@@ -118,7 +118,9 @@ class GoogleVoiceProcessor(ProcessorBase):
     def needs_preprocessing(input_dir: str) -> bool:
         """Check if Google Voice export needs preprocessing."""
         # Check if already preprocessed
-        if GoogleVoiceProcessor.is_preprocessed_export_dir(Path(input_dir)):
+        if GoogleVoiceProcessor.is_preprocessed_export_dir(
+            Path(input_dir), container_key="conversations"
+        ):
             return False
 
         # Check for raw export structure (Voice/Calls/ directory)
@@ -324,7 +326,9 @@ def process_logic(
     log.processor_start("Google Voice Messages Media Processor")
 
     # Require preprocessed input
-    if not GoogleVoiceProcessor.is_preprocessed_export_dir(input_dir):
+    if not GoogleVoiceProcessor.is_preprocessed_export_dir(
+        input_dir, container_key="conversations"
+    ):
         logger.error(
             "Input directory is not preprocessed: %s. "
             "Call preprocess() first or run via memoria.py.",
