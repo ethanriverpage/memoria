@@ -50,6 +50,13 @@ from common.dedup.description import (
     SERVICE_STORIES,
     SERVICE_POSTS,
     SERVICE_REELS,
+    # Processor mapping
+    PROCESSOR_TO_PLATFORM_SERVICE,
+    CONSOLIDATING_PROCESSORS,
+    get_platform_service,
+    is_consolidating_processor,
+    # Source comparison helpers
+    format_relative_source_path,
     # Data structures
     SourceEntry,
     # Core building functions
@@ -119,6 +126,13 @@ __all__ = [
     "SERVICE_STORIES",
     "SERVICE_POSTS",
     "SERVICE_REELS",
+    # Description - Processor mapping
+    "PROCESSOR_TO_PLATFORM_SERVICE",
+    "CONSOLIDATING_PROCESSORS",
+    "get_platform_service",
+    "is_consolidating_processor",
+    # Description - Source comparison helpers
+    "format_relative_source_path",
     # Description - Data structures
     "SourceEntry",
     # Description - Core building functions

@@ -15,6 +15,14 @@ from common.dedup.description import (
     SERVICE_MESSAGES,
     SERVICE_MEMORIES,
     SERVICE_STORIES,
+    SERVICE_VOICE,
+    SERVICE_POSTS,
+    # Processor mapping
+    PROCESSOR_TO_PLATFORM_SERVICE,
+    CONSOLIDATING_PROCESSORS,
+    get_platform_service,
+    is_consolidating_processor,
+    format_relative_source_path,
     # Data structures
     SourceEntry,
     # Core building functions
@@ -60,6 +68,213 @@ class TestTruncateText:
     def test_none_text(self):
         """Test None text returns empty string."""
         assert truncate_text(None, 100) == ""
+
+
+class TestProcessorMapping:
+    """Tests for processor name to platform/service mapping."""
+
+    def test_google_photos_mapping(self):
+        """Test Google Photos maps to Google/photos."""
+        platform, service = get_platform_service("Google Photos")
+        assert platform == PLATFORM_GOOGLE
+        assert service == SERVICE_PHOTOS
+
+    def test_google_chat_mapping(self):
+        """Test Google Chat maps to Google/chat."""
+        platform, service = get_platform_service("Google Chat")
+        assert platform == PLATFORM_GOOGLE
+        assert service == SERVICE_CHAT
+
+    def test_google_voice_mapping(self):
+        """Test Google Voice maps to Google/voice."""
+        platform, service = get_platform_service("Google Voice")
+        assert platform == PLATFORM_GOOGLE
+        assert service == SERVICE_VOICE
+
+    def test_imessage_mapping(self):
+        """Test iMessage maps to iMessage with no service."""
+        platform, service = get_platform_service("iMessage")
+        assert platform == PLATFORM_IMESSAGE
+        assert service == ""
+
+    def test_imessage_imazing_mapping(self):
+        """Test iMessage-iMazing maps to iMessage with no service."""
+        platform, service = get_platform_service("iMessage-iMazing")
+        assert platform == PLATFORM_IMESSAGE
+        assert service == ""
+
+    def test_instagram_messages_mapping(self):
+        """Test Instagram Messages maps to Instagram/messages."""
+        platform, service = get_platform_service("Instagram Messages")
+        assert platform == PLATFORM_INSTAGRAM
+        assert service == SERVICE_MESSAGES
+
+    def test_instagram_public_media_mapping(self):
+        """Test Instagram Public Media maps to Instagram/posts."""
+        platform, service = get_platform_service("Instagram Public Media")
+        assert platform == PLATFORM_INSTAGRAM
+        assert service == SERVICE_POSTS
+
+    def test_snapchat_messages_mapping(self):
+        """Test Snapchat Messages maps to Snapchat/messages."""
+        platform, service = get_platform_service("Snapchat Messages")
+        assert platform == PLATFORM_SNAPCHAT
+        assert service == SERVICE_MESSAGES
+
+    def test_snapchat_memories_mapping(self):
+        """Test Snapchat Memories maps to Snapchat/memories."""
+        platform, service = get_platform_service("Snapchat Memories")
+        assert platform == PLATFORM_SNAPCHAT
+        assert service == SERVICE_MEMORIES
+
+    def test_discord_mapping(self):
+        """Test Discord maps to Discord with no service."""
+        platform, service = get_platform_service("Discord")
+        assert platform == PLATFORM_DISCORD
+        assert service == ""
+
+    def test_unknown_processor_fallback(self):
+        """Test unknown processor returns processor name as platform."""
+        platform, service = get_platform_service("Unknown Processor")
+        assert platform == "Unknown Processor"
+        assert service == ""
+
+    def test_all_processors_in_mapping(self):
+        """Test all expected processors are in the mapping."""
+        expected = [
+            "Google Photos",
+            "Google Chat",
+            "Google Voice",
+            "iMessage",
+            "iMessage-iMazing",
+            "Instagram Messages",
+            "Instagram Public Media",
+            "Instaloader",
+            "Snapchat Messages",
+            "Snapchat Memories",
+            "Discord",
+        ]
+        for processor in expected:
+            assert processor in PROCESSOR_TO_PLATFORM_SERVICE
+
+
+class TestConsolidatingProcessors:
+    """Tests for consolidating processor detection."""
+
+    def test_imessage_is_consolidating(self):
+        """Test iMessage is a consolidating processor."""
+        assert is_consolidating_processor("iMessage") is True
+
+    def test_imessage_imazing_is_consolidating(self):
+        """Test iMessage-iMazing is a consolidating processor."""
+        assert is_consolidating_processor("iMessage-iMazing") is True
+
+    def test_google_photos_not_consolidating(self):
+        """Test Google Photos is not a consolidating processor."""
+        assert is_consolidating_processor("Google Photos") is False
+
+    def test_instagram_not_consolidating(self):
+        """Test Instagram is not a consolidating processor."""
+        assert is_consolidating_processor("Instagram Messages") is False
+
+    def test_platform_name_not_consolidating(self):
+        """Test platform constant is not in consolidating set."""
+        # Only full processor names should match
+        assert is_consolidating_processor(PLATFORM_IMESSAGE) is True
+        assert is_consolidating_processor(PLATFORM_GOOGLE) is False
+
+
+class TestFormatRelativeSourcePath:
+    """Tests for relative path notation."""
+
+    def test_different_platform_full_path(self):
+        """Test different platforms get full path."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+        )
+        secondary = SourceEntry(
+            processor=PLATFORM_INSTAGRAM,
+            username="user",
+            service=SERVICE_MESSAGES,
+        )
+        result = format_relative_source_path(primary, secondary)
+        assert result == "Instagram/user/messages"
+
+    def test_same_platform_user_different_service(self):
+        """Test same platform/user, different service uses ././service."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+        )
+        secondary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_CHAT,
+        )
+        result = format_relative_source_path(primary, secondary)
+        assert result == "././chat"
+
+    def test_same_platform_different_user(self):
+        """Test same platform, different user uses ./user/service."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user1",
+            service=SERVICE_PHOTOS,
+        )
+        secondary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user2",
+            service=SERVICE_PHOTOS,
+        )
+        result = format_relative_source_path(primary, secondary)
+        assert result == "./user2/photos"
+
+    def test_same_source_returns_empty(self):
+        """Test same source returns empty string."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+        )
+        secondary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+        )
+        result = format_relative_source_path(primary, secondary)
+        assert result == ""
+
+    def test_imessage_consolidation_same_source(self):
+        """Test iMessage consolidation treats different devices as same source."""
+        primary = SourceEntry(
+            processor=PLATFORM_IMESSAGE,
+            username="iph13p",
+        )
+        secondary = SourceEntry(
+            processor=PLATFORM_IMESSAGE,
+            username="mac",  # Different device
+        )
+        result = format_relative_source_path(primary, secondary)
+        # Should return empty because iMessage consolidates devices
+        assert result == ""
+
+    def test_no_service_in_path(self):
+        """Test path without service."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+        )
+        secondary = SourceEntry(
+            processor=PLATFORM_DISCORD,
+            username="user",
+            # No service for Discord
+        )
+        result = format_relative_source_path(primary, secondary)
+        assert result == "Discord/user"
 
 
 class TestFormatTimestamp:
@@ -207,6 +422,189 @@ class TestBuildImageDescription:
         result = build_image_description(primary, secondary, max_total=300)
         # Should be limited to approximately max_total
         assert len(result) < 400  # Reasonable limit
+
+    def test_primary_with_context(self):
+        """Test primary source includes its context."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+            sender="me",
+            conversation="Family Album",
+            content="Vacation photo",
+        )
+        result = build_image_description(primary, [])
+        assert "Source: Google/user/photos" in result
+        assert '  - me in "Family Album": "Vacation photo"' in result
+
+    def test_same_source_context_folding(self):
+        """Test same-source secondaries are folded into context lines."""
+        primary = SourceEntry(
+            processor=PLATFORM_INSTAGRAM,
+            username="johndoe",
+            service=SERVICE_MESSAGES,
+            sender="alice",
+            conversation="Friends",
+            content="Look at this!",
+        )
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="johndoe",
+                service=SERVICE_MESSAGES,
+                sender="bob",
+                conversation="Family",
+                content="Sharing this photo",
+                timestamp=datetime(2024, 1, 20),
+            ),
+        ]
+        result = build_image_description(primary, secondary)
+
+        # Primary source line
+        assert "Source: Instagram/johndoe/messages" in result
+        # Primary context
+        assert '  - alice in "Friends": "Look at this!"' in result
+        # Secondary context should be folded (with + prefix)
+        assert '+bob in "Family"' in result
+        # Should NOT have a duplicate source line
+        assert result.count("Instagram/johndoe/messages") == 1
+
+    def test_relative_path_same_platform_different_service(self):
+        """Test ././service notation for same platform/user, different service."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+        )
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_GOOGLE,
+                username="user",
+                service=SERVICE_CHAT,
+                conversation="Work Team",
+                content="Here's the file",
+                timestamp=datetime(2024, 1, 15),
+            ),
+        ]
+        result = build_image_description(primary, secondary)
+
+        assert "Source: Google/user/photos" in result
+        assert "+././chat:" in result
+
+    def test_relative_path_same_platform_different_user(self):
+        """Test ./user/service notation for same platform, different user."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user1",
+            service=SERVICE_PHOTOS,
+        )
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_GOOGLE,
+                username="user2",
+                service=SERVICE_PHOTOS,
+                timestamp=datetime(2024, 1, 15),
+            ),
+        ]
+        result = build_image_description(primary, secondary)
+
+        assert "Source: Google/user1/photos" in result
+        assert "+./user2/photos:" in result
+
+    def test_imessage_consolidation(self):
+        """Test iMessage devices are treated as same source (context folding)."""
+        primary = SourceEntry(
+            processor=PLATFORM_IMESSAGE,
+            username="iph13p",
+            sender="me",
+            conversation="Family Group",
+        )
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_IMESSAGE,
+                username="mac",  # Different device
+                sender="me",
+                conversation="Work Chat",
+                content="For the presentation",
+                timestamp=datetime(2024, 1, 18),
+            ),
+        ]
+        result = build_image_description(primary, secondary)
+
+        # Primary source line
+        assert "Source: iMessage/iph13p" in result
+        # Primary context
+        assert '  - me in "Family Group"' in result
+        # Secondary should be folded (context only, no source path)
+        assert '+me in "Work Chat"' in result
+        # Should NOT show ./mac as a separate source
+        assert "+./mac" not in result
+
+    def test_same_context_skipped(self):
+        """Test duplicate contexts are skipped."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+            sender="me",
+            conversation="Family",
+            content="Vacation pic",
+        )
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_GOOGLE,
+                username="user",
+                service=SERVICE_PHOTOS,
+                sender="me",
+                conversation="Family",
+                content="Vacation pic",  # Same context
+            ),
+        ]
+        result = build_image_description(primary, secondary)
+
+        # Should only have one context line, not duplicated
+        assert result.count("Family") == 1
+
+    def test_mixed_sources(self):
+        """Test mix of same-source and different-source secondaries."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+        )
+        secondary = [
+            # Same source, different context
+            SourceEntry(
+                processor=PLATFORM_GOOGLE,
+                username="user",
+                service=SERVICE_PHOTOS,
+                conversation="Album A",
+            ),
+            # Different service
+            SourceEntry(
+                processor=PLATFORM_GOOGLE,
+                username="user",
+                service=SERVICE_CHAT,
+                conversation="Team Chat",
+            ),
+            # Different platform
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="insta_user",
+                service=SERVICE_MESSAGES,
+                conversation="DMs",
+            ),
+        ]
+        result = build_image_description(primary, secondary)
+
+        # Primary source
+        assert "Source: Google/user/photos" in result
+        # Same-source context should be folded
+        assert '+in "Album A"' in result
+        # Different service uses relative path
+        assert "+././chat:" in result
+        # Different platform uses full path
+        assert "+Instagram/insta_user/messages:" in result
 
 
 class TestCreateSourceEntry:

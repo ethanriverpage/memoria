@@ -45,6 +45,58 @@ SERVICE_STORIES = "stories"
 SERVICE_POSTS = "posts"
 SERVICE_REELS = "reels"
 
+# =============================================================================
+# Processor Name to Platform/Service Mapping
+# =============================================================================
+
+# Maps full processor names (from get_name()) to (platform, service) tuples
+PROCESSOR_TO_PLATFORM_SERVICE: Dict[str, tuple] = {
+    "Google Photos": (PLATFORM_GOOGLE, SERVICE_PHOTOS),
+    "Google Chat": (PLATFORM_GOOGLE, SERVICE_CHAT),
+    "Google Voice": (PLATFORM_GOOGLE, SERVICE_VOICE),
+    "iMessage": (PLATFORM_IMESSAGE, ""),
+    "iMessage-iMazing": (PLATFORM_IMESSAGE, ""),
+    "Instagram Messages": (PLATFORM_INSTAGRAM, SERVICE_MESSAGES),
+    "Instagram Public Media": (PLATFORM_INSTAGRAM, SERVICE_POSTS),
+    "Instaloader": (PLATFORM_INSTAGRAM, SERVICE_POSTS),
+    "Snapchat Messages": (PLATFORM_SNAPCHAT, SERVICE_MESSAGES),
+    "Snapchat Memories": (PLATFORM_SNAPCHAT, SERVICE_MEMORIES),
+    "Discord": (PLATFORM_DISCORD, ""),
+}
+
+# Processors that consolidate multiple exports as a single logical source
+# For these, different usernames (device IDs) are treated as the same source
+CONSOLIDATING_PROCESSORS = {"iMessage", "iMessage-iMazing"}
+
+
+def get_platform_service(processor_name: str) -> tuple:
+    """Convert processor name to (platform, service) tuple.
+
+    Args:
+        processor_name: Full processor name from get_name() (e.g., "Google Photos").
+
+    Returns:
+        Tuple of (platform, service). If processor not found, returns
+        (processor_name, "") as fallback.
+    """
+    return PROCESSOR_TO_PLATFORM_SERVICE.get(processor_name, (processor_name, ""))
+
+
+def is_consolidating_processor(processor_name: str) -> bool:
+    """Check if processor consolidates multiple exports as single source.
+
+    Consolidating processors treat different usernames (e.g., device IDs like
+    iph13p, mac) as the same logical source. This affects how same-source
+    detection works in description building.
+
+    Args:
+        processor_name: Full processor name or platform name.
+
+    Returns:
+        True if processor consolidates exports.
+    """
+    return processor_name in CONSOLIDATING_PROCESSORS
+
 
 @dataclass
 class SourceEntry:
@@ -113,6 +165,198 @@ def format_timestamp(ts: Optional[datetime]) -> str:
     if ts is None:
         return ""
     return ts.strftime("%Y-%m-%d")
+
+
+# =============================================================================
+# Source Comparison and Relative Path Helpers
+# =============================================================================
+
+
+def _same_source(primary: SourceEntry, secondary: SourceEntry) -> bool:
+    """Check if entries are from the same logical source.
+
+    For consolidating processors (like iMessage), different usernames (device IDs)
+    are treated as the same source since they represent the same logical export.
+
+    Args:
+        primary: Primary source entry.
+        secondary: Secondary source entry to compare.
+
+    Returns:
+        True if entries are from the same logical source.
+    """
+    # For consolidating processors, only platform matters (ignore username)
+    if is_consolidating_processor(primary.processor):
+        return primary.processor == secondary.processor
+
+    # For other processors, platform/username/service must all match
+    return (
+        primary.processor == secondary.processor
+        and primary.username == secondary.username
+        and primary.service == secondary.service
+    )
+
+
+def _get_context_key(entry: SourceEntry) -> tuple:
+    """Get a hashable key representing the conversation context.
+
+    Used to deduplicate entries with identical context.
+
+    Args:
+        entry: Source entry.
+
+    Returns:
+        Tuple of (sender, conversation, content_prefix) for deduplication.
+    """
+    content_prefix = entry.content[:50] if entry.content else ""
+    return (entry.sender, entry.conversation, content_prefix)
+
+
+def _has_unique_context(entry: SourceEntry, seen_contexts: set) -> bool:
+    """Check if entry has conversation context not yet seen.
+
+    Args:
+        entry: Source entry to check.
+        seen_contexts: Set of already-seen context keys.
+
+    Returns:
+        True if entry has unique, non-empty context.
+    """
+    context_key = _get_context_key(entry)
+
+    # Empty context is not unique
+    if context_key == ("", "", ""):
+        return False
+
+    # Already seen this context
+    if context_key in seen_contexts:
+        return False
+
+    return True
+
+
+def format_relative_source_path(
+    primary: SourceEntry,
+    secondary: SourceEntry,
+) -> str:
+    """Format secondary source path relative to primary using . notation.
+
+    Uses '.' to represent components that match the primary source,
+    reducing visual redundancy in the output.
+
+    Args:
+        primary: Primary source entry.
+        secondary: Secondary source entry.
+
+    Returns:
+        - "" if same source (should be folded into context lines)
+        - "././service" if same platform/user, different service
+        - "./user/service" if same platform, different user
+        - "Platform/user/service" if different platform
+    """
+    # Same source - should be folded into context lines
+    if _same_source(primary, secondary):
+        return ""
+
+    # Different platform - full path
+    if primary.processor != secondary.processor:
+        parts = [secondary.processor]
+        if secondary.username:
+            parts.append(secondary.username)
+        if secondary.service:
+            parts.append(secondary.service)
+        return "/".join(parts)
+
+    # Same platform, check username
+    if primary.username == secondary.username:
+        # Same platform/user, different service: ././service
+        parts = [".", "."]
+        if secondary.service:
+            parts.append(secondary.service)
+        return "/".join(parts)
+    else:
+        # Same platform, different user: ./user/service
+        parts = ["."]
+        if secondary.username:
+            parts.append(secondary.username)
+        if secondary.service:
+            parts.append(secondary.service)
+        return "/".join(parts)
+
+
+def _format_context_line(
+    entry: SourceEntry,
+    is_secondary: bool = False,
+    max_content: int = 100,
+) -> str:
+    """Format a context line for message/conversation info.
+
+    Args:
+        entry: Source entry with context info.
+        is_secondary: If True, prefix with '+' instead of '  - '.
+        max_content: Maximum characters for content.
+
+    Returns:
+        Formatted context line, or empty string if no context.
+    """
+    if not entry.conversation and not entry.sender and not entry.content:
+        return ""
+
+    parts = []
+
+    # Build sender/conversation part
+    if entry.sender and entry.conversation:
+        parts.append(f'{entry.sender} in "{entry.conversation}"')
+    elif entry.sender:
+        parts.append(entry.sender)
+    elif entry.conversation:
+        parts.append(f'in "{entry.conversation}"')
+
+    # Add content in quotes
+    if entry.content:
+        content = entry.content.replace("\n", " ")
+        content = truncate_text(content, max_content)
+        if parts:
+            parts.append(f': "{content}"')
+        else:
+            parts.append(f'"{content}"')
+
+    # Add timestamp for secondary sources
+    if is_secondary and entry.timestamp:
+        date_str = format_timestamp(entry.timestamp)
+        if date_str:
+            parts.append(f" ({date_str})")
+
+    if not parts:
+        return ""
+
+    # Build the line with proper prefix
+    prefix = "+" if is_secondary else "  - "
+
+    # Combine parts
+    if entry.sender and entry.conversation:
+        result = f'{entry.sender} in "{entry.conversation}"'
+    elif entry.sender:
+        result = entry.sender
+    elif entry.conversation:
+        result = f'in "{entry.conversation}"'
+    else:
+        result = ""
+
+    if entry.content:
+        content = entry.content.replace("\n", " ")
+        content = truncate_text(content, max_content)
+        if result:
+            result += f': "{content}"'
+        else:
+            result = f'"{content}"'
+
+    if is_secondary and entry.timestamp:
+        date_str = format_timestamp(entry.timestamp)
+        if date_str:
+            result += f" ({date_str})"
+
+    return prefix + result
 
 
 # =============================================================================
@@ -331,6 +575,72 @@ def format_secondary_source(entry: SourceEntry, max_chars: int = 250) -> str:
     return truncate_text(result, max_chars)
 
 
+def _format_secondary_with_relative_path(
+    entry: SourceEntry,
+    relative_path: str,
+    max_chars: int = 250,
+) -> str:
+    """Format a secondary source line with relative path notation.
+
+    Uses relative path (e.g., '././service', './user/service') instead of
+    full path when source shares components with primary.
+
+    Args:
+        entry: Secondary source entry.
+        relative_path: Pre-computed relative path (or full path if different platform).
+        max_chars: Maximum characters for this line.
+
+    Returns:
+        Formatted secondary source string.
+    """
+    config = get_dedup_config()
+    msg_truncate = config.msg_truncate
+
+    # Build source prefix with relative path
+    source_prefix = f"+{relative_path}:"
+
+    # Build context using unified message format
+    context_parts = []
+
+    # Sender and conversation in unified format
+    if entry.sender and entry.conversation:
+        context_parts.append(f'{entry.sender} in "{entry.conversation}"')
+    elif entry.sender:
+        context_parts.append(entry.sender)
+    elif entry.conversation:
+        context_parts.append(f'in "{entry.conversation}"')
+
+    # Add truncated content in quotes
+    if entry.content:
+        content = entry.content.replace("\n", " ")
+        truncated_content = truncate_text(content, msg_truncate)
+        context_parts.append(f'"{truncated_content}"')
+
+    # Add timestamp
+    date_str = format_timestamp(entry.timestamp)
+    if date_str:
+        context_parts.append(f"({date_str})")
+
+    # Combine with proper separators
+    if context_parts:
+        # Join sender/conv and content with ": " if both exist
+        if (
+            len(context_parts) >= 2
+            and entry.content
+            and (entry.sender or entry.conversation)
+        ):
+            # Format: sender in "conv": "content" (date)
+            result = (
+                f"{source_prefix} {context_parts[0]}: {' '.join(context_parts[1:])}"
+            )
+        else:
+            result = f"{source_prefix} {' '.join(context_parts)}"
+    else:
+        result = source_prefix.rstrip(":")
+
+    return truncate_text(result, max_chars)
+
+
 def build_image_description(
     primary: SourceEntry,
     secondary: List[SourceEntry],
@@ -339,12 +649,22 @@ def build_image_description(
 ) -> str:
     """Build complete ImageDescription from multiple sources.
 
-    Format:
-    ```
-    Source: Google Photos/johndoe | Vacation 2023, Summer Highlights
-    +Instagram/johndoe: Story "Beach day with the squad!..." (2024-01-15)
-    +iMessage/iph13: John [Family] "Everyone needs to see..." | Jane [Work] "Making you jealous" (2024-01-16)
-    ```
+    Uses relative path notation to minimize redundancy:
+    - Same platform/user, different service: +././service: context
+    - Same platform, different user: +./user/service: context
+    - Different platform: +Platform/user/service: context
+    - Same source, different context: +context (no path, just context line)
+
+    Format examples:
+        Source: Google/ethanriverpage/photos
+        +iMessage/iph13p: Jane in "Family Group": "Check out this photo!" (2024-01-15)
+
+        Source: Google/ethanriverpage/photos
+        +././chat: in "Work Team": "Here's the file" (2024-01-15)
+
+        Source: Instagram/johndoe/messages
+          - alice in "Friends": "Look at this!"
+        +bob in "Family": "Sharing this photo" (2024-01-20)
 
     Args:
         primary: Primary source entry.
@@ -364,15 +684,52 @@ def build_image_description(
 
     lines = []
 
-    # Add primary source (shorter budget)
+    # 1. Add primary source line
     primary_max = min(100, max_per_source)
     lines.append(format_primary_source(primary, primary_max))
 
-    # Calculate remaining budget for secondary sources
-    remaining = max_total - len(lines[0])
+    # 2. Add primary context if present
+    primary_context_line = build_message_context(primary)
+    if primary_context_line:
+        lines.append(primary_context_line)
 
-    # Add secondary sources
+    # Track seen contexts to avoid duplicates
+    seen_contexts: set = set()
+    primary_context_key = _get_context_key(primary)
+    if primary_context_key != ("", "", ""):
+        seen_contexts.add(primary_context_key)
+
+    # Calculate remaining budget
+    remaining = max_total - sum(len(line) + 1 for line in lines)
+
+    # 3. Group secondaries by source identity
+    same_source_entries = []
+    different_source_entries = []
+
     for entry in secondary:
+        if _same_source(primary, entry):
+            same_source_entries.append(entry)
+        else:
+            different_source_entries.append(entry)
+
+    # 4. Add unique contexts from same-source entries as context lines
+    for entry in same_source_entries:
+        if remaining <= 0:
+            break
+
+        if _has_unique_context(entry, seen_contexts):
+            # Add context key to seen set
+            seen_contexts.add(_get_context_key(entry))
+
+            # Format as +context (secondary context line)
+            context_line = _format_context_line(entry, is_secondary=True)
+            if context_line:
+                if len(context_line) + 1 <= remaining:
+                    lines.append(context_line)
+                    remaining -= len(context_line) + 1
+
+    # 5. Add different-source entries with relative path notation
+    for entry in different_source_entries:
         if remaining <= 0:
             break
 
@@ -381,7 +738,13 @@ def build_image_description(
         if source_budget < 50:  # Don't add truncated entries
             break
 
-        line = format_secondary_source(entry, source_budget)
+        # Get relative path
+        relative_path = format_relative_source_path(primary, entry)
+        if not relative_path:
+            # Same source - shouldn't happen but handle gracefully
+            continue
+
+        line = _format_secondary_with_relative_path(entry, relative_path, source_budget)
         lines.append(line)
         remaining -= len(line) + 1  # +1 for newline
 

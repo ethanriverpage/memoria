@@ -225,8 +225,8 @@ class TestCrossProcessorDescriptionBuilding:
 
         assert description is not None
 
-        # Primary source should be present
-        assert "Google Photos" in description
+        # Primary source should use platform name (not full processor name)
+        assert "Source: Google" in description
 
         # Secondary sources should be mentioned with + prefix
         assert "+iMessage" in description or "+Instagram" in description
@@ -236,11 +236,13 @@ class TestCrossProcessorDescriptionBuilding:
     ):
         """Test that merged description follows the format specification.
 
-        Expected format:
-            Source: Google Photos
+        Expected format (new unified format with relative paths):
+            Source: Google/user@gmail.com/photos
             +iMessage/iph13p: Alice in "Family Group": "Check out this..."
-            +iMessage/m3_mbp: ...
-            +Instagram Messages/myinsta/messages: ...
+            +Instagram/myinsta/messages: bestfriend in "Travel Buddies": ...
+
+        Note: iMessage entries are consolidated (context folding applies when
+        same platform has multiple device exports).
         """
         run_id = "test_desc_format"
         write_catalogs_to_db(dedup_service.db, run_id, cross_processor_catalogs)
@@ -251,13 +253,18 @@ class TestCrossProcessorDescriptionBuilding:
         assert description is not None
         lines = description.split("\n")
 
-        # First line should be the primary source
+        # First line should be the primary source with platform/username/service format
         assert lines[0].startswith("Source:")
+        assert "Google" in lines[0]
 
-        # Remaining lines should be secondary sources with + prefix
+        # Remaining lines should be secondary sources or context lines
+        # Secondary sources start with + and may be full paths, relative paths, or context-only
         for line in lines[1:]:
             if line.strip():
-                assert line.startswith("+"), f"Secondary line should start with +: {line}"
+                # Should start with either "  - " (primary context) or "+" (secondary)
+                assert line.startswith("+") or line.startswith("  - "), (
+                    f"Line should start with + or '  - ': {line}"
+                )
 
     def test_secondary_source_includes_context(
         self, dedup_service, cross_processor_catalogs

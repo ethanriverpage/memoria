@@ -994,7 +994,8 @@ class TestMergedDescription:
 
         desc = get_merged_description_for_file(manifest, "/google/photo.jpg")
         assert desc is not None
-        assert "Google Photos" in desc
+        # Uses platform name (Google) not processor name (Google Photos)
+        assert "Source: Google" in desc
         assert "Instagram" in desc
 
     def test_merged_description_for_secondary_returns_none(self):

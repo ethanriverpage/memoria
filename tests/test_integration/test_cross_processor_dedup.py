@@ -377,7 +377,8 @@ class TestMergedDescriptionIntegration:
         desc = get_merged_description_for_file(manifest, primary_path)
 
         assert desc is not None
-        assert "Google Photos" in desc
+        # Uses platform name (Google) not processor name (Google Photos)
+        assert "Source: Google" in desc
         # Secondary sources should be mentioned
         assert "iMessage" in desc or "Instagram" in desc
 

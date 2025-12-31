@@ -23,6 +23,7 @@ from common.dedup.description import (
     SourceEntry,
     build_image_description,
     create_source_entry,
+    get_platform_service,
 )
 from common.dedup.database import HashDatabase
 from common.dedup.hashing import compute_content_hash, hash_similarity
@@ -1344,6 +1345,10 @@ def get_merged_description_for_file(
     that includes provenance information from all sources (primary and
     secondary) where this file appeared.
 
+    Uses platform/service mapping to convert processor names (e.g., "Google Photos")
+    to unified format (e.g., "Google" + "photos"). The description builder handles
+    context folding for same-source entries and relative path notation.
+
     Args:
         manifest: Deduplication manifest.
         source_path: Path to check.
@@ -1360,42 +1365,55 @@ def get_merged_description_for_file(
         if primary_path != source_path:
             continue
 
-        # Build primary source entry
+        # Build primary source entry with platform/service mapping
         primary_processor = primary.get("processor", "Unknown")
+        primary_platform, primary_service = get_platform_service(primary_processor)
+
+        # Get primary context from merged_metadata if available
+        merged_metadata = group.get("merged_metadata", {})
+        primary_context = merged_metadata if merged_metadata else {}
 
         primary_entry = SourceEntry(
-            processor=primary_processor,
+            processor=primary_platform,
+            username=primary_context.get("username", ""),
+            service=primary_service,
             is_primary=True,
+            sender=primary_context.get("sender", ""),
+            conversation=primary_context.get("conversation", ""),
+            content=primary_context.get("content", ""),
         )
 
-        # Build secondary source entries, deduplicated by (processor, username)
-        # This avoids showing multiple identical lines for the same source
-        # (e.g., 4 Google Photos copies from different albums)
+        # Build secondary source entries
+        # Don't filter same-processor entries here - let build_image_description
+        # handle context folding for same-source entries
         secondary_entries = []
-        seen_sources: set = set()
-        seen_sources.add((primary_processor, ""))  # Exclude primary processor
 
         for sec in group.get("secondary", []):
             sec_processor = sec.get("processor", "Unknown")
+            sec_platform, sec_service = get_platform_service(sec_processor)
             sec_context = sec.get("context", {})
-            sec_username = sec_context.get("username", "")
 
-            # Deduplicate by (processor, username)
-            dedup_key = (sec_processor, sec_username)
-            if dedup_key in seen_sources:
-                continue
-            seen_sources.add(dedup_key)
-
-            # Skip same processor as primary
-            if sec_processor == primary_processor:
-                continue
-
-            # Create source entry from context
-            entry = create_source_entry(
-                processor=sec_processor,
-                metadata=sec_context,
+            # Create source entry with platform/service
+            entry = SourceEntry(
+                processor=sec_platform,
+                username=sec_context.get("username", ""),
+                service=sec_service or sec_context.get("service", ""),
                 is_primary=False,
+                sender=sec_context.get("sender", ""),
+                conversation=sec_context.get("conversation", ""),
+                content=sec_context.get("content", ""),
             )
+
+            # Parse timestamp if present
+            ts = sec_context.get("timestamp")
+            if isinstance(ts, str):
+                try:
+                    entry.timestamp = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    pass
+            elif isinstance(ts, datetime):
+                entry.timestamp = ts
+
             secondary_entries.append(entry)
 
         # Build the formatted description
@@ -1413,20 +1431,22 @@ def get_secondary_sources_for_hash(
     content_hash: str,
     primary_processor: str,
 ) -> List[SourceEntry]:
-    """Get deduplicated secondary sources for a content hash.
+    """Get secondary sources for a content hash.
 
-    Looks up the duplicate group by content hash and returns unique
-    (processor, username) combinations, excluding duplicates from the
-    same processor/username as the primary.
+    Looks up the duplicate group by content hash and returns all secondary
+    sources. Uses platform/service mapping for consistent formatting.
+
+    Note: This function no longer filters out same-processor entries.
+    The description builder handles context folding and deduplication.
 
     Args:
         manifest: Deduplication manifest.
         content_hash: Content hash to look up.
-        primary_processor: Processor name of the primary file (to exclude
-            same-processor duplicates from appearing as secondary sources).
+        primary_processor: Processor name of the primary file (used for
+            platform/service mapping).
 
     Returns:
-        List of SourceEntry objects for unique secondary sources.
+        List of SourceEntry objects for secondary sources.
     """
     duplicates = manifest.get("duplicates", {})
 
@@ -1452,37 +1472,40 @@ def get_secondary_sources_for_hash(
     if group is None:
         return []
 
-    # Deduplicate secondary sources by (processor, username)
-    # Only include sources from different processors than the primary
-    seen = set()
-    seen.add((primary_processor, ""))  # Exclude primary processor entirely
-    unique_entries = []
+    # Build secondary source entries with platform/service mapping
+    # Don't filter same-processor entries - let build_image_description
+    # handle context folding
+    entries = []
 
     for sec in group.get("secondary", []):
         sec_processor = sec.get("processor", "Unknown")
+        sec_platform, sec_service = get_platform_service(sec_processor)
         sec_context = sec.get("context", {})
-        sec_username = sec_context.get("username", "")
 
-        # Create dedup key - for non-messaging processors, just use processor name
-        dedup_key = (sec_processor, sec_username)
-
-        if dedup_key in seen:
-            continue
-        seen.add(dedup_key)
-
-        # Skip same processor as primary (e.g., multiple Google Photos albums)
-        if sec_processor == primary_processor:
-            continue
-
-        # Create source entry from context
-        entry = create_source_entry(
-            processor=sec_processor,
-            metadata=sec_context,
+        # Create source entry with platform/service
+        entry = SourceEntry(
+            processor=sec_platform,
+            username=sec_context.get("username", ""),
+            service=sec_service or sec_context.get("service", ""),
             is_primary=False,
+            sender=sec_context.get("sender", ""),
+            conversation=sec_context.get("conversation", ""),
+            content=sec_context.get("content", ""),
         )
-        unique_entries.append(entry)
 
-    return unique_entries
+        # Parse timestamp if present
+        ts = sec_context.get("timestamp")
+        if isinstance(ts, str):
+            try:
+                entry.timestamp = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                pass
+        elif isinstance(ts, datetime):
+            entry.timestamp = ts
+
+        entries.append(entry)
+
+    return entries
 
 
 def get_merged_metadata_for_hash(
