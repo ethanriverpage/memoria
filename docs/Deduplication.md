@@ -481,13 +481,79 @@ When duplicates are found, metadata from all sources is merged:
 
 ### ImageDescription Format
 
-The merged description includes all sources:
+The merged description uses a unified format that minimizes redundancy while preserving provenance from all sources.
 
+#### Format Rules
+
+| Scenario | Format |
+|----------|--------|
+| Primary source | `Source: Platform/username/service` |
+| Primary context (message/conversation) | `- sender in "conversation": "content"` |
+| Same source, secondary context (consolidating processors) | `+sender in "conversation": "content" (date)` |
+| Same platform/username, different service | `+././service: context (date)` |
+| Same platform, different username | `+./different_user/service: context (date)` |
+| Different platform | `+Platform/username/service: context (date)` |
+
+The `.` notation means "same as primary" for that path component, reducing visual noise.
+
+#### Examples
+
+**Different platforms** - full path required:
+
+```text
+Source: Google/ethanriverpage/photos
++iMessage/iph13p: Jane in "Family Group": "Check out this photo!" (2024-01-15)
 ```
-Source: Google/johndoe | Vacation 2023, Summer Highlights
-+Instagram/johndoe: Story "Beach day with the squad!..." (2024-01-15)
-+iMessage/iph13: John [Family] "Everyone needs to see this!" (2024-01-16)
+
+**Same platform/username, different service** - use `././service`:
+
+```text
+Source: Google/ethanriverpage/photos
++././chat: in "Work Team": "Here's the file" (2024-01-15)
 ```
+
+**Same platform, different username** - use `./username/service`:
+
+```text
+Source: Google/ethanriverpage/photos
++./jane.doe/photos: (2024-01-15)
+```
+
+**Same source, multiple conversation contexts** - add context lines:
+
+```text
+Source: Instagram/johndoe/messages
+  - alice in "Friends": "Look at this!"
+  - bob in "Family": "Sharing this photo" (2024-01-20)
+```
+
+**iMessage consolidation** (multiple device exports treated as single source):
+
+```text
+Source: iMessage/iph13p
+  - me in "Family Group"
++me in "Work Chat": "For the presentation" (2024-01-18)
+```
+
+iMessage performs cross-device consolidation, so different device "usernames" (iph13p, mac) are treated as a single logical source. Secondary contexts use `+context` without repeating the source path.
+
+**True duplicates** (same source, same context) - no secondary line:
+
+```text
+Source: Google/ethanriverpage/photos
+```
+
+#### Deduplication Logic
+
+Secondary sources are only shown when they provide unique information:
+
+| Condition | Action |
+|-----------|--------|
+| Different platform | Show with full path |
+| Same platform, different service | Show with `././service` |
+| Same platform, different username | Show with `./username/service` |
+| Same source, different conversation context | Add `- context` or `+context` line |
+| Same source, same context | Skip (true duplicate) |
 
 ### Performance
 

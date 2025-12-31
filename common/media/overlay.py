@@ -724,12 +724,15 @@ def _pass3_combine_and_embed(
         final_description = None
 
     if final_description:
+        # Convert &#xa; (XML entity) to actual newlines for FFmpeg
+        # (&#xa; is used for EXIF/exiftool, but FFmpeg needs literal \n)
+        ffmpeg_description = final_description.replace("&#xa;", "\n")
         cmd.extend(
             [
                 "-metadata",
-                f"comment={final_description}",
+                f"comment={ffmpeg_description}",
                 "-metadata",
-                f"description={final_description}",
+                f"description={ffmpeg_description}",
             ]
         )
 
