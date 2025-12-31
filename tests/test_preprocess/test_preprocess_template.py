@@ -101,7 +101,7 @@ class TestTemplateEnforcement:
         from processors.google_photos.preprocess import GooglePhotosPreprocessor
         from processors.imessage.preprocess import IMessagePreprocessor
         from processors.imessage_imazing.preprocess import ImazingPreprocessor
-        from processors.snapchat_messages.preprocess import SnapchatPreprocessor
+        from processors.snapchat_messages.preprocess import SnapchatMessagesPreprocessor
 
         # All should be subclasses of PreprocessorBase
         assert issubclass(InstagramPreprocessor, PreprocessorBase)
@@ -113,7 +113,7 @@ class TestTemplateEnforcement:
         assert issubclass(GooglePhotosPreprocessor, PreprocessorBase)
         assert issubclass(IMessagePreprocessor, PreprocessorBase)
         assert issubclass(ImazingPreprocessor, PreprocessorBase)
-        assert issubclass(SnapchatPreprocessor, PreprocessorBase)
+        assert issubclass(SnapchatMessagesPreprocessor, PreprocessorBase)
 
     def test_missing_get_content_key_raises_error_at_class_definition(self):
         """Preprocessor missing get_content_key should fail at class definition time."""
@@ -555,7 +555,7 @@ class TestProductionPreprocessorStats:
         from processors.google_photos.preprocess import GooglePhotosPreprocessor
         from processors.imessage.preprocess import IMessagePreprocessor
         from processors.imessage_imazing.preprocess import ImazingPreprocessor
-        from processors.snapchat_messages.preprocess import SnapchatPreprocessor
+        from processors.snapchat_messages.preprocess import SnapchatMessagesPreprocessor
 
         return {
             "instagram_public_media": InstagramPreprocessor,
@@ -567,7 +567,7 @@ class TestProductionPreprocessorStats:
             "google_photos": GooglePhotosPreprocessor,
             "imessage": IMessagePreprocessor,
             "imessage_imazing": ImazingPreprocessor,
-            "snapchat_messages": SnapchatPreprocessor,
+            "snapchat_messages": SnapchatMessagesPreprocessor,
         }
 
     def test_all_preprocessors_preserve_shared_stats_keys(

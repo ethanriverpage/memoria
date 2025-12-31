@@ -56,8 +56,8 @@ logger = logging.getLogger(__name__)
 # Default dhash size (16x16 grid = 256-bit hash)
 DEFAULT_HASH_SIZE = 16
 
-# Import extension definitions from utils.py (single source of truth)
-from common.utils import (  # noqa: E402
+# Import extension definitions from files/types.py (single source of truth)
+from common.files.types import (
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
     LIVE_PHOTO_IMAGE_EXTENSIONS,

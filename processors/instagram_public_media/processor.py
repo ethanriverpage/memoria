@@ -15,7 +15,6 @@ from common.dedup.service import (
     get_canonical_timestamp,
     save_dedup_metadata,
 )
-from common.failure_tracker import FailureTracker
 from common.dedup.description import (
     SourceEntry,
     build_description,
@@ -24,6 +23,9 @@ from common.dedup.description import (
     SERVICE_POSTS,
     SERVICE_REELS,
 )
+from common.detection import detect_from_dirname
+from common.failures import FailureTracker
+from common.files.naming import FilenameGenerator
 from common.files.utils import short_path
 from common.media.exiftool import (
     DescriptionWriteSpec,
@@ -31,13 +33,10 @@ from common.media.exiftool import (
     PREAMBLE_WITH_IGNORE_ERRORS,
     build_datetime_tags,
 )
-from common.processing import process_batches_parallel, print_processing_summary
-from common.detection import detect_from_dirname
-from common.utils import (
-    FilenameGenerator,
-)
 from common.output.logging import get_processor_logger
 from common.output.paths import OutputInfo
+from common.output.summary import print_processing_summary
+from common.processing import process_batches_parallel
 from processors.base import MediaCopyTask, ProcessorBase
 from processors.instagram_public_media.preprocess import InstagramPreprocessor
 
@@ -445,7 +444,7 @@ def _process_working_directory(
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # Determine number of workers
-    from common.utils import default_worker_count
+    from common.config.runtime import default_worker_count
 
     num_workers = workers if workers is not None else default_worker_count()
     log.using_workers(num_workers)

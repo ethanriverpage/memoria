@@ -17,19 +17,16 @@ from pathlib import Path
 
 import pytest
 
-from common.detection import detect_from_dirname
-from common.utils import (
-    sanitize_filename,
-    FilenameGenerator,
-    update_file_timestamps,
-    default_worker_count,
-)
-from common.validation.invariants import InvariantViolation
-from common.files.filter import BannedFilesFilter
-from common.files.scanner import iter_media_files, collect_media_files
-from common.files.utils import batch_correct_extensions
-from common.failure_tracker import FailureTracker
+from common.config.runtime import default_worker_count
 from common.dedup.hashing import compute_content_hash
+from common.detection import detect_from_dirname
+from common.failures import FailureTracker
+from common.files.filter import BannedFilesFilter
+from common.files.naming import sanitize_filename, FilenameGenerator
+from common.files.scanner import iter_media_files, collect_media_files
+from common.files.timestamps import update_file_timestamps
+from common.files.utils import batch_correct_extensions
+from common.validation.invariants import InvariantViolation
 
 
 # ============================================================================

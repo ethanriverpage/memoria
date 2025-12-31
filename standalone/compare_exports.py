@@ -25,7 +25,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from common.output.logging import setup_logging, get_logs_dir
-from common.utils import ALL_MEDIA_EXTENSIONS
+from common.files.types import ALL_MEDIA_EXTENSIONS
 
 # Try to import tqdm for progress bars
 try:

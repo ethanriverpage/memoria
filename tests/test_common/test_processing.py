@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for common/processing.py module.
+"""Unit tests for the `common.processing` package.
 
 Tests:
 - Preprocessing cache path generation

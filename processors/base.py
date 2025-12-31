@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 if TYPE_CHECKING:
-    from common.failure_tracker import FailureTracker
+    from common.failures import FailureTracker
     from common.media.exiftool import BatchWriteOutcome
 
-from common.dependency_checker import (
+from common.config.dependencies import (
     check_exiftool,
     check_ffmpeg,
     check_pillow,
@@ -22,6 +22,7 @@ from common.dependency_checker import (
     print_ffmpeg_error,
     print_pillow_error,
 )
+from common.files.utils import short_path
 from common.metadata.schema import validate_metadata
 from common.output.paths import OutputInfo
 from common.output.progress import PHASE_PROCESS
@@ -32,7 +33,6 @@ from common.processing import (
 from common.validation.invariants import (
     require_non_unknown_username,
 )
-from common.files.utils import short_path
 
 logger = logging.getLogger(__name__)
 
@@ -1241,7 +1241,7 @@ class ProcessorBase(ABC):
         files have correct extensions for proper metadata embedding.
         """
         from common.files.utils import copy_file
-        from common.utils import update_file_timestamps
+        from common.files.timestamps import update_file_timestamps
 
         results: List[Tuple] = []
         file_info: List[Tuple] = []

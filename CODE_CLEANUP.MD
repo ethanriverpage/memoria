@@ -19,24 +19,6 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Works (callers import from `common.preprocess.context_mergers`), but increases drift and inconsistent "public API" conventions.
 - **Confidence**: **High**
 
-##### Finding 73 — `common/utils.py` is a "kitchen sink" module violating SRP
-
-- **Category**: SRP violation
-- **Location**: `common/utils.py` (~336 lines)
-- **Description & evidence**
-  - Contains unrelated functionality grouped together:
-    - Media type detection and extension constants (lines 17-78)
-    - Text normalization (lines 80-123)
-    - Filename sanitization and generation (lines 126-280)
-    - Worker count computation (lines 282-286)
-    - Environment variable parsing (lines 289-298)
-    - File timestamp utilities (lines 301-336)
-  - Changes to media types require touching the same file as changes to filename generation.
-  - Should split into: `common/media/types.py`, `common/text/normalization.py`, `common/config/workers.py`, `common/files/timestamps.py`
-- **Impact**
-  - **Medium**: Maintainability overhead; changes touch unrelated code.
-- **Confidence**: **High**
-
 ##### Finding 74 — `HashDatabase` is a concrete class with no abstract interface
 
 - **Category**: DIP violation
@@ -53,10 +35,10 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 ##### Finding 75 — Environment variable parsing is scattered across multiple modules
 
 - **Category**: DRY violation
-- **Location**: `common/utils.py`, `common/processing.py`, `common/dedup/service.py`, `common/dedup/config.py`
+- **Location**: `common/config/runtime.py`, `common/processing/cache.py`, `common/dedup/service.py`, `common/dedup/config.py`
 - **Description & evidence**
-  - `common/utils.py`: `parse_bool_env()`, `should_cleanup_preprocessing()` (lines 289-298)
-  - `common/processing.py`: `CLEANUP_PREPROCESSING_CACHE` (lines 72-91)
+  - `common/config/runtime.py`: `parse_bool_env()`, `should_cleanup_preprocessing()`
+  - `common/processing/cache.py`: preprocessing cache cleanup behavior
   - `common/dedup/service.py`: `PARALLEL_DEDUP` (line 408)
   - `common/dedup/config.py`: Multiple dedup-related env vars (lines 97-155)
   - Hard to find all configuration points; violates DRY.
@@ -95,9 +77,9 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 ##### Finding 79 — Circular import workarounds via lazy imports
 
 - **Category**: Architectural smell
-- **Location**: `common/processing.py`, `common/media/exiftool.py`
+- **Location**: `common/processing/cache.py`, `common/media/exiftool.py`
 - **Description & evidence**
-  - `common/processing.py` (lines 39, 74): `from common.dedup.config import get_dedup_config`
+  - `common/processing/cache.py` (lines 13, 48): `from common.dedup.config import get_dedup_config`
   - `common/media/exiftool.py` (line 767): `from common.dedup.service import get_merged_metadata_for_hash`
   - `common/media/exiftool.py` (line 898): `from common.dedup.service import get_secondary_sources_for_hash`
   - Lazy imports add overhead on each call, hide dependencies from static analysis, make dependency graph unclear.
@@ -108,7 +90,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 ##### Finding 80 — Inconsistent type hints in processing functions
 
 - **Category**: Type safety gap
-- **Location**: `common/processing.py` (lines 117-161)
+- **Location**: `common/processing/batch.py`
 - **Description & evidence**
   - TypeVars T, R are defined (lines 31-32) and used in `process_items_parallel()` (line 164).
   - But `process_batches_parallel()` (line 117) still uses `List[Any]`:
@@ -161,7 +143,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 ##### Finding 82 — `FailureTracker` handles both tracking and report generation
 
 - **Category**: SRP violation
-- **Location**: `common/failure_tracker.py`
+- **Location**: `common/failures/tracker.py`
 - **Description & evidence**
   - Class handles:
     1. Failure tracking (adding entries, counting)
@@ -186,7 +168,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 ##### Finding 84 — `get_media_type()` returns magic strings instead of Enum
 
 - **Category**: Type safety gap
-- **Location**: `common/utils.py`
+- **Location**: `common/files/types.py`
 - **Description & evidence**
   - Returns `"image"`, `"video"`, or `None` as strings.
   - String comparisons are error-prone and not caught by static analysis.
@@ -742,17 +724,6 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 
 #### 2.5 Code Quality Findings
 
-##### Finding Q1 — Orphaned backwards-compat re-export comment
-
-- **Category**: Dead code / misleading comment
-- **Location**: `common/utils.py:14`
-- **Description & evidence**
-  - Comment states: `# Re-export logging functions from centralized logging module for backwards compatibility`
-  - No actual re-exports follow the comment.
-- **Impact**
-  - **Very Low**: Misleading but harmless.
-- **Confidence**: **High**
-
 ##### Finding Q2 — TODO in test code referencing untracked bug
 
 - **Category**: Incomplete implementation
@@ -772,7 +743,8 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - `processors/imessage/processor.py:97, 372`
   - `processors/imessage_imazing/processor.py:62, 72, 102, 300`
   - `common/media/exiftool.py:430, 507, 755`
-  - `common/utils.py:187, 193`
+  - `common/files/utils.py:156, 172`
+  - `common/text/parse.py:39, 45`
   - `common/dedup/hashing.py:48, 352, 403`
 - **Description & evidence**
   - Many are intentional fallback logic (e.g., trying multiple parse formats).
@@ -786,7 +758,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 - **Category**: DRY violation
 - **Location**: `standalone/sample_metadata_audit.py:26-29`
 - **Description & evidence**
-  - Defines local `MEDIA_EXTENSIONS` instead of importing from `common.utils`.
+  - Defines local `MEDIA_EXTENSIONS` instead of importing from `common.files.types` (e.g., `ALL_MEDIA_EXTENSIONS`).
 - **Impact**
   - **Very Low**: Standalone script isolation, but risks drift.
 - **Confidence**: **High**

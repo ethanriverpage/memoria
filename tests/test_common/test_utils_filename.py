@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Unit tests for FilenameGenerator class in common/utils.py."""
+"""Unit tests for `common.files.naming.FilenameGenerator`."""
 
 import pytest
 
-from common.utils import FilenameGenerator
+from common.files.naming import FilenameGenerator
 from common.validation.invariants import InvariantViolation
 
 

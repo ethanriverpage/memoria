@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from common.utils import parse_bool_env
+from common.config.runtime import parse_bool_env
 
 
 def _base_env(url: Optional[str], key: Optional[str]) -> dict:

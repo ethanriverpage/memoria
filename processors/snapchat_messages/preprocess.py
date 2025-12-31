@@ -18,9 +18,9 @@ import re
 
 from common.detection import DetectionResult
 from common.files.scanner import iter_files
-from common.preprocess.context_mergers import merge_snapchat_context
 from common.output.logging import get_processor_logger
-from common.processing import print_preprocessing_stats
+from common.output.summary import print_preprocessing_stats
+from common.preprocess.context_mergers import merge_snapchat_context
 from processors.preprocess_base import PreprocessorBase, CopyTask
 
 # Standard logger for worker processes and exception logging
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 log = get_processor_logger(__name__)
 
 
-class SnapchatPreprocessor(PreprocessorBase):
+class SnapchatMessagesPreprocessor(PreprocessorBase):
     """Preprocesses Snapchat export by organizing files and cleaning metadata"""
 
     def __init__(
@@ -239,7 +239,7 @@ class SnapchatPreprocessor(PreprocessorBase):
 
     def get_media_type(self, filename: str) -> str:
         """Determine if file is image or video based on extension - use common utility"""
-        from common.utils import get_media_type as common_get_media_type
+        from common.files.types import get_media_type as common_get_media_type
 
         result = common_get_media_type(filename)
         return result if result else "unknown"

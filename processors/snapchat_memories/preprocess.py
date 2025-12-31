@@ -16,9 +16,9 @@ from typing import Any, Dict, List, Optional
 
 from common.detection import DetectionResult
 from common.files.scanner import iter_files
+from common.files.types import get_media_type
 from common.output.logging import get_processor_logger
-from common.processing import print_preprocessing_stats
-from common.utils import get_media_type
+from common.output.summary import print_preprocessing_stats
 from processors.preprocess_base import PreprocessorBase, CopyTask
 
 # Standard logger for worker processes and exception logging

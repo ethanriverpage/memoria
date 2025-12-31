@@ -273,7 +273,7 @@ Two distinct cases appear in logs:
 
 ### Entry Points
 
-- **FailureTracker** (`common/failure_tracker.py`):
+- **FailureTracker** (`common/failures/tracker.py`):
   - `add_orphaned_media()` - track unmatched media files for `issues/failed-matching/`
   - `add_orphaned_metadata()` - track unmatched metadata entries
   - `add_processing_failure()` - track failed outputs for `issues/failed-processing/`
@@ -284,7 +284,7 @@ Two distinct cases appear in logs:
   - `require_non_unknown_username()` - hard-fail if username is None or "unknown"
   - `validate_gps()` - hard-fail if GPS is (0.0, 0.0) or out of valid range
 
-- **FilenameGenerator** (`common/utils.py`):
+- **FilenameGenerator** (`common/files/naming.py`):
   - `generate()` raises `InvariantViolation` if timestamp is missing or unparseable
 
 - **EXIF batch outcomes** (`common/media/exiftool.py`):

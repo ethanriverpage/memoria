@@ -19,10 +19,10 @@ from typing import Optional
 import pytest
 from hypothesis import given, assume, settings, strategies as st, HealthCheck
 
-from common.utils import sanitize_filename, FilenameGenerator
-from common.validation.invariants import InvariantViolation
-from common.files.filter import BannedFilesFilter
 from common.dedup.hashing import compute_content_hash
+from common.files.filter import BannedFilesFilter
+from common.files.naming import sanitize_filename, FilenameGenerator
+from common.validation.invariants import InvariantViolation
 
 
 # ============================================================================

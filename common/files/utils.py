@@ -270,9 +270,9 @@ MIME_TO_EXTENSION = {
     "audio/x-m4a": ".m4a",
 }
 
-# Import extension definitions from utils.py (single source of truth)
-# These are used for cross-category validation in detect_and_correct_extension()
-from common.utils import (  # noqa: E402
+# Import extension definitions from types.py (single source of truth)
+# These are used for cross-category validation in batch_correct_extensions()
+from common.files.types import (
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
     AUDIO_EXTENSIONS,

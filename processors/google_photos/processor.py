@@ -11,11 +11,14 @@ from common.dedup.description import (
     PLATFORM_GOOGLE,
     SERVICE_PHOTOS,
 )
-from common.failure_tracker import FailureTracker
+from common.config.runtime import default_worker_count
 from common.dedup.service import (
     get_canonical_timestamp,
     save_dedup_metadata,
 )
+from common.detection import detect_from_dirname
+from common.failures import FailureTracker
+from common.files.naming import FilenameGenerator
 from common.media.exiftool import (
     DescriptionWriteSpec,
     GPSData,
@@ -24,16 +27,9 @@ from common.media.exiftool import (
     build_datetime_tags,
 )
 from common.output.logging import get_processor_logger
-from common.processing import (
-    process_batches_parallel,
-    print_processing_summary,
-)
-from common.detection import detect_from_dirname
-from common.utils import (
-    default_worker_count,
-    FilenameGenerator,
-)
 from common.output.paths import OutputInfo
+from common.output.summary import print_processing_summary
+from common.processing import process_batches_parallel
 from processors.base import MediaCopyTask, ProcessorBase
 from processors.google_photos.preprocess import GooglePhotosPreprocessor
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Unit tests for common/failure_tracker.py FailureTracker class."""
+"""Unit tests for `common.failures.tracker.FailureTracker`."""
 
 import json
 
 import pytest
 
-from common.failure_tracker import FailureTracker
+from common.failures import FailureTracker
 
 
 class TestFailureTrackerInit:

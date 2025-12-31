@@ -25,10 +25,14 @@ class TestGoogleChatPreprocessing:
         """Should preprocess export with both Groups and Users directories."""
         from processors.google_chat.preprocess import GoogleChatPreprocessor
 
-        copy_export_fixture("google_chat", "groups_and_users", temp_export_dir)
+        # Username detection requires either Profile/Profile.json or a dirname pattern.
+        # Use a dirname that matches detect_from_dirname(..., "google").
+        export_dir = temp_export_dir / "google-testuser-20240101"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        copy_export_fixture("google_chat", "groups_and_users", export_dir)
 
         preprocessor = GoogleChatPreprocessor(
-            export_path=temp_export_dir,
+            export_path=export_dir,
             output_dir=temp_output_dir,
         )
         result = preprocessor.run()
@@ -52,10 +56,12 @@ class TestGoogleChatPreprocessing:
         """Should correctly parse doc-style timestamp strings during preprocessing."""
         from processors.google_chat.preprocess import GoogleChatPreprocessor
 
-        copy_export_fixture("google_chat", "doc_timestamp_format", temp_export_dir)
+        export_dir = temp_export_dir / "google-testuser-20240101"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        copy_export_fixture("google_chat", "doc_timestamp_format", export_dir)
 
         preprocessor = GoogleChatPreprocessor(
-            export_path=temp_export_dir,
+            export_path=export_dir,
             output_dir=temp_output_dir,
         )
         result = preprocessor.run()

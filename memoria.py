@@ -39,22 +39,22 @@ from common.output.logging import (  # noqa: E402
     remove_export_log_handler,
     get_logs_dir,
 )
-from common.config.env import load_dotenv_file  # noqa: E402
-from common.dependency_checker import (  # noqa: E402
+from common.config.dependencies import (  # noqa: E402
     check_immich_cli,
     print_immich_error,
 )
-from common.upload.targets import build_upload_targets  # noqa: E402
-from common.upload.immich import verify_auth, upload as immich_upload  # noqa: E402
-from common.output.paths import build_processor_output_path  # noqa: E402
+from common.config.env import load_dotenv_file  # noqa: E402
 from common.dedup.config import is_dedup_enabled, get_dedup_config  # noqa: E402
-from common.dedup.service import DeduplicationService, save_manifest  # noqa: E402
 from common.dedup.database import HashDatabase  # noqa: E402
+from common.dedup.service import DeduplicationService, save_manifest  # noqa: E402
 from common.output.console import console, section_header, phase_header  # noqa: E402
+from common.output.paths import build_processor_output_path  # noqa: E402
 from common.processing import (  # noqa: E402
     get_preprocessing_cache_path,
     is_preprocessing_cache_valid,
 )
+from common.upload.immich import verify_auth, upload as immich_upload  # noqa: E402
+from common.upload.targets import build_upload_targets  # noqa: E402
 
 
 def upload_worker_thread(
@@ -1822,7 +1822,7 @@ Examples:
     )
 
     # Read skip_hash from environment variable (default to True for speed)
-    from common.utils import parse_bool_env
+    from common.config.runtime import parse_bool_env
 
     env_skip_hash = os.environ.get("IMMICH_SKIP_HASH")
     immich_skip_hash = (

@@ -6,6 +6,7 @@ This package provides:
 - Centralized logging configuration
 - Progress bar utilities with phase prefixes
 - Output path configuration for Platform/User/Service structure
+- Processing summary display
 """
 
 from common.output.console import console, section_header, phase_header, is_subprocess
@@ -20,6 +21,10 @@ from common.output.progress import (
     PHASE_EXIF,
     PHASE_CATALOG,
     PHASE_DEDUP,
+)
+from common.output.summary import (
+    print_processing_summary,
+    print_preprocessing_stats,
 )
 
 __all__ = [
@@ -43,4 +48,7 @@ __all__ = [
     "PHASE_EXIF",
     "PHASE_CATALOG",
     "PHASE_DEDUP",
+    # Summary
+    "print_processing_summary",
+    "print_preprocessing_stats",
 ]

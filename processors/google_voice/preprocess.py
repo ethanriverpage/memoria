@@ -17,11 +17,11 @@ from datetime import datetime
 from collections import defaultdict
 from html.parser import HTMLParser
 
-from common.processing import print_preprocessing_stats
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
 from common.files.scanner import iter_files
+from common.files.types import ALL_MEDIA_EXTENSIONS
 from common.output.logging import get_processor_logger
-from common.utils import ALL_MEDIA_EXTENSIONS
+from common.output.summary import print_preprocessing_stats
 from processors.preprocess_base import CopyTask, PreprocessorBase
 
 # Standard logger for worker processes and exception logging

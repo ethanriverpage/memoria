@@ -27,9 +27,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from common.files.filter import BannedFilesFilter
-from common.output.progress import PHASE_EXIF, chunked_progress
-from common.utils import get_media_type, get_gps_format
+from common.files.types import get_media_type, get_gps_format
 from common.files.utils import short_path
+from common.output.progress import PHASE_EXIF, chunked_progress
 from common.validation.invariants import InvariantViolation, validate_gps
 
 logger = logging.getLogger(__name__)
@@ -971,7 +971,7 @@ def _build_remux_metadata(
 
 
 def batch_validate_exif(file_paths: Sequence[Optional[str]]) -> Set[str]:
-    from common.utils import EXIF_BEARING_EXTENSIONS
+    from common.files.types import EXIF_BEARING_EXTENSIONS
 
     # Filter out None values
     valid_paths = [p for p in file_paths if p is not None]

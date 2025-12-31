@@ -30,15 +30,15 @@ from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 import json
 
+from common.config.runtime import default_worker_count
 from common.dedup.config import get_dedup_config
 from common.dedup.database import get_thread_db
 from common.dedup.hashing import compute_content_hash
 from common.detection import DetectionResult, detect_from_dirname
-from common.failure_tracker import FailureTracker
+from common.failures import FailureTracker
 from common.files.filter import BannedFilesFilter
 from common.metadata.schema import validate_metadata, CONTENT_KEYS
 from common.output.progress import PHASE_PREPROCESS, futures_progress
-from common.utils import default_worker_count
 from common.validation.invariants import (
     InvariantViolation,
     require_non_unknown_username,
@@ -365,7 +365,7 @@ class PreprocessorBase(ABC):
         automatically cleaned up on context exit unless temp cleanup is disabled.
 
         Cleanup behavior is controlled by `DISABLE_PREPROCESSING_CLEANUP` via
-        `common.utils.should_cleanup_preprocessing()`.
+        `common.config.runtime.should_cleanup_preprocessing()`.
 
         Args:
             base_dir: Base directory under which to create the temp directory.

@@ -21,16 +21,16 @@ from typing import Dict, List, Optional, Tuple
 
 from common.detection import DetectionResult
 from common.files.scanner import iter_files
-from common.output.logging import get_processor_logger
-from common.preprocess.context_mergers import merge_imessage_context
-from common.processing import print_preprocessing_stats
-from common.output.progress import PHASE_PREPROCESS, progress_bar
-from common.utils import (
+from common.files.types import (
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
     AUDIO_EXTENSIONS,
     ALL_EXTENSIONS as ALL_MEDIA_EXTENSIONS,
 )
+from common.output.logging import get_processor_logger
+from common.output.progress import PHASE_PREPROCESS, progress_bar
+from common.output.summary import print_preprocessing_stats
+from common.preprocess.context_mergers import merge_imessage_context
 from processors.preprocess_base import CopyTask, PreprocessorBase
 
 # Standard logger for worker processes and exception logging

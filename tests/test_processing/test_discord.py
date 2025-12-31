@@ -64,9 +64,11 @@ class TestDiscordPreprocessing:
         with open(temp_output_dir / "metadata.json") as f:
             output_metadata = json.load(f)
 
-        # Should have processed channels
-        channels = output_metadata.get("channels", {})
-        assert len(channels) > 0, "Should have processed channels"
+        # This fixture has no attachments; the preprocessor will drop empty conversations.
+        # The regression check here is that string channel types are accepted and preprocessing completes.
+        export_info = output_metadata.get("export_info", {})
+        assert export_info.get("total_channels") == 3
+        assert export_info.get("total_attachments") == 0
 
 
 class TestDiscordFixtureStructure:

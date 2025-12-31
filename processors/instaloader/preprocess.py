@@ -20,12 +20,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
-from common.output.progress import PHASE_PREPROCESS
-from common.processing import print_preprocessing_stats, process_parallel_threaded
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
 from common.files.scanner import iter_files
+from common.files.types import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from common.output.logging import get_processor_logger
-from common.utils import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, normalize_text
+from common.output.progress import PHASE_PREPROCESS
+from common.output.summary import print_preprocessing_stats
+from common.processing import process_parallel_threaded
+from common.text.normalize import normalize_text
 from processors.preprocess_base import CopyTask, PreprocessorBase
 
 # Standard logger for worker processes and exception logging

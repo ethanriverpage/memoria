@@ -23,12 +23,13 @@ from common.media.probe import (
     quick_isobmff_header_check,
     get_video_metadata_with_failure,
 )
-from common.preprocess.context_mergers import merge_imessage_context
-from common.processing import print_preprocessing_stats, process_parallel_threaded
-from common.output.progress import PHASE_PREPROCESS, progress_bar
 from common.dedup import compute_content_hash
-from common.utils import get_media_type
+from common.files.types import get_media_type
 from common.output.logging import get_processor_logger
+from common.output.progress import PHASE_PREPROCESS, progress_bar
+from common.output.summary import print_preprocessing_stats
+from common.preprocess.context_mergers import merge_imessage_context
+from common.processing import process_parallel_threaded
 from processors.imessage.vcard_parser import VCardParser
 from processors.preprocess_base import CopyTask, PreprocessorBase
 

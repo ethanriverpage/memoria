@@ -16,31 +16,26 @@ from common.dedup.service import (
     get_live_photo_base_for_hash,
     save_dedup_metadata,
 )
-from common.failure_tracker import FailureTracker
+from common.config.runtime import default_worker_count
 from common.dedup.description import (
     SourceEntry,
     build_source_line,
     build_message_context,
     PLATFORM_IMESSAGE,
 )
-from common.files.utils import copy_file
+from common.failures import FailureTracker
+from common.files.naming import FilenameGenerator
+from common.files.timestamps import update_file_timestamps
+from common.files.utils import copy_file, short_path
 from common.media.exiftool import (
     DEFAULT_PREAMBLE,
     DescriptionWriteSpec,
     MetadataWriteRequest,
     build_datetime_tags,
 )
-from common.processing import (
-    print_processing_summary,
-)
-from common.utils import (
-    default_worker_count,
-    FilenameGenerator,
-    update_file_timestamps,
-)
 from common.output.logging import get_processor_logger
 from common.output.paths import OutputInfo
-from common.files.utils import short_path
+from common.output.summary import print_processing_summary
 from processors.base import ProcessorBase
 from processors.imessage.preprocess import IMessagePreprocessor
 

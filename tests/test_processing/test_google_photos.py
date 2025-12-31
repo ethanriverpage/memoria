@@ -41,9 +41,13 @@ class TestGooglePhotosPreprocessing:
         self, preprocessor_factory, temp_export_dir, temp_output_dir
     ):
         """Should preprocess Takeout-style export and produce metadata.json."""
-        copy_export_fixture("google_photos", "takeout_basic", temp_export_dir)
+        # Username detection requires either Profile/Profile.json or a dirname pattern.
+        # Use a dirname that matches detect_from_dirname(..., "google").
+        export_dir = temp_export_dir / "google-testuser-20240101"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        copy_export_fixture("google_photos", "takeout_basic", export_dir)
 
-        preprocessor = preprocessor_factory(temp_export_dir, temp_output_dir)
+        preprocessor = preprocessor_factory(export_dir, temp_output_dir)
         result = preprocessor.run()
 
         assert result is True, "Preprocessing should succeed"
@@ -68,9 +72,11 @@ class TestGooglePhotosPreprocessing:
         self, preprocessor_factory, temp_export_dir, temp_output_dir
     ):
         """Preprocessing should save content_hash in metadata.json for dedup."""
-        copy_export_fixture("google_photos", "takeout_basic", temp_export_dir)
+        export_dir = temp_export_dir / "google-testuser-20240101"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        copy_export_fixture("google_photos", "takeout_basic", export_dir)
 
-        preprocessor = preprocessor_factory(temp_export_dir, temp_output_dir)
+        preprocessor = preprocessor_factory(export_dir, temp_output_dir)
         result = preprocessor.run()
         assert result is True
 
@@ -92,11 +98,13 @@ class TestGooglePhotosPreprocessing:
         self, preprocessor_factory, temp_export_dir, temp_output_dir
     ):
         """Should identify and track duplicates across albums in metadata."""
+        export_dir = temp_export_dir / "google-testuser-20240101"
+        export_dir.mkdir(parents=True, exist_ok=True)
         copy_export_fixture(
-            "google_photos", "takeout_duplicate_album_vs_library", temp_export_dir
+            "google_photos", "takeout_duplicate_album_vs_library", export_dir
         )
 
-        preprocessor = preprocessor_factory(temp_export_dir, temp_output_dir)
+        preprocessor = preprocessor_factory(export_dir, temp_output_dir)
         result = preprocessor.run()
         assert result is True
 
@@ -115,11 +123,11 @@ class TestGooglePhotosPreprocessing:
         self, preprocessor_factory, temp_export_dir, temp_output_dir
     ):
         """Should handle files without JSON metadata using filesystem fallback."""
-        copy_export_fixture(
-            "google_photos", "takeout_missing_json_some", temp_export_dir
-        )
+        export_dir = temp_export_dir / "google-testuser-20240101"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        copy_export_fixture("google_photos", "takeout_missing_json_some", export_dir)
 
-        preprocessor = preprocessor_factory(temp_export_dir, temp_output_dir)
+        preprocessor = preprocessor_factory(export_dir, temp_output_dir)
         result = preprocessor.run()
         assert result is True
 
@@ -127,11 +135,23 @@ class TestGooglePhotosPreprocessing:
             output_metadata = json.load(f)
 
         media_files = output_metadata.get("media_files", [])
-        
-        # Should have processed files both with and without JSON metadata
-        assert len(media_files) >= 2, "Should have processed multiple files"
-        
-        # At least one file should have created timestamp (from JSON or fallback)
+
+        # One file is expected to match metadata; the other is expected to be tracked as a
+        # matching failure (orphaned media) when no JSON exists.
+        assert len(media_files) >= 1, "Should have processed at least one file"
+
+        export_info = output_metadata.get("export_info", {})
+        assert export_info.get("total_media_files") == 2
+        assert export_info.get("unmatched_files") == 1
+
+        # FailureTracker should record the missing-metadata media file.
+        failure_report_path = temp_output_dir / "issues" / "failure-report.json"
+        assert failure_report_path.exists(), "Failure report should exist"
+        failure_report = json.loads(failure_report_path.read_text())
+        orphaned_media = failure_report.get("failed_matching", {}).get("orphaned_media", [])
+        assert len(orphaned_media) == 1
+
+        # Entries should always include source_path.
         for entry in media_files:
             assert "source_path" in entry, "Each entry should have source_path"
 

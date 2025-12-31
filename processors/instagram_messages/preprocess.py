@@ -17,8 +17,9 @@ from bs4 import BeautifulSoup
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
 from common.files.scanner import iter_subdirs, iter_media_files
 from common.output.logging import get_processor_logger
-from common.processing import print_preprocessing_stats, process_parallel_threaded
 from common.output.progress import PHASE_PREPROCESS
+from common.output.summary import print_preprocessing_stats
+from common.processing import process_parallel_threaded
 from processors.preprocess_base import PreprocessorBase, CopyTask
 
 # Standard logger for worker processes and exception logging

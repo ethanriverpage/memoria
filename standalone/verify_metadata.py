@@ -23,7 +23,7 @@ from typing import Any, Dict, Optional, Tuple
 # Add parent directory to path for imports when running standalone
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from common.utils import ALL_MEDIA_EXTENSIONS
+from common.files.types import ALL_MEDIA_EXTENSIONS
 
 # ANSI colors for output
 RED = "\033[91m"

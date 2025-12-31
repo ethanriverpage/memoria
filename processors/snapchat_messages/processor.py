@@ -10,7 +10,7 @@ from common.dedup.service import (
     get_canonical_timestamp,
     save_dedup_metadata,
 )
-from common.failure_tracker import FailureTracker
+from common.config.runtime import default_worker_count
 from common.dedup.description import (
     SourceEntry,
     build_description,
@@ -19,34 +19,28 @@ from common.dedup.description import (
     PLATFORM_SNAPCHAT,
     SERVICE_MESSAGES,
 )
-from common.files.utils import copy_file
 from common.detection import detect_from_dirname
+from common.failures import FailureTracker
+from common.files.naming import FilenameGenerator
+from common.files.timestamps import update_file_timestamps
+from common.files.types import get_media_type
+from common.files.utils import copy_file, short_path
 from common.media.exiftool import (
     DEFAULT_PREAMBLE,
     DescriptionWriteSpec,
     MetadataWriteRequest,
     build_datetime_tags,
 )
-from common.files.utils import short_path
-from common.output.logging import init_worker_logging
 from common.media.overlay import (
     create_image_with_overlay,
     create_video_with_overlay,
     OverlayProcessingError,
 )
-from common.processing import (
-    print_processing_summary,
-)
-from common.utils import (
-    default_worker_count,
-    FilenameGenerator,
-    get_media_type,
-    update_file_timestamps,
-)
-from common.output.logging import get_processor_logger
+from common.output.logging import get_processor_logger, init_worker_logging
 from common.output.paths import OutputInfo
+from common.output.summary import print_processing_summary
 from processors.base import ProcessorBase
-from processors.snapchat_messages.preprocess import SnapchatPreprocessor
+from processors.snapchat_messages.preprocess import SnapchatMessagesPreprocessor
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -186,7 +180,7 @@ class SnapchatMessagesProcessor(ProcessorBase):
 
         cache_path.mkdir(parents=True, exist_ok=True)
 
-        preprocessor = SnapchatPreprocessor(
+        preprocessor = SnapchatMessagesPreprocessor(
             export_path=input_path,
             output_dir=cache_path,
             workers=workers,

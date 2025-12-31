@@ -5,32 +5,27 @@ This package contains utilities and functionality that is used by multiple proce
 avoiding code duplication and ensuring consistency.
 
 Subpackages:
+    - common.config: Configuration (env, runtime, dependencies)
     - common.dedup: Deduplication (hashing, database, service)
+    - common.failures: Failure tracking and reporting
+    - common.files: File operations (copy, scan, filter, types, naming)
     - common.media: Media processing (exiftool, overlay, encoder)
-    - common.files: File operations (copy, scan, filter)
-    - common.config: Configuration (processor, env)
-    - common.output: Output utilities (console, logging, progress)
+    - common.output: Output utilities (console, logging, progress, summary)
+    - common.processing: Parallel processing and caching
+    - common.text: Text normalization and parsing
     - common.upload: Upload utilities (immich, targets)
+    - common.validation: Invariant validators
 """
 
-# File scanning and filtering (from files subpackage)
+# ============================================================================
+# File operations (from files subpackage)
+# ============================================================================
 from .files.filter import BannedFilesFilter
 from .files.scanner import collect_media_files, iter_media_files
 from .files.utils import short_path, get_export_name
 
-
-# Username detection (from detection module)
-from .detection import detect_from_dirname
-
-# Utility functions (kept in common root)
-from .utils import (
-    sanitize_filename,
-    default_worker_count,
-    update_file_timestamps,
-    get_media_type,
-    is_supported_media,
-    FilenameGenerator,
-    # Extension definitions (single source of truth)
+# Extension constants and media type detection
+from .files.types import (
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
     AUDIO_EXTENSIONS,
@@ -38,28 +33,39 @@ from .utils import (
     ALL_EXTENSIONS,
     LIVE_PHOTO_IMAGE_EXTENSIONS,
     LIVE_PHOTO_VIDEO_EXTENSIONS,
+    get_media_type,
+    is_supported_media,
 )
 
-# Logging configuration (from output subpackage)
-from .output.logging import setup_logging, get_logger, get_processor_logger
+# Filename utilities
+from .files.naming import sanitize_filename, FilenameGenerator
+from .files.timestamps import update_file_timestamps
 
-# Dependency checking (kept in common root)
-from .dependency_checker import (
+# ============================================================================
+# Configuration (from config subpackage)
+# ============================================================================
+from .config.runtime import default_worker_count
+from .config.dependencies import (
     check_exiftool,
     check_ffmpeg,
     print_exiftool_error,
     print_ffmpeg_error,
 )
 
-# Processing utilities (kept in common root)
-from .processing import (
-    temp_processing_directory,
-    print_processing_summary,
-    print_preprocessing_stats,
-    process_batches_parallel,
-)
+# ============================================================================
+# Text processing (from text subpackage)
+# ============================================================================
+from .text.normalize import normalize_text
 
-# Progress bars (from output subpackage)
+# ============================================================================
+# Username detection
+# ============================================================================
+from .detection import detect_from_dirname
+
+# ============================================================================
+# Logging and output (from output subpackage)
+# ============================================================================
+from .output.logging import setup_logging, get_logger, get_processor_logger
 from .output.progress import (
     progress_bar,
     futures_progress,
@@ -69,6 +75,17 @@ from .output.progress import (
     PHASE_CATALOG,
     PHASE_DEDUP,
 )
+from .output.summary import print_processing_summary, print_preprocessing_stats
+
+# ============================================================================
+# Processing utilities (from processing subpackage)
+# ============================================================================
+from .processing import temp_processing_directory, process_batches_parallel
+
+# ============================================================================
+# Failure tracking (from failures subpackage)
+# ============================================================================
+from .failures import FailureTracker
 
 __version__ = "1.0.0"
 __all__ = [
@@ -78,14 +95,6 @@ __all__ = [
     "iter_media_files",
     "short_path",
     "get_export_name",
-    # Utilities
-    "detect_from_dirname",
-    "sanitize_filename",
-    "default_worker_count",
-    "update_file_timestamps",
-    "get_media_type",
-    "is_supported_media",
-    "FilenameGenerator",
     # Extension definitions
     "IMAGE_EXTENSIONS",
     "VIDEO_EXTENSIONS",
@@ -94,20 +103,28 @@ __all__ = [
     "ALL_EXTENSIONS",
     "LIVE_PHOTO_IMAGE_EXTENSIONS",
     "LIVE_PHOTO_VIDEO_EXTENSIONS",
-    # Logging
-    "setup_logging",
-    "get_logger",
-    "get_processor_logger",
+    # Media type detection
+    "get_media_type",
+    "is_supported_media",
+    # Filename utilities
+    "sanitize_filename",
+    "FilenameGenerator",
+    "update_file_timestamps",
+    # Text
+    "normalize_text",
+    # Username detection
+    "detect_from_dirname",
+    # Configuration
+    "default_worker_count",
     # Dependencies
     "check_exiftool",
     "check_ffmpeg",
     "print_exiftool_error",
     "print_ffmpeg_error",
-    # Processing
-    "temp_processing_directory",
-    "print_processing_summary",
-    "print_preprocessing_stats",
-    "process_batches_parallel",
+    # Logging
+    "setup_logging",
+    "get_logger",
+    "get_processor_logger",
     # Progress
     "progress_bar",
     "futures_progress",
@@ -116,4 +133,12 @@ __all__ = [
     "PHASE_EXIF",
     "PHASE_CATALOG",
     "PHASE_DEDUP",
+    # Processing
+    "temp_processing_directory",
+    "process_batches_parallel",
+    # Summary
+    "print_processing_summary",
+    "print_preprocessing_stats",
+    # Failures
+    "FailureTracker",
 ]

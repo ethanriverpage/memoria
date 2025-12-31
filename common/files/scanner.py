@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable, Iterator, Optional, Set
 
 from common.files.filter import BannedFilesFilter
-from common.utils import ALL_MEDIA_EXTENSIONS
+from common.files.types import ALL_MEDIA_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 

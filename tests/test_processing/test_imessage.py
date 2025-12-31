@@ -223,7 +223,7 @@ class TestIMessageLivePhotoPairing:
 
     def test_live_photo_pair_same_base_filename(self, tmp_path):
         """Live photo image and video should share the same base filename."""
-        from common.utils import FilenameGenerator
+        from common.files.naming import FilenameGenerator
 
         # Simulate the two-pass logic from iMessage processor
         filename_gen = FilenameGenerator(
@@ -317,7 +317,7 @@ class TestIMessageLivePhotoPairing:
 
     def test_live_photo_no_collision_with_regular_file(self, tmp_path):
         """Regular file with same timestamp should not collide with live photo pair."""
-        from common.utils import FilenameGenerator
+        from common.files.naming import FilenameGenerator
 
         filename_gen = FilenameGenerator(
             "imessage",
@@ -423,7 +423,7 @@ class TestIMessageLivePhotoPairing:
 
     def test_live_photo_video_without_image_falls_back(self, tmp_path):
         """Live photo video without paired image should fall back to independent name."""
-        from common.utils import FilenameGenerator
+        from common.files.naming import FilenameGenerator
 
         filename_gen = FilenameGenerator(
             "imessage",
@@ -1001,7 +1001,7 @@ class TestIMessageCrossExportLivePhotoPairing:
 
     def test_cross_export_fallback_uses_heic_hash(self, tmp_path):
         """MOV should pair with HEIC via hash when local HEIC is skipped."""
-        from common.utils import FilenameGenerator
+        from common.files.naming import FilenameGenerator
         from common.dedup.service import get_live_photo_base_for_hash
 
         # Simulate a dedup manifest where HEIC is primary in a different export
@@ -1049,7 +1049,7 @@ class TestIMessageCrossExportLivePhotoPairing:
 
     def test_live_photo_video_cross_export_fallback_logic(self, tmp_path):
         """Full simulation of cross-export fallback for Live Photo MOV."""
-        from common.utils import FilenameGenerator
+        from common.files.naming import FilenameGenerator
         from common.dedup.service import get_live_photo_base_for_hash
 
         filename_gen = FilenameGenerator(

@@ -30,8 +30,10 @@ class TestSnapchatMessagesPreprocessing:
         )
 
         preprocessor = SnapchatMessagesPreprocessor(
-            export_path=temp_export_dir,
+            # Snapchat fixtures use the consolidated export structure: messages/{chat_media,json}/
+            export_path=temp_export_dir / "messages",
             output_dir=temp_output_dir,
+            username_override="testuser",
         )
         result = preprocessor.run()
         assert result is True, "Preprocessing should succeed"
