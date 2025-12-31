@@ -26,6 +26,7 @@ from common.media.probe import (
 from common.preprocess.context_mergers import merge_imessage_context
 from common.processing import print_preprocessing_stats, process_parallel_threaded
 from common.output.progress import PHASE_PREPROCESS, progress_bar
+from common.dedup import compute_content_hash
 from common.utils import get_media_type
 from common.output.logging import get_processor_logger
 from processors.imessage.vcard_parser import VCardParser
@@ -760,8 +761,13 @@ class IMessagePreprocessor(PreprocessorBase):
                     # This key is used at runtime to pair still + MOV even after dedup
                     pair_key = str(file_path.parent.resolve())
 
-                    # Add pair key to the still image
+                    # Compute HEIC content hash for cross-export pairing
+                    # This allows MOV to pair with HEIC even when processed in different exports
+                    heic_hash = compute_content_hash(file_path)
+
+                    # Add pair key and image hash to the still image
                     attachment["live_photo_pair_key"] = pair_key
+                    attachment["live_photo_image_hash"] = heic_hash
 
                     # Create linked attachment entry for the MOV
                     mov_attachment = attachment.copy()
@@ -770,6 +776,7 @@ class IMessagePreprocessor(PreprocessorBase):
                     mov_attachment["mime_type"] = "video/quicktime"
                     mov_attachment["is_live_photo_video"] = True
                     mov_attachment["live_photo_pair_key"] = pair_key
+                    mov_attachment["live_photo_image_hash"] = heic_hash
                     attachments.append(mov_attachment)
                     self.stats["live_photos"] += 1
 
@@ -821,6 +828,7 @@ class IMessagePreprocessor(PreprocessorBase):
                 "mime_type": att.get("mime_type"),
                 "is_live_photo_video": att.get("is_live_photo_video", False),
                 "live_photo_pair_key": att.get("live_photo_pair_key"),
+                "live_photo_image_hash": att.get("live_photo_image_hash"),
             }
 
             copy_tasks.append(
@@ -894,6 +902,15 @@ class IMessagePreprocessor(PreprocessorBase):
                     all_pair_keys.add(pair_key)
             live_photo_pair_keys = sorted(all_pair_keys) if all_pair_keys else None
 
+            # Get live_photo_image_hash (should be same across all contexts for same Live Photo)
+            # Use the first non-None value found
+            live_photo_image_hash = None
+            for ctx in merged_contexts:
+                img_hash = ctx.get("live_photo_image_hash")
+                if img_hash:
+                    live_photo_image_hash = img_hash
+                    break
+
             # Check if this has merged duplicates
             if len(merged_contexts) > 1:
                 # Create merged message with messages array
@@ -913,6 +930,10 @@ class IMessagePreprocessor(PreprocessorBase):
                 # Add live_photo_pair_keys if present
                 if live_photo_pair_keys:
                     merged_message["live_photo_pair_keys"] = live_photo_pair_keys
+
+                # Add live_photo_image_hash for cross-export pairing
+                if live_photo_image_hash:
+                    merged_message["live_photo_image_hash"] = live_photo_image_hash
 
                 # Add all occurrences to messages array
                 for ctx in merged_contexts:
@@ -955,6 +976,10 @@ class IMessagePreprocessor(PreprocessorBase):
                 # Add live_photo_pair_keys if present
                 if live_photo_pair_keys:
                     message["live_photo_pair_keys"] = live_photo_pair_keys
+
+                # Add live_photo_image_hash for cross-export pairing
+                if live_photo_image_hash:
+                    message["live_photo_image_hash"] = live_photo_image_hash
 
                 conversations[primary_conv_id]["messages"].append(message)
                 conversations[primary_conv_id]["message_count"] += 1

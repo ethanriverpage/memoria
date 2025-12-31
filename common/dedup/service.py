@@ -1202,6 +1202,83 @@ def _is_live_photo_video_primary(
     return None
 
 
+def get_live_photo_base_for_hash(
+    manifest: Dict[str, Any],
+    heic_hash: str,
+    filename_prefix: str,
+    export_username: str,
+    timestamp_format: str = "%Y-%m-%d %H:%M:%S",
+) -> Optional[str]:
+    """Get the output base filename for a Live Photo HEIC by its content hash.
+
+    Used for cross-export pairing when a Live Photo MOV needs to match its
+    paired HEIC, but the HEIC was processed by a different export (skipped
+    as secondary in the current export).
+
+    This function looks up the HEIC in the dedup manifest and generates the
+    base filename that would have been used when the HEIC was processed,
+    allowing the MOV to use the same base with a different extension.
+
+    Args:
+        manifest: Deduplication manifest from analyze_from_db().
+        heic_hash: Content hash (xxHash64) of the paired HEIC image.
+        filename_prefix: Prefix for generated filename (e.g., "imessage").
+        export_username: Username/device identifier for filename generation.
+        timestamp_format: Format string for parsing timestamps (without " UTC").
+
+    Returns:
+        Base filename (without extension) if HEIC found in manifest, None otherwise.
+    """
+    duplicates = manifest.get("duplicates", {})
+
+    # Look up the HEIC hash in the duplicates
+    if heic_hash not in duplicates:
+        return None
+
+    group = duplicates[heic_hash]
+    best_quality = group.get("best_quality", {})
+
+    # Get the canonical timestamp for this hash
+    merged_metadata = group.get("merged_metadata", {})
+    timestamp_str = merged_metadata.get("timestamp")
+
+    if not timestamp_str:
+        # Try to get timestamp from best_quality context or primary
+        primary = group.get("primary", {})
+        context = best_quality.get("context", primary.get("context", {}))
+        timestamp_str = context.get("timestamp") or context.get("created")
+
+    if not timestamp_str:
+        return None
+
+    # Parse the timestamp and generate the base filename
+    # The filename format matches what FilenameGenerator produces
+    try:
+        # Handle various timestamp formats
+        ts_clean = timestamp_str.replace(" UTC", "").replace("Z", "")
+        ts_clean = ts_clean.replace("+00:00", "").replace("T", " ")
+
+        # Try parsing with different formats
+        dt = None
+        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]:
+            try:
+                dt = datetime.strptime(ts_clean[:len("2000-01-01 00:00:00")], fmt)
+                break
+            except ValueError:
+                continue
+
+        if dt is None:
+            return None
+
+        # Generate base filename matching FilenameGenerator format
+        # Format: {prefix}-{username}-{YYYYMMDD}-{HHMMSS}
+        base = f"{filename_prefix}-{export_username}-{dt.strftime('%Y%m%d')}-{dt.strftime('%H%M%S')}"
+        return base
+
+    except Exception:
+        return None
+
+
 def filter_primary_files(
     files: List[Path],
     dedup_manifest: Optional[Dict[str, Any]],

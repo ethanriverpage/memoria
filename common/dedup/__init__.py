@@ -76,6 +76,7 @@ from common.dedup.service import (
     get_secondary_reference,
     build_dedup_references,
     save_dedup_metadata,
+    get_live_photo_base_for_hash,
 )
 
 __all__ = [
@@ -143,4 +144,5 @@ __all__ = [
     "get_secondary_reference",
     "build_dedup_references",
     "save_dedup_metadata",
+    "get_live_photo_base_for_hash",
 ]

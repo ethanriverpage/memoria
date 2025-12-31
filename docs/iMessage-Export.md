@@ -399,6 +399,16 @@ Live Photos are Apple's format combining a still image (HEIC) with a short video
 3. **Processing**: Both files are processed with linked metadata. The video component reuses the still image's generated base filename.
 4. **Marking**: Video components are marked with `is_live_photo_video: true` and both components share `live_photo_pair_keys` for pairing.
 
+### Cross-Export Pairing
+
+When processing multiple iMessage exports, cross-export deduplication may determine that the best quality HEIC is in one export while the MOV is in another. To handle this:
+
+- During preprocessing, the HEIC's content hash is stored as `live_photo_image_hash` in both the HEIC and MOV metadata
+- If the local HEIC is skipped (as a secondary duplicate), the processor looks up the HEIC hash in the dedup manifest to find the canonical timestamp
+- The MOV then generates a matching base filename to pair with the HEIC output from the other export
+
+This ensures Live Photo pairs stay correctly named even when their components are processed by different exports.
+
 ### Output
 
 Both components are copied:

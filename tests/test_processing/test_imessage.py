@@ -934,3 +934,177 @@ class TestIMessageLivePhotoPairingPreprocessing:
         assert mov_entry.get("is_live_photo_video") is True, (
             "MOV should be marked as is_live_photo_video=True"
         )
+
+    def test_preprocessing_emits_live_photo_image_hash(
+        self, imessage_processor, temp_export_dir, temp_output_dir
+    ):
+        """Preprocessing should emit live_photo_image_hash for cross-export pairing."""
+        import json
+        from tests.fixtures.export_tree import copy_export_fixture
+        from processors.imessage.preprocess import IMessagePreprocessor
+        import shutil
+
+        # Copy the live photo fixture
+        copy_export_fixture("imessage", "live_photo_lp_image_pair", temp_export_dir)
+
+        # Rename directory to match expected pattern for username detection
+        renamed_dir = temp_export_dir.parent / "imessage-testdev-20251230"
+        if renamed_dir.exists():
+            shutil.rmtree(renamed_dir)
+        shutil.move(str(temp_export_dir), str(renamed_dir))
+
+        # Run preprocessing
+        preprocessor = IMessagePreprocessor(
+            export_paths=[renamed_dir],
+            output_dir=temp_output_dir,
+        )
+        success = preprocessor.run()
+        assert success, "Preprocessing should succeed"
+
+        # Load generated metadata.json
+        metadata_file = temp_output_dir / "metadata.json"
+        with open(metadata_file, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+
+        # Find still and MOV entries by source_paths
+        conversations = metadata.get("conversations", {})
+        still_entry = None
+        mov_entry = None
+
+        for conv_id, conv in conversations.items():
+            for msg in conv.get("messages", []):
+                source_paths = msg.get("source_paths", {})
+                for filename, path in source_paths.items():
+                    if "lp_image.HEIC" in path:
+                        still_entry = msg
+                    elif "lp_image.MOV" in path:
+                        mov_entry = msg
+
+        assert still_entry is not None, "Should find still image entry"
+        assert mov_entry is not None, "Should find MOV video entry"
+
+        # Verify both have live_photo_image_hash (for cross-export pairing)
+        still_hash = still_entry.get("live_photo_image_hash")
+        mov_hash = mov_entry.get("live_photo_image_hash")
+
+        assert still_hash is not None, "Still image should have live_photo_image_hash"
+        assert mov_hash is not None, "MOV video should have live_photo_image_hash"
+
+        # Both should have the same hash (the HEIC's content hash)
+        assert still_hash == mov_hash, (
+            f"HEIC and MOV should share same image hash: {still_hash} != {mov_hash}"
+        )
+
+
+class TestIMessageCrossExportLivePhotoPairing:
+    """Tests for cross-export Live Photo pairing when HEIC and MOV are in different exports."""
+
+    def test_cross_export_fallback_uses_heic_hash(self, tmp_path):
+        """MOV should pair with HEIC via hash when local HEIC is skipped."""
+        from common.utils import FilenameGenerator
+        from common.dedup.service import get_live_photo_base_for_hash
+
+        # Simulate a dedup manifest where HEIC is primary in a different export
+        heic_hash = "abc123def456"
+        dedup_manifest = {
+            "duplicates": {
+                heic_hash: {
+                    "best_quality": {
+                        "source_path": "/export1/Attachments/00/00/lp_image.HEIC",
+                        "processor": "iMessage",
+                    },
+                    "merged_metadata": {
+                        "timestamp": "2023-05-26 12:00:00 UTC",
+                    },
+                }
+            }
+        }
+
+        # Test the helper function
+        base = get_live_photo_base_for_hash(
+            dedup_manifest,
+            heic_hash,
+            "imessage",
+            "testuser",
+        )
+
+        assert base is not None, "Should find base from manifest"
+        assert "imessage-testuser-20230526-120000" == base
+
+    def test_cross_export_fallback_without_manifest_entry(self, tmp_path):
+        """MOV should fall back to independent name when HEIC hash not in manifest."""
+        from common.dedup.service import get_live_photo_base_for_hash
+
+        # Empty manifest
+        dedup_manifest = {"duplicates": {}}
+
+        base = get_live_photo_base_for_hash(
+            dedup_manifest,
+            "nonexistent_hash",
+            "imessage",
+            "testuser",
+        )
+
+        assert base is None, "Should return None when hash not in manifest"
+
+    def test_live_photo_video_cross_export_fallback_logic(self, tmp_path):
+        """Full simulation of cross-export fallback for Live Photo MOV."""
+        from common.utils import FilenameGenerator
+        from common.dedup.service import get_live_photo_base_for_hash
+
+        filename_gen = FilenameGenerator(
+            "imessage",
+            "testuser",
+            timestamp_format="%Y-%m-%d %H:%M:%S UTC",
+        )
+
+        # Simulate: MOV has no local pair key match (HEIC was in different export)
+        heic_hash = "abc123def456"
+        message = {
+            "is_live_photo_video": True,
+            "live_photo_pair_keys": ["/nonexistent/path"],  # No match locally
+            "live_photo_image_hash": heic_hash,
+            "created": "2023-05-26 12:00:00 UTC",
+        }
+
+        # Manifest has the HEIC
+        dedup_manifest = {
+            "duplicates": {
+                heic_hash: {
+                    "best_quality": {
+                        "source_path": "/export1/Attachments/00/00/lp_image.HEIC",
+                        "processor": "iMessage",
+                    },
+                    "merged_metadata": {
+                        "timestamp": "2023-05-26 12:00:00 UTC",
+                    },
+                }
+            }
+        }
+
+        # Simulate the processor's Pass B logic
+        pair_keys = message.get("live_photo_pair_keys", [])
+        live_photo_bases_by_key = {}  # Empty - no local HEIC
+
+        matched_base = None
+        for pk in pair_keys:
+            if pk in live_photo_bases_by_key:
+                matched_base = live_photo_bases_by_key[pk]
+                break
+
+        if not matched_base:
+            # Cross-export fallback
+            img_hash = message.get("live_photo_image_hash")
+            if img_hash and dedup_manifest:
+                matched_base = get_live_photo_base_for_hash(
+                    dedup_manifest,
+                    img_hash,
+                    "imessage",
+                    "testuser",
+                )
+
+        assert matched_base is not None, "Should find base via cross-export fallback"
+        assert matched_base == "imessage-testuser-20230526-120000"
+
+        output_filename = f"{matched_base}.mov"
+        assert output_filename == "imessage-testuser-20230526-120000.mov"

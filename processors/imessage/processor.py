@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from common.dedup.service import (
     get_canonical_timestamp,
+    get_live_photo_base_for_hash,
     save_dedup_metadata,
 )
 from common.failure_tracker import FailureTracker
@@ -845,14 +846,29 @@ def _process_working_directory(
             # Ensure filename is registered (belt-and-suspenders)
             filename_gen.used_filenames.add(output_filename)
         else:
-            # Fallback: no paired image found (corrupted metadata or image was skipped)
-            logger.warning(
-                "Live photo video %s has no paired image (live_photo_pair_keys=%s), "
-                "generating independent filename",
-                media_filename,
-                pair_keys,
-            )
-            output_filename = filename_gen.generate(canonical_ts, file_ext)
+            # Cross-export fallback: use HEIC's canonical info from manifest
+            # This handles cases where HEIC was processed by a different export
+            heic_hash = message.get("live_photo_image_hash")
+            if heic_hash and dedup_manifest:
+                matched_base = get_live_photo_base_for_hash(
+                    dedup_manifest,
+                    heic_hash,
+                    "imessage",
+                    export_username,
+                )
+
+            if matched_base:
+                output_filename = f"{matched_base}{file_ext}"
+                filename_gen.used_filenames.add(output_filename)
+            else:
+                # Final fallback: no paired image found
+                logger.warning(
+                    "Live photo video %s has no paired image (live_photo_pair_keys=%s), "
+                    "generating independent filename",
+                    media_filename,
+                    pair_keys,
+                )
+                output_filename = filename_gen.generate(canonical_ts, file_ext)
 
         matched_files.append((source_path, message, output_filename, content_hash))
 
