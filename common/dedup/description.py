@@ -673,7 +673,8 @@ def build_image_description(
         max_per_source: Maximum characters per source (default from config).
 
     Returns:
-        Complete ImageDescription string.
+        Complete ImageDescription string with &#xa; line separators (XML entity
+        for newline, required for exiftool argfile compatibility).
     """
     config = get_dedup_config()
 
@@ -699,8 +700,9 @@ def build_image_description(
     if primary_context_key != ("", "", ""):
         seen_contexts.add(primary_context_key)
 
-    # Calculate remaining budget
-    remaining = max_total - sum(len(line) + 1 for line in lines)
+    # Calculate remaining budget (account for &#xa; separators between lines)
+    current_len = sum(len(line) for line in lines) + 5 * (len(lines) - 1) if lines else 0
+    remaining = max_total - current_len
 
     # 3. Group secondaries by source identity
     same_source_entries = []
@@ -724,9 +726,9 @@ def build_image_description(
             # Format as +context (secondary context line)
             context_line = _format_context_line(entry, is_secondary=True)
             if context_line:
-                if len(context_line) + 1 <= remaining:
+                if len(context_line) + 6 <= remaining:  # +6 for &#xa; separator
                     lines.append(context_line)
-                    remaining -= len(context_line) + 1
+                    remaining -= len(context_line) + 6
 
     # 5. Add different-source entries with relative path notation
     for entry in different_source_entries:
@@ -746,231 +748,9 @@ def build_image_description(
 
         line = _format_secondary_with_relative_path(entry, relative_path, source_budget)
         lines.append(line)
-        remaining -= len(line) + 1  # +1 for newline
+        remaining -= len(line) + 6  # +6 for &#xa; separator
 
-    return "\n".join(lines)
-
-
-def merge_descriptions(
-    descriptions: List[str],
-    max_total: Optional[int] = None,
-) -> str:
-    """Merge multiple existing ImageDescription strings.
-
-    Attempts to parse and combine descriptions from multiple sources,
-    deduplicating and preserving provenance information.
-
-    Args:
-        descriptions: List of existing ImageDescription strings.
-        max_total: Maximum total characters for result.
-
-    Returns:
-        Merged description string.
-    """
-    config = get_dedup_config()
-    if max_total is None:
-        max_total = config.desc_max_total
-
-    if not descriptions:
-        return ""
-
-    if len(descriptions) == 1:
-        return truncate_text(descriptions[0], max_total)
-
-    # Collect unique lines from all descriptions
-    seen_prefixes = set()
-    lines = []
-
-    for desc in descriptions:
-        for line in desc.split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-
-            # Extract prefix for deduplication (processor name)
-            prefix = line.split(":")[0] if ":" in line else line[:20]
-            if prefix not in seen_prefixes:
-                seen_prefixes.add(prefix)
-                lines.append(line)
-
-    # Build result within budget
-    result_lines = []
-    remaining = max_total
-
-    for line in lines:
-        if remaining <= 0:
-            break
-        truncated = truncate_text(line, remaining)
-        result_lines.append(truncated)
-        remaining -= len(truncated) + 1
-
-    return "\n".join(result_lines)
-
-
-def _parse_source_path(path: str) -> tuple:
-    """Parse platform/username/service from a source path.
-
-    Args:
-        path: Source path like "Google/user@gmail.com/photos" or "iMessage/mac"
-
-    Returns:
-        Tuple of (processor, username, service)
-    """
-    parts = path.split("/")
-    processor = parts[0].strip() if len(parts) > 0 else "Unknown"
-    username = parts[1].strip() if len(parts) > 1 else ""
-    service = parts[2].strip() if len(parts) > 2 else ""
-    return processor, username, service
-
-
-def _parse_message_context(context: str) -> tuple:
-    """Parse sender, conversation, and content from message context.
-
-    Handles formats like:
-        - jane_doe in "Best Friends": "Look at this sunset!"
-        - in "DM with +1404...": "content"
-        - John Doe in "Family Group"
-
-    Args:
-        context: Message context string.
-
-    Returns:
-        Tuple of (sender, conversation, content)
-    """
-    sender = ""
-    conversation = ""
-    content = ""
-
-    # Extract content in quotes (last quoted string if multiple)
-    if '": "' in context:
-        # Format: sender in "conv": "content"
-        parts = context.split('": "', 1)
-        before_content = parts[0]
-        content_with_end = parts[1] if len(parts) > 1 else ""
-        if content_with_end.endswith('"'):
-            content = content_with_end[:-1]
-        else:
-            # May have timestamp after: "content" (2024-01-15)
-            end_quote = content_with_end.rfind('"')
-            if end_quote > 0:
-                content = content_with_end[:end_quote]
-    else:
-        before_content = context
-
-    # Extract conversation in quotes
-    if ' in "' in before_content:
-        idx = before_content.find(' in "')
-        sender = before_content[:idx].strip()
-        rest = before_content[idx + 5 :]  # Skip ' in "'
-        end_quote = rest.find('"')
-        if end_quote > 0:
-            conversation = rest[:end_quote]
-        else:
-            conversation = rest.rstrip('"')
-    elif before_content.startswith('in "'):
-        rest = before_content[4:]  # Skip 'in "'
-        end_quote = rest.find('"')
-        if end_quote > 0:
-            conversation = rest[:end_quote]
-        else:
-            conversation = rest.rstrip('"')
-
-    return sender, conversation, content
-
-
-def parse_source_from_description(description: str) -> List[SourceEntry]:
-    """Parse source entries from an existing ImageDescription.
-
-    Handles unified format:
-        Source: {platform}/{username}[/{service}]
-          - {sender} in "{conversation}": "{content}"
-        +{platform}/{username}[/{service}]: {sender} in "{conv}": "{content}" ({date})
-
-    Args:
-        description: ImageDescription string to parse.
-
-    Returns:
-        List of SourceEntry objects parsed from description.
-    """
-    entries = []
-    current_entry = None
-
-    for line in description.split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-
-        # Parse primary source line
-        if line.startswith("Source:"):
-            # Save previous entry if exists
-            if current_entry is not None:
-                entries.append(current_entry)
-
-            rest = line[7:].strip()
-            processor, username, service = _parse_source_path(rest)
-
-            current_entry = SourceEntry(
-                processor=processor,
-                username=username,
-                service=service,
-                is_primary=True,
-            )
-
-        # Parse message context line (belongs to current primary entry)
-        elif line.startswith("  - ") or line.startswith("- "):
-            if current_entry is not None:
-                context = line.lstrip(" -")
-                sender, conversation, content = _parse_message_context(context)
-                current_entry.sender = sender
-                current_entry.conversation = conversation
-                current_entry.content = content
-
-        # Parse secondary source line
-        elif line.startswith("+"):
-            # Save previous entry if exists
-            if current_entry is not None:
-                entries.append(current_entry)
-
-            rest = line[1:].strip()
-
-            # Split at first ": " to separate source from context
-            if ": " in rest:
-                source_part, context_part = rest.split(": ", 1)
-            else:
-                source_part = rest.rstrip(":")
-                context_part = ""
-
-            processor, username, service = _parse_source_path(source_part)
-            sender, conversation, content = _parse_message_context(context_part)
-
-            current_entry = SourceEntry(
-                processor=processor,
-                username=username,
-                service=service,
-                is_primary=False,
-                sender=sender,
-                conversation=conversation,
-                content=content,
-            )
-
-            # Try to extract timestamp from end: (YYYY-MM-DD)
-            if context_part and "(" in context_part:
-                date_match = context_part.rfind("(")
-                date_end = context_part.rfind(")")
-                if date_match < date_end:
-                    date_str = context_part[date_match + 1 : date_end]
-                    try:
-                        current_entry.timestamp = datetime.strptime(
-                            date_str, "%Y-%m-%d"
-                        )
-                    except ValueError:
-                        pass
-
-    # Don't forget the last entry
-    if current_entry is not None:
-        entries.append(current_entry)
-
-    return entries
+    return "&#xa;".join(lines)
 
 
 def create_source_entry(

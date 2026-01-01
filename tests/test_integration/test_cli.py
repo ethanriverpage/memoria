@@ -25,9 +25,16 @@ class TestCLIBasic:
         """Should list all available processors."""
         env_file = tmp_path / "empty.env"
         env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
         result = subprocess.run(
-            [sys.executable, "memoria.py", "--env-file", str(env_file), "--list-processors"],
-            cwd=project_root,
+            [
+                sys.executable,
+                str(memoria_script),
+                "--env-file",
+                str(env_file),
+                "--list-processors",
+            ],
+            cwd=tmp_path,
             capture_output=True,
             text=True,
         )
@@ -40,9 +47,10 @@ class TestCLIBasic:
         """Should display help text."""
         env_file = tmp_path / "empty.env"
         env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
         result = subprocess.run(
-            [sys.executable, "memoria.py", "--env-file", str(env_file), "--help"],
-            cwd=project_root,
+            [sys.executable, str(memoria_script), "--env-file", str(env_file), "--help"],
+            cwd=tmp_path,
             capture_output=True,
             text=True,
         )
@@ -55,9 +63,10 @@ class TestCLIBasic:
         """Should error when no input provided."""
         env_file = tmp_path / "empty.env"
         env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
         result = subprocess.run(
-            [sys.executable, "memoria.py", "--env-file", str(env_file)],
-            cwd=project_root,
+            [sys.executable, str(memoria_script), "--env-file", str(env_file)],
+            cwd=tmp_path,
             capture_output=True,
             text=True,
         )
@@ -70,10 +79,11 @@ class TestCLIBasic:
         fake_path = tmp_path / "non_existent_dir"
         env_file = tmp_path / "empty.env"
         env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
 
         result = subprocess.run(
-            [sys.executable, "memoria.py", "--env-file", str(env_file), str(fake_path)],
-            cwd=project_root,
+            [sys.executable, str(memoria_script), "--env-file", str(env_file), str(fake_path)],
+            cwd=tmp_path,
             capture_output=True,
             text=True,
         )
@@ -92,11 +102,12 @@ class TestCLIDetection:
         create_google_photos_export(export_dir)
         env_file = tmp_path / "empty.env"
         env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
 
         result = subprocess.run(
             [
                 sys.executable,
-                "memoria.py",
+                str(memoria_script),
                 "--env-file",
                 str(env_file),
                 str(export_dir),
@@ -105,7 +116,7 @@ class TestCLIDetection:
                 "--skip-upload",
                 "--verbose",
             ],
-            cwd=project_root,
+            cwd=tmp_path,
             capture_output=True,
             text=True,
             timeout=30,
@@ -123,6 +134,7 @@ class TestCLIDetection:
         create_snapchat_memories_export(export_dir)
         env_file = tmp_path / "empty.env"
         env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
 
         # Disable cross-processor dedup for faster detection-only test
         env = os.environ.copy()
@@ -131,7 +143,7 @@ class TestCLIDetection:
         result = subprocess.run(
             [
                 sys.executable,
-                "memoria.py",
+                str(memoria_script),
                 "--env-file",
                 str(env_file),
                 str(export_dir),
@@ -140,7 +152,7 @@ class TestCLIDetection:
                 "--skip-upload",
                 "--verbose",
             ],
-            cwd=project_root,
+            cwd=tmp_path,
             capture_output=True,
             text=True,
             timeout=30,
@@ -156,11 +168,12 @@ class TestCLIDetection:
         create_discord_export(export_dir)
         env_file = tmp_path / "empty.env"
         env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
 
         result = subprocess.run(
             [
                 sys.executable,
-                "memoria.py",
+                str(memoria_script),
                 "--env-file",
                 str(env_file),
                 str(export_dir),
@@ -169,7 +182,7 @@ class TestCLIDetection:
                 "--skip-upload",
                 "--verbose",
             ],
-            cwd=project_root,
+            cwd=tmp_path,
             capture_output=True,
             text=True,
             timeout=30,
@@ -185,11 +198,12 @@ class TestCLIDetection:
         output_dir = tmp_path / "output"
         env_file = tmp_path / "empty.env"
         env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
 
         result = subprocess.run(
             [
                 sys.executable,
-                "memoria.py",
+                str(memoria_script),
                 "--env-file",
                 str(env_file),
                 str(empty_dir),
@@ -198,7 +212,7 @@ class TestCLIDetection:
                 "--skip-upload",
                 "--verbose",
             ],
-            cwd=project_root,
+            cwd=tmp_path,
             capture_output=True,
             text=True,
             timeout=30,
@@ -223,11 +237,12 @@ class TestCLIOutputDirectory:
         create_google_photos_export(export_dir)
         env_file = tmp_path / "empty.env"
         env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
 
         result = subprocess.run(
             [
                 sys.executable,
-                "memoria.py",
+                str(memoria_script),
                 "--env-file",
                 str(env_file),
                 str(export_dir),
@@ -236,7 +251,7 @@ class TestCLIOutputDirectory:
                 "--skip-upload",
                 "--verbose",
             ],
-            cwd=project_root,
+            cwd=tmp_path,
             capture_output=True,
             text=True,
             timeout=60,
@@ -256,11 +271,12 @@ class TestCLIFlags:
         create_google_photos_export(export_dir)
         env_file = tmp_path / "empty.env"
         env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
 
         result = subprocess.run(
             [
                 sys.executable,
-                "memoria.py",
+                str(memoria_script),
                 "--env-file",
                 str(env_file),
                 str(export_dir),
@@ -269,7 +285,7 @@ class TestCLIFlags:
                 "--verbose",
                 "--skip-upload",
             ],
-            cwd=project_root,
+            cwd=tmp_path,
             capture_output=True,
             text=True,
             timeout=30,
@@ -289,11 +305,12 @@ class TestCLIFlags:
         create_google_photos_export(export_dir)
         env_file = tmp_path / "empty.env"
         env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
 
         result = subprocess.run(
             [
                 sys.executable,
-                "memoria.py",
+                str(memoria_script),
                 "--env-file",
                 str(env_file),
                 str(export_dir),
@@ -303,7 +320,7 @@ class TestCLIFlags:
                 "2",
                 "--skip-upload",
             ],
-            cwd=project_root,
+            cwd=tmp_path,
             capture_output=True,
             text=True,
             timeout=30,
@@ -322,11 +339,12 @@ class TestCLIFlags:
         create_google_photos_export(export_dir)
         env_file = tmp_path / "empty.env"
         env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
 
         result = subprocess.run(
             [
                 sys.executable,
-                "memoria.py",
+                str(memoria_script),
                 "--env-file",
                 str(env_file),
                 str(export_dir),
@@ -334,7 +352,7 @@ class TestCLIFlags:
                 str(output_dir),
                 "--skip-upload",
             ],
-            cwd=project_root,
+            cwd=tmp_path,
             capture_output=True,
             text=True,
             timeout=30,
@@ -357,11 +375,12 @@ class TestCLIProcessorFilter:
         create_google_photos_export(export_dir)
         env_file = tmp_path / "empty.env"
         env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
 
         result = subprocess.run(
             [
                 sys.executable,
-                "memoria.py",
+                str(memoria_script),
                 "--env-file",
                 str(env_file),
                 str(export_dir),
@@ -371,7 +390,7 @@ class TestCLIProcessorFilter:
                 "Google Photos",
                 "--skip-upload",
             ],
-            cwd=project_root,
+            cwd=tmp_path,
             capture_output=True,
             text=True,
             timeout=30,
@@ -387,11 +406,12 @@ class TestCLIProcessorFilter:
         output_dir = tmp_path / "output"
         env_file = tmp_path / "empty.env"
         env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
 
         result = subprocess.run(
             [
                 sys.executable,
-                "memoria.py",
+                str(memoria_script),
                 "--env-file",
                 str(env_file),
                 str(export_dir),
@@ -401,7 +421,7 @@ class TestCLIProcessorFilter:
                 "NonExistentProcessor",
                 "--skip-upload",
             ],
-            cwd=project_root,
+            cwd=tmp_path,
             capture_output=True,
             text=True,
             timeout=30,

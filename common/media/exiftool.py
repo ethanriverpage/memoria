@@ -877,9 +877,13 @@ def _get_description_for_file(
     """Enhance description with secondary sources from dedup manifest.
 
     Rather than replacing the processor's rich description, this function
-    appends secondary source lines for cross-processor duplicates. This
-    preserves the processor's context (sender, conversation, content) while
-    adding provenance from other platforms.
+    appends secondary source lines for duplicate files. This preserves the
+    processor's context (sender, conversation, content) while adding
+    provenance from all duplicate sources.
+
+    Note: This function appends all secondary sources. Same-source entries
+    are displayed with relative path notation or context folding by the
+    description builder (build_image_description), not filtered here.
 
     Args:
         default_description: The processor's rich description to enhance.
@@ -889,7 +893,8 @@ def _get_description_for_file(
 
     Returns:
         Enhanced description with secondary sources appended, or default
-        if no manifest or no cross-processor duplicates found.
+        if no manifest or no duplicates found. Uses &#xa; (XML entity) for
+        line separators to ensure exiftool argfile compatibility.
     """
     if dedup_manifest is None or content_hash is None:
         return default_description
@@ -898,7 +903,8 @@ def _get_description_for_file(
     from common.dedup.service import get_secondary_sources_for_hash
     from common.dedup.description import format_secondary_source
 
-    # Get deduplicated secondary sources (excludes same-processor duplicates)
+    # Get all secondary sources from dedup manifest
+    # Same-source entries use relative path notation (build_image_description handles this)
     secondary_sources = get_secondary_sources_for_hash(
         dedup_manifest, content_hash, processor_name
     )

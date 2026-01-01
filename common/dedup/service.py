@@ -349,6 +349,7 @@ class DeduplicationService:
                 "source_path": primary.get("source_path"),
                 "content_hash": primary_hash,
                 "file_size": primary.get("file_size"),
+                "context": primary.get("metadata", {}),
             },
             "best_quality": {
                 "processor": best.get("_processor"),
@@ -1369,9 +1370,9 @@ def get_merged_description_for_file(
         primary_processor = primary.get("processor", "Unknown")
         primary_platform, primary_service = get_platform_service(primary_processor)
 
-        # Get primary context from merged_metadata if available
-        merged_metadata = group.get("merged_metadata", {})
-        primary_context = merged_metadata if merged_metadata else {}
+        # Get primary context from the primary entry's own context (not merged_metadata)
+        # The primary's context is stored alongside its processor/source_path in the manifest
+        primary_context = primary.get("context", {})
 
         primary_entry = SourceEntry(
             processor=primary_platform,

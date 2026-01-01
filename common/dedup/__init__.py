@@ -70,8 +70,6 @@ from common.dedup.description import (
     format_timestamp,
     format_primary_source,
     format_secondary_source,
-    merge_descriptions,
-    parse_source_from_description,
 )
 from common.dedup.service import (
     DeduplicationService,
@@ -146,8 +144,6 @@ __all__ = [
     "format_timestamp",
     "format_primary_source",
     "format_secondary_source",
-    "merge_descriptions",
-    "parse_source_from_description",
     # Service
     "DeduplicationService",
     "save_manifest",

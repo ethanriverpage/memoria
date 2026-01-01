@@ -276,6 +276,60 @@ class TestFormatRelativeSourcePath:
         result = format_relative_source_path(primary, secondary)
         assert result == "Discord/user"
 
+    def test_empty_username_no_double_slashes(self):
+        """Test empty username doesn't produce ugly paths like 'Google//photos'."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+        )
+        secondary = SourceEntry(
+            processor=PLATFORM_INSTAGRAM,
+            username="",  # Empty username
+            service=SERVICE_MESSAGES,
+        )
+        result = format_relative_source_path(primary, secondary)
+        # Should not have double slashes
+        assert "//" not in result
+        # Should include platform and service
+        assert result == "Instagram/messages"
+
+    def test_empty_service_no_trailing_slash(self):
+        """Test empty service doesn't produce ugly paths like './user/'."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user1",
+            service=SERVICE_PHOTOS,
+        )
+        secondary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user2",
+            service="",  # Empty service
+        )
+        result = format_relative_source_path(primary, secondary)
+        # Should not have trailing slash
+        assert not result.endswith("/")
+        # Should use relative notation
+        assert result == "./user2"
+
+    def test_both_empty_minimal_path(self):
+        """Test both empty username and service produce minimal path."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+        )
+        secondary = SourceEntry(
+            processor=PLATFORM_DISCORD,
+            username="",
+            service="",
+        )
+        result = format_relative_source_path(primary, secondary)
+        # Should just be platform name
+        assert result == "Discord"
+        assert "//" not in result
+        assert not result.endswith("/")
+
 
 class TestFormatTimestamp:
     """Tests for timestamp formatting."""
@@ -380,6 +434,40 @@ class TestBuildImageDescription:
         )
         result = build_image_description(primary, [])
         assert result == "Source: Google/johndoe/photos"
+
+    def test_uses_xml_entity_newlines_not_literal(self):
+        """Test that build_image_description uses &#xa; for line separators.
+
+        This is critical for exiftool argfile compatibility. Literal newlines
+        in argfile values cause lines to be interpreted as separate arguments,
+        silently dropping secondary source information.
+        """
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+        )
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="insta_user",
+                service=SERVICE_MESSAGES,
+                sender="friend",
+                conversation="Chat",
+            ),
+        ]
+        result = build_image_description(primary, secondary)
+
+        # Must use XML entity for newlines
+        assert "&#xa;" in result, (
+            "build_image_description must use &#xa; (XML entity) for line "
+            f"separators, not literal newlines. Got: {repr(result)}"
+        )
+        # Must NOT contain literal newlines
+        assert "\n" not in result, (
+            "build_image_description must not contain literal newlines "
+            f"(breaks exiftool argfile format). Got: {repr(result)}"
+        )
 
     def test_with_secondary_sources(self):
         """Test description with multiple secondary sources."""

@@ -186,6 +186,67 @@ def dedup_service(tmp_path) -> DeduplicationService:
 class TestCrossProcessorDescriptionBuilding:
     """Tests for building merged descriptions from cross-processor duplicates."""
 
+    def test_primary_context_from_manifest_not_merged_metadata(self):
+        """Test that get_merged_description_for_file uses primary's own context.
+
+        Regression test: Previously, primary context was incorrectly sourced from
+        merged_metadata which often lacked username/sender/conversation/content.
+        The fix stores primary's context directly in the manifest entry.
+        """
+        # Create a manifest where primary has context but merged_metadata does not
+        manifest = {
+            "duplicates": {
+                "test_hash_123": {
+                    "primary": {
+                        "processor": "Instagram Messages",
+                        "source_path": "/exports/instagram/photo.jpg",
+                        "content_hash": "test_hash_123",
+                        "file_size": 1000000,
+                        "context": {
+                            "username": "my_insta_user",
+                            "sender": "alice",
+                            "conversation": "Best Friends",
+                            "content": "Amazing photo!",
+                        },
+                    },
+                    "secondary": [],
+                    "merged_metadata": {
+                        # merged_metadata lacks the detailed context
+                        "timestamp": "2024-01-15T10:00:00Z",
+                    },
+                },
+            },
+        }
+
+        description = get_merged_description_for_file(
+            manifest, "/exports/instagram/photo.jpg"
+        )
+
+        assert description is not None
+        # Primary username should come from primary.context, not merged_metadata
+        assert "my_insta_user" in description
+        # Primary context (sender/conversation) should be included
+        assert "alice" in description
+        assert "Best Friends" in description
+
+    def test_manifest_stores_primary_context(
+        self, dedup_service, cross_processor_catalogs
+    ):
+        """Test that the manifest stores primary's context for description building."""
+        run_id = "test_primary_context_stored"
+        write_catalogs_to_db(dedup_service.db, run_id, cross_processor_catalogs)
+        manifest = dedup_service.analyze_from_db(run_id)
+
+        # The primary entry should have a context field
+        dup_group = manifest["duplicates"]["00183fbb4f4f1212"]
+        primary = dup_group["primary"]
+
+        assert "context" in primary, (
+            "Primary entry in manifest should have 'context' field"
+        )
+        # The context should contain the primary's metadata
+        assert primary["context"].get("username") == "user@gmail.com"
+
     def test_manifest_identifies_cross_processor_duplicates(
         self, dedup_service, cross_processor_catalogs
     ):
@@ -251,7 +312,8 @@ class TestCrossProcessorDescriptionBuilding:
         description = get_merged_description_for_file(manifest, primary_path)
 
         assert description is not None
-        lines = description.split("\n")
+        # Split on &#xa; (XML entity for newline used in exiftool argfile format)
+        lines = description.split("&#xa;")
 
         # First line should be the primary source with platform/username/service format
         assert lines[0].startswith("Source:")

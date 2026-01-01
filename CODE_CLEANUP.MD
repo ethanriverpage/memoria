@@ -202,6 +202,17 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Dedup is already fast (11min for 1.2B comparisons); not worth the effort.
 - **Confidence**: **Medium**
 
+##### Finding C1 — Deprecated string processor argument in `common/upload/targets.py`
+
+- **Category**: Dead / unused code
+- **Location**: `common/upload/targets.py` (`build_upload_targets`)
+- **Description & evidence**
+  - The function explicitly raises `TypeError` if `processor` is passed as a string (lines 87-92).
+  - This marks the string-based usage as deprecated/dead.
+- **Impact**
+  - **Low**: Adds noise to the function signature and implementation.
+- **Confidence**: **High**
+
 ---
 
 #### 2.2 Processor-Level Findings
@@ -228,16 +239,17 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **High**: ~2500 lines of near-identical boilerplate across processors.
 - **Confidence**: **High**
 
-##### Finding P4 — Duplicated `_build_description` and helper functions between iMessage processors
+##### Finding P4 — Massive code duplication between iMessage processors
 
 - **Category**: DRY violation
-- **Location**: `processors/imessage/processor.py:338+`, `processors/imessage_imazing/processor.py:276+`
+- **Location**: `processors/imessage/processor.py`, `processors/imessage_imazing/processor.py`
 - **Description & evidence**
-  - `_build_description()` is 95% identical between `imessage` and `imessage_imazing`.
-  - `_extract_date_from_source_export()` and `_extract_device_from_source_export()` are copy-pasted verbatim.
-  - `snapchat_messages/processor.py:289+` and `discord/processor.py:218+` have similar but smaller duplication.
+  - Files are nearly identical (~80% overlap).
+  - Duplicated core logic: `_process_working_directory`, `_process_file_worker`, `_build_metadata_requests`.
+  - Duplicated helpers: `_build_description`, `_extract_date_from_source_export`, `_extract_device_from_source_export`.
+  - Any fix to timestamp parsing or deduplication must be applied twice.
 - **Impact**
-  - **Medium**: 200+ lines of duplicated code across 2-3 processors.
+  - **High**: ~600+ lines of duplicated code; high risk of drift.
 - **Confidence**: **High**
 
 ##### Finding P5 — Duplicated timestamp extraction functions
@@ -371,29 +383,6 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **High**: ~300 lines of duplicated filtering logic.
 - **Confidence**: **High**
 
-##### Finding 57 — Near-identical batch workers in six processors
-
-- **Category**: DRY violation
-- **Location**: `google_chat`, `google_photos`, `google_voice`, `instagram_messages`, `instagram_public_media`, `instaloader`
-- **Description & evidence**
-  - Six processors have near-identical batch workers:
-
-    ```python
-    def process_media_batch(batch_args):
-        results = []
-        file_paths = []
-        file_info = []
-        # Phase 1: Copy
-        # Phase 2: Correct extensions
-        # Phase 3: Update timestamps
-        return results
-    ```
-
-  - Could create `create_batch_copy_worker()` factory function.
-- **Impact**
-  - **Medium**: ~240 lines of duplicated batch worker code.
-- **Confidence**: **High**
-
 ##### Finding 63 — No automated enforcement of processor patterns
 
 - **Category**: Missing test infrastructure
@@ -514,6 +503,28 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: ~200 lines of duplicated imports.
 - **Confidence**: **High**
 
+##### Finding P17 — Duplicated logic between Instagram processors
+
+- **Category**: DRY Violation
+- **Location**: `processors/instagram_messages/processor.py`, `processors/instagram_public_media/processor.py`
+- **Description & evidence**
+  - Both share similar `process_logic`, `_process_working_directory`, and metadata request building logic (`_build_metadata_requests`).
+  - Validation and task construction logic is repeated.
+- **Impact**
+  - **Medium-High**: Maintenance burden; logic updates must be mirrored.
+- **Confidence**: **High**
+
+##### Finding P18 — Duplicated logic between Snapchat processors
+
+- **Category**: DRY Violation
+- **Location**: `processors/snapchat_memories/processor.py`, `processors/snapchat_messages/processor.py`
+- **Description & evidence**
+  - Significant overlap in overlay handling (`create_video_with_overlay` calls), filename generation, and metadata embedding.
+  - `_create_file_worker` / `_create_memory_file` share structure and error handling for overlays.
+- **Impact**
+  - **Medium-High**: Complex overlay logic is duplicated, increasing risk of bugs.
+- **Confidence**: **High**
+
 ---
 
 #### 2.3 CLI / Orchestration Findings (`memoria.py`)
@@ -534,17 +545,26 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 ##### Finding S2 — Upload-only "legacy detection" mode is a superseded internal compatibility branch
 
 - **Category**: Legacy internal compatibility path (internal behavior)
-- **Location**: `memoria.py` (lines 1283-1349)
+- **Location**: `memoria.py` (lines 1283-1420)
 - **Description & evidence**
-  - Upload-only has two modes:
-    - New mode: scan processed output structure via `_scan_platform_username_service_structure()`
-    - Legacy mode: if `original_export` is provided, detect processors from the original export via `_build_upload_only_targets()`
-  - Log strings reveal the split:
-    - `Upload-only legacy mode: missing output directory for ...` (line 1326)
-    - Log prefix differs: `upload-legacy` vs `upload` (line 1362)
+  - The `upload_only_mode` supports a "legacy mode" where `original_export` is provided to re-detect processors via `_build_upload_only_targets` (lines 1297-1331).
+  - Explicitly deprecated in comments and log strings ("legacy detection", "Upload-only legacy mode").
+  - Requires keeping processor detection logic working for uploads even if processing logic changes.
 - **Impact**
-  - **Medium**: Two target-derivation semantics to maintain/test; legacy branch can drift from "scan processed outputs" behavior.
+  - **Medium**: High maintenance; two target-derivation semantics to maintain/test.
 - **Confidence**: **High**
+
+##### Finding S3 — Bespoke file scanning in `memoria.py`
+
+- **Category**: Bespoke Logic
+- **Location**: `memoria.py` (`_collect_upload_files`)
+- **Description & evidence**
+  - Implements directory walking and ignore pattern matching using `fnmatch` locally (lines 1077-1144).
+  - `common/files/scanner.py` exists for similar purposes but is bypassed.
+  - Inconsistent behavior between processing (which uses `common`) and uploading (which uses this local function).
+- **Impact**
+  - **Low-Medium**: Code duplication and potential inconsistencies.
+- **Confidence**: **Medium**
 
 ---
 
@@ -727,7 +747,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 ##### Finding Q2 — TODO in test code referencing untracked bug
 
 - **Category**: Incomplete implementation
-- **Location**: `tests/test_dedup/test_cross_processor_description.py:555`
+- **Location**: `tests/test_dedup/test_cross_processor_description.py:624`
 - **Description & evidence**
   - Comment: `# TODO: When bug is fixed, add actual file metadata verification:`
   - Bug status/tracking unclear.
@@ -785,4 +805,14 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - Alias can be removed by updating internal usages to `VideoMetadata` directly.
 - **Impact**
   - **Very Low**: Minimal functional risk, but contributes to "compat creep" contrary to stateless batch constraints.
+- **Confidence**: **High**
+
+##### Finding Q7 — Unused `ProcessorBase.get_processor()` helper
+
+- **Category**: Dead / unused code
+- **Location**: `processors/base.py` (`ProcessorBase.get_processor`)
+- **Description & evidence**
+  - `ProcessorBase.get_processor()` is defined as an auto-discovery helper, but repo-wide reference search finds no call sites (only the definition).
+- **Impact**
+  - **Low**: Small but concrete surface-area reduction; avoids carrying a misleading “API” that isn’t actually used.
 - **Confidence**: **High**

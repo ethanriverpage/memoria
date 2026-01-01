@@ -46,12 +46,11 @@ def is_preprocessing_cache_valid(cache_path: Path) -> bool:
 def cleanup_preprocessing_cache() -> None:
     """Clean up preprocessing cache (respects CLEANUP_PREPROCESSING_CACHE env var)."""
     from common.dedup.config import get_dedup_config
+    from common.config.runtime import parse_bool_env
 
-    cleanup_enabled = os.environ.get("CLEANUP_PREPROCESSING_CACHE", "true").lower() in (
-        "true",
-        "1",
-        "yes",
-        "on",
+    cleanup_enabled = parse_bool_env(
+        os.environ.get("CLEANUP_PREPROCESSING_CACHE"),
+        default=True,
     )
 
     if not cleanup_enabled:
