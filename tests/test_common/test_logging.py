@@ -112,6 +112,7 @@ class TestSetupLogging:
             (h for h in root.handlers if isinstance(h, logging.FileHandler)), None
         )
         assert file_handler is not None
+        assert file_handler.formatter is not None
         assert file_handler.formatter._fmt == LOG_FORMAT_DETAILED
 
     def test_suppresses_third_party_loggers(self) -> None:
@@ -520,4 +521,3 @@ class TestGetProcessorLogger:
         """Should create logger with correct name."""
         logger = get_processor_logger("test.module")
         assert logger.logger.name == "test.module"
-

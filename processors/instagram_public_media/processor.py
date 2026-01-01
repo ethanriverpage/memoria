@@ -23,7 +23,6 @@ from common.dedup.description import (
     SERVICE_POSTS,
     SERVICE_REELS,
 )
-from common.detection import detect_from_dirname
 from common.failures import FailureTracker
 from common.files.naming import FilenameGenerator
 from common.files.utils import short_path
@@ -486,7 +485,6 @@ def _process_working_directory(
                     missing_examples.append(media_file)
                 continue
 
-            source_file_path = os.path.dirname(full_source_path)
             source_file_name = os.path.basename(full_source_path)
 
             if InstagramPublicMediaProcessor.should_skip_for_dedup(

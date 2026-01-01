@@ -205,9 +205,7 @@ class TestSnapchatMessagesRealisticFixtures:
         assert snapchat_messages_processor.detect(temp_export_dir) is True
 
         # Verify chat_history.json structure matches docs
-        chat_history = (
-            temp_export_dir / "messages" / "json" / "chat_history.json"
-        )
+        chat_history = temp_export_dir / "messages" / "json" / "chat_history.json"
         data = json.loads(chat_history.read_text())
         # Keys should be conversation IDs
         assert "conversation_abc123def456" in data
@@ -232,9 +230,7 @@ class TestSnapchatMessagesRealisticFixtures:
         assert snapchat_messages_processor.detect(temp_export_dir) is True
 
         # Verify pipe-separated Media IDs
-        chat_history = (
-            temp_export_dir / "messages" / "json" / "chat_history.json"
-        )
+        chat_history = temp_export_dir / "messages" / "json" / "chat_history.json"
         data = json.loads(chat_history.read_text())
         msg = data["conversation_multi_media"][0]
         assert " | " in msg["Media IDs"]

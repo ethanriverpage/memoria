@@ -213,7 +213,7 @@ def _build_catalog_worker(
 
     When db_path and run_id are provided, entries are written directly to the
     database for memory-efficient streaming. Otherwise, entries are collected
-    but not returned (legacy mode returns empty count for compatibility).
+    or iterated only for counting (no in-memory accumulation).
 
     Args:
         export_dir_str: Path to the export directory as a string.
@@ -344,7 +344,7 @@ def run_phased_dedup_processing(
     args,
     temp_dir: str,
     log_file: Optional[Path] = None,
-    run_id: Optional[str] = None,
+    run_id: str = "",
 ) -> tuple[int, int, list, list]:
     """Run phased processing with cross-processor deduplication.
 
@@ -749,7 +749,7 @@ def _process_export_worker(
     immich_concurrency: int,
     immich_skip_hash: bool,
     temp_dir: str,
-    export_idx: int,
+    _export_idx: int,
     total_exports: int,
     upload_queue=None,
     processor_filter: str | None = None,
@@ -770,7 +770,7 @@ def _process_export_worker(
         immich_concurrency: Number of concurrent uploads
         immich_skip_hash: Whether to skip hash checking
         temp_dir: Directory for temporary preprocessing files
-        export_idx: Index of this export (for display)
+        _export_idx: Index of this export (for display)
         total_exports: Total number of exports being processed
         upload_queue: Optional multiprocessing queue to collect upload tasks
         processor_filter: Optional processor name to filter to (case-insensitive)
@@ -1316,7 +1316,9 @@ def _build_upload_only_targets(
         else:
             effective_output = processor_output_dir
 
-        derived_targets = build_upload_targets(processor, str(original_export), effective_output)
+        derived_targets = build_upload_targets(
+            processor, str(original_export), effective_output
+        )
         for up_path, album_name in derived_targets:
             up = Path(up_path)
             if up.exists() and up.is_dir():
@@ -1387,7 +1389,9 @@ def upload_only_mode(
 
     if not all_targets:
         if original_export is None:
-            logger.error("No Platform/Username/Service structure found in: %s", upload_path)
+            logger.error(
+                "No Platform/Username/Service structure found in: %s", upload_path
+            )
             logger.error(
                 "Expected structure: Platform/username/service (e.g., Google/johndoe/photos)"
             )
@@ -1396,7 +1400,8 @@ def upload_only_mode(
             matching_processors = registry.detect_all(original_export)
             if not matching_processors:
                 logger.error(
-                    "No processors matched original export directory: %s", original_export
+                    "No processors matched original export directory: %s",
+                    original_export,
                 )
                 show_supported_formats()
             else:
@@ -1667,7 +1672,8 @@ Examples:
         logs_dir.mkdir(parents=True, exist_ok=True)
 
         log_file = (
-            logs_dir / f"{run_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.memoria.log"
+            logs_dir
+            / f"{run_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.memoria.log"
         )
     # Map string log level to logging constant
     file_log_level = logging.DEBUG if args.file_log_level == "debug" else logging.INFO

@@ -42,7 +42,9 @@ class TestVideoEncoder:
         def mock_check(name: str) -> bool:
             return name == "hevc_nvenc"
 
-        with patch.object(VideoEncoder, "_check_encoder_available", side_effect=mock_check):
+        with patch.object(
+            VideoEncoder, "_check_encoder_available", side_effect=mock_check
+        ):
             encoder = VideoEncoder()
 
         assert encoder.encoder_name == "hevc_nvenc"
@@ -54,9 +56,12 @@ class TestVideoEncoder:
         def mock_check(name: str) -> bool:
             return name == "hevc_videotoolbox"
 
-        with patch.object(
-            VideoEncoder, "_check_encoder_available", side_effect=mock_check
-        ), patch("common.media.encoder.platform.system", return_value="Darwin"):
+        with (
+            patch.object(
+                VideoEncoder, "_check_encoder_available", side_effect=mock_check
+            ),
+            patch("common.media.encoder.platform.system", return_value="Darwin"),
+        ):
             encoder = VideoEncoder()
 
         assert encoder.encoder_name == "hevc_videotoolbox"
@@ -68,9 +73,12 @@ class TestVideoEncoder:
         def mock_check(name: str) -> bool:
             return name == "hevc_vaapi"
 
-        with patch.object(
-            VideoEncoder, "_check_encoder_available", side_effect=mock_check
-        ), patch("common.media.encoder.platform.system", return_value="Linux"):
+        with (
+            patch.object(
+                VideoEncoder, "_check_encoder_available", side_effect=mock_check
+            ),
+            patch("common.media.encoder.platform.system", return_value="Linux"),
+        ):
             encoder = VideoEncoder()
 
         assert encoder.encoder_name == "hevc_vaapi"
@@ -82,7 +90,9 @@ class TestVideoEncoder:
         def mock_check(name: str) -> bool:
             return name == "hevc_qsv"
 
-        with patch.object(VideoEncoder, "_check_encoder_available", side_effect=mock_check):
+        with patch.object(
+            VideoEncoder, "_check_encoder_available", side_effect=mock_check
+        ):
             encoder = VideoEncoder()
 
         assert encoder.encoder_name == "hevc_qsv"
@@ -94,7 +104,9 @@ class TestVideoEncoder:
         def mock_check(name: str) -> bool:
             return name == "hevc_amf"
 
-        with patch.object(VideoEncoder, "_check_encoder_available", side_effect=mock_check):
+        with patch.object(
+            VideoEncoder, "_check_encoder_available", side_effect=mock_check
+        ):
             encoder = VideoEncoder()
 
         assert encoder.encoder_name == "hevc_amf"
@@ -107,7 +119,9 @@ class TestVideoEncoder:
             # All encoders available
             return name in ["hevc_nvenc", "hevc_qsv", "hevc_amf"]
 
-        with patch.object(VideoEncoder, "_check_encoder_available", side_effect=mock_check):
+        with patch.object(
+            VideoEncoder, "_check_encoder_available", side_effect=mock_check
+        ):
             encoder = VideoEncoder()
 
         # NVENC should win
@@ -152,9 +166,12 @@ class TestEncoderArgs:
         def mock_check(name: str) -> bool:
             return name == "hevc_vaapi"
 
-        with patch.object(
-            VideoEncoder, "_check_encoder_available", side_effect=mock_check
-        ), patch("common.media.encoder.platform.system", return_value="Linux"):
+        with (
+            patch.object(
+                VideoEncoder, "_check_encoder_available", side_effect=mock_check
+            ),
+            patch("common.media.encoder.platform.system", return_value="Linux"),
+        ):
             encoder = VideoEncoder()
             input_args = encoder.get_input_args()
 
@@ -242,9 +259,7 @@ class TestGlobalEncoderFunctions:
 
     def test_get_encoder_name_returns_string(self) -> None:
         """Should return encoder name as string."""
-        with patch(
-            "common.media.encoder.get_video_encoder"
-        ) as mock_get:
+        with patch("common.media.encoder.get_video_encoder") as mock_get:
             mock_encoder = MagicMock()
             mock_encoder.get_encoder_name.return_value = "hevc_nvenc"
             mock_get.return_value = mock_encoder
@@ -255,9 +270,7 @@ class TestGlobalEncoderFunctions:
 
     def test_is_hardware_accelerated_returns_bool(self) -> None:
         """Should return boolean for hardware acceleration status."""
-        with patch(
-            "common.media.encoder.get_video_encoder"
-        ) as mock_get:
+        with patch("common.media.encoder.get_video_encoder") as mock_get:
             mock_encoder = MagicMock()
             mock_encoder.is_hardware_accelerated.return_value = True
             mock_get.return_value = mock_encoder
@@ -268,9 +281,7 @@ class TestGlobalEncoderFunctions:
 
     def test_get_encoder_args_delegates_to_instance(self) -> None:
         """Should delegate to VideoEncoder instance."""
-        with patch(
-            "common.media.encoder.get_video_encoder"
-        ) as mock_get:
+        with patch("common.media.encoder.get_video_encoder") as mock_get:
             mock_encoder = MagicMock()
             mock_encoder.get_encoder_args.return_value = ["-c:v", "libx265"]
             mock_get.return_value = mock_encoder
@@ -281,9 +292,7 @@ class TestGlobalEncoderFunctions:
 
     def test_get_encoder_input_args_delegates_to_instance(self) -> None:
         """Should delegate to VideoEncoder instance."""
-        with patch(
-            "common.media.encoder.get_video_encoder"
-        ) as mock_get:
+        with patch("common.media.encoder.get_video_encoder") as mock_get:
             mock_encoder = MagicMock()
             mock_encoder.get_input_args.return_value = ["-hwaccel", "vaapi"]
             mock_get.return_value = mock_encoder
@@ -310,7 +319,9 @@ class TestEncoderCheckAvailable:
         def mock_check(name: str) -> bool:
             return name == "hevc_nvenc"
 
-        with patch.object(VideoEncoder, "_check_encoder_available", side_effect=mock_check):
+        with patch.object(
+            VideoEncoder, "_check_encoder_available", side_effect=mock_check
+        ):
             encoder = VideoEncoder()
 
         assert encoder.encoder_name == "hevc_nvenc"
@@ -326,7 +337,9 @@ class TestEncoderBitrateConfigs:
         def mock_check(name: str) -> bool:
             return name == "hevc_nvenc"
 
-        with patch.object(VideoEncoder, "_check_encoder_available", side_effect=mock_check):
+        with patch.object(
+            VideoEncoder, "_check_encoder_available", side_effect=mock_check
+        ):
             encoder = VideoEncoder()
             args = encoder.get_encoder_args(target_bitrate=10_000_000)
 
@@ -343,4 +356,3 @@ class TestEncoderBitrateConfigs:
         assert "libx265" in args
         assert "-b:v" in args
         assert "-x265-params" in args
-

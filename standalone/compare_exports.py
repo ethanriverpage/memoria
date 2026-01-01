@@ -693,7 +693,7 @@ Examples:
         "--log",
         type=Path,
         default=logs_dir
-        / f'export_comparison_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log',
+        / f"export_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
         help="Log file path (default: logs/export_comparison_TIMESTAMP.log)",
     )
     parser.add_argument(

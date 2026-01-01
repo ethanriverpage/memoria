@@ -21,6 +21,8 @@ from typing import Optional, Union
 
 import magic
 
+from common.files.types import AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+
 logger = logging.getLogger(__name__)
 
 # =============================================================================
@@ -269,14 +271,6 @@ MIME_TO_EXTENSION = {
     "audio/mp4": ".m4a",
     "audio/x-m4a": ".m4a",
 }
-
-# Import extension definitions from types.py (single source of truth)
-# These are used for cross-category validation in batch_correct_extensions()
-from common.files.types import (
-    IMAGE_EXTENSIONS,
-    VIDEO_EXTENSIONS,
-    AUDIO_EXTENSIONS,
-)
 
 
 def batch_correct_extensions(

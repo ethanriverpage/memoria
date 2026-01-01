@@ -54,5 +54,7 @@ def build_processor_output_path(
         >>> build_processor_output_path(info, "iph13p-messages-20220426", "/output")
         '/output/iMessage/iph13p'
     """
-    username = detect_from_dirname(Path(input_dir), output_info.username_prefix) or "unknown"
+    username = (
+        detect_from_dirname(Path(input_dir), output_info.username_prefix) or "unknown"
+    )
     return str(Path(base_output_dir) / output_info.platform / username)

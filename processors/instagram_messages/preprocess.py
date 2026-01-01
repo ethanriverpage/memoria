@@ -10,7 +10,7 @@ Organizes Instagram message export files and creates cleaned metadata:
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 from bs4 import BeautifulSoup
 
@@ -527,6 +527,14 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
             self.workers,
         )
 
+        def on_conversation_error(tid: Any, e: Exception) -> None:
+            self.log_message(
+                "CONVERSATION_PROCESSING_ERROR",
+                f"Failed to process conversation {tid}",
+                str(e),
+            )
+            log.logger.error("Failed to process conversation %s: %s", tid, e)
+
         # Process conversations in parallel
         all_conversations = process_parallel_threaded(
             tasks=conversation_list,
@@ -535,15 +543,11 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
             phase=PHASE_PREPROCESS,
             description="Parsing conversations",
             task_id_fn=lambda t: t[0],  # conversation_id
-            on_error=lambda tid, e: (
-                self.log_message(
-                    "CONVERSATION_PROCESSING_ERROR",
-                    f"Failed to process conversation {tid}",
-                    str(e),
-                ),
-                log.logger.error("Failed to process conversation %s: %s", tid, e),
-            ),
+            on_error=on_conversation_error,
         )
+
+        # Filter out conversations that did not contain any media messages
+        all_conversations = [c for c in all_conversations if c is not None]
 
         with self.stats_lock:
             self.stats["total_conversations"] = len(all_conversations)

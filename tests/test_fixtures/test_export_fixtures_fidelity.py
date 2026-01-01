@@ -27,6 +27,7 @@ class TestGooglePhotosFixtureFidelity:
     @pytest.fixture
     def processor(self):
         from processors.google_photos.processor import GooglePhotosProcessor
+
         return GooglePhotosProcessor
 
     def test_takeout_basic_detected(self, processor, tmp_path):
@@ -53,9 +54,7 @@ class TestGooglePhotosFixtureFidelity:
         copy_export_fixture("google_photos", "takeout_basic", tmp_path)
 
         # Find a JSON sidecar
-        json_files = list(
-            (tmp_path / "Takeout" / "Google Photos").rglob("*.jpg.json")
-        )
+        json_files = list((tmp_path / "Takeout" / "Google Photos").rglob("*.jpg.json"))
         assert len(json_files) > 0, "Should have at least one JSON sidecar"
 
         metadata = json.loads(json_files[0].read_text())
@@ -85,6 +84,7 @@ class TestGoogleChatFixtureFidelity:
     @pytest.fixture
     def processor(self):
         from processors.google_chat.processor import GoogleChatProcessor
+
         return GoogleChatProcessor
 
     def test_groups_and_users_detected(self, processor, tmp_path):
@@ -114,6 +114,7 @@ class TestGoogleVoiceFixtureFidelity:
     @pytest.fixture
     def processor(self):
         from processors.google_voice.processor import GoogleVoiceProcessor
+
         return GoogleVoiceProcessor
 
     def test_takeout_calls_basic_detected(self, processor, tmp_path):
@@ -139,6 +140,7 @@ class TestDiscordFixtureFidelity:
     @pytest.fixture
     def processor(self):
         from processors.discord.processor import DiscordProcessor
+
         return DiscordProcessor
 
     def test_raw_minimal_detected(self, processor, tmp_path):
@@ -185,6 +187,7 @@ class TestSnapchatMessagesFixtureFidelity:
     @pytest.fixture
     def processor(self):
         from processors.snapchat_messages.processor import SnapchatMessagesProcessor
+
         return SnapchatMessagesProcessor
 
     def test_raw_conversation_id_map_detected(self, processor, tmp_path):
@@ -230,6 +233,7 @@ class TestSnapchatMemoriesFixtureFidelity:
     @pytest.fixture
     def processor(self):
         from processors.snapchat_memories.processor import SnapchatMemoriesProcessor
+
         return SnapchatMemoriesProcessor
 
     def test_memories_basic_detected(self, processor, tmp_path):
@@ -268,6 +272,7 @@ class TestInstagramMessagesFixtureFidelity:
     @pytest.fixture
     def processor(self):
         from processors.instagram_messages.processor import InstagramMessagesProcessor
+
         return InstagramMessagesProcessor
 
     def test_current_format_doc_html_detected(self, processor, tmp_path):
@@ -313,6 +318,7 @@ class TestInstagramPublicFixtureFidelity:
         from processors.instagram_public_media.processor import (
             InstagramPublicMediaProcessor,
         )
+
         return InstagramPublicMediaProcessor
 
     def test_posts_and_archived_posts_detected(self, processor, tmp_path):
@@ -338,6 +344,7 @@ class TestInstaloaderFixtureFidelity:
     @pytest.fixture
     def processor(self):
         from processors.instaloader.processor import InstaloaderProcessor
+
         return InstaloaderProcessor
 
     def test_basic_with_json_xz_detected(self, processor, tmp_path):
@@ -364,6 +371,7 @@ class TestIMessageFixtureFidelity:
     @pytest.fixture
     def processor(self):
         from processors.imessage.processor import IMessageProcessor
+
         return IMessageProcessor
 
     def test_mac_basic_detected(self, processor, tmp_path):
@@ -407,6 +415,7 @@ class TestIMessageImazingFixtureFidelity:
     @pytest.fixture
     def processor(self):
         from processors.imessage_imazing.processor import ImazingProcessor
+
         return ImazingProcessor
 
     def test_basic_device_info_detected(self, processor, tmp_path):
@@ -508,4 +517,3 @@ class TestFixtureExclusivity:
                 assert processor.detect(tmp_path) is False, (
                     f"{name} should not detect Snapchat Messages fixture"
                 )
-

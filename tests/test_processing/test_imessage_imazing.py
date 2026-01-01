@@ -36,7 +36,9 @@ def imazing_output_dir(tmp_path):
     return output_dir
 
 
-def create_imazing_media_file(export_dir: Path, timestamp: str, contact: str, original: str):
+def create_imazing_media_file(
+    export_dir: Path, timestamp: str, contact: str, original: str
+):
     """Create an iMazing-format media file.
 
     Args:
@@ -131,7 +133,9 @@ class TestImazingFilenamePattern:
 class TestImazingOrphanDetection:
     """Tests for orphaned media/metadata detection."""
 
-    def test_orphaned_media_invalid_pattern(self, imazing_export_dir, imazing_output_dir):
+    def test_orphaned_media_invalid_pattern(
+        self, imazing_export_dir, imazing_output_dir
+    ):
         """Should track media files that don't match iMazing pattern as orphaned media."""
         from processors.imessage_imazing.preprocess import ImazingPreprocessor
 
@@ -495,20 +499,32 @@ class TestImazingHelpers:
 
     def test_extract_date_from_source_export(self):
         """Should extract date string from source_export."""
-        from processors.imessage_imazing.processor import _extract_date_from_source_export
+        from processors.imessage_imazing.processor import (
+            _extract_date_from_source_export,
+        )
 
-        assert _extract_date_from_source_export("imessage-iph13p-20220426") == "20220426"
-        assert _extract_date_from_source_export("imessage-m3_mbp-20251202") == "20251202"
+        assert (
+            _extract_date_from_source_export("imessage-iph13p-20220426") == "20220426"
+        )
+        assert (
+            _extract_date_from_source_export("imessage-m3_mbp-20251202") == "20251202"
+        )
         assert _extract_date_from_source_export("invalid") is None
         assert _extract_date_from_source_export("") is None
         assert _extract_date_from_source_export(None) is None
 
     def test_extract_device_from_source_export(self):
         """Should extract device identifier from source_export."""
-        from processors.imessage_imazing.processor import _extract_device_from_source_export
+        from processors.imessage_imazing.processor import (
+            _extract_device_from_source_export,
+        )
 
-        assert _extract_device_from_source_export("imessage-iph13p-20220426") == "iph13p"
-        assert _extract_device_from_source_export("imessage-m3_mbp-20251202") == "m3_mbp"
+        assert (
+            _extract_device_from_source_export("imessage-iph13p-20220426") == "iph13p"
+        )
+        assert (
+            _extract_device_from_source_export("imessage-m3_mbp-20251202") == "m3_mbp"
+        )
         assert _extract_device_from_source_export("invalid") == "unknown"
         assert _extract_device_from_source_export("") == "unknown"
 
@@ -521,13 +537,25 @@ class TestImazingHelpers:
             "conversations": {
                 "conv1": {
                     "messages": [
-                        {"media_files": ["photo1.jpg"], "source_paths": {"photo1.jpg": "/path/photo1.jpg"}, "content": "msg1"},
-                        {"media_files": ["photo2.jpg"], "source_paths": {"photo2.jpg": "/path/photo2.jpg"}, "content": "msg2"},
+                        {
+                            "media_files": ["photo1.jpg"],
+                            "source_paths": {"photo1.jpg": "/path/photo1.jpg"},
+                            "content": "msg1",
+                        },
+                        {
+                            "media_files": ["photo2.jpg"],
+                            "source_paths": {"photo2.jpg": "/path/photo2.jpg"},
+                            "content": "msg2",
+                        },
                     ]
                 }
             },
             "unmatched_media": [
-                {"media_files": ["orphan.jpg"], "source_paths": {"orphan.jpg": "/path/orphan.jpg"}, "content": "orphan"}
+                {
+                    "media_files": ["orphan.jpg"],
+                    "source_paths": {"orphan.jpg": "/path/orphan.jpg"},
+                    "content": "orphan",
+                }
             ],
             "file_hashes": {},
         }
@@ -637,7 +665,9 @@ class TestImazingLivePhotos:
         (imazing_export_dir / "metadata.json").write_text(json.dumps(metadata))
 
         # Build catalog - should group video with image
-        entries = list(ImazingProcessor.build_catalog(str(imazing_export_dir), workers=1))
+        entries = list(
+            ImazingProcessor.build_catalog(str(imazing_export_dir), workers=1)
+        )
 
         # Video should not be in entries if grouped with image
         filenames = [Path(e["source_path"]).name for e in entries]

@@ -37,4 +37,3 @@ __all__ = [
     "MetadataValidationError",
     "extract_all_media_entries",
 ]
-

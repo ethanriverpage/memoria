@@ -23,4 +23,3 @@ __all__ = [
     "assert_no_mkv_on_overlay_fail",
     "count_output_files",
 ]
-

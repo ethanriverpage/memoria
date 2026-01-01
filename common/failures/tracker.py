@@ -108,7 +108,7 @@ class FailureTracker:
     def add_processing_failure(
         self,
         media_path: Path,
-        metadata: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]],
         reason: str,
         error_details: str,
         context: Optional[Dict[str, Any]] = None,
@@ -229,15 +229,15 @@ class FailureTracker:
 
         if self.orphaned_media:
             # Group by reason and show counts
-            reasons: Dict[str, List[str]] = {}
+            reasons_to_paths: Dict[str, List[str]] = {}
             for entry in self.orphaned_media:
                 reason = entry.get("reason", "unknown")
                 rel_path = self._relative_path(entry["file_path"])
-                if reason not in reasons:
-                    reasons[reason] = []
-                reasons[reason].append(rel_path)
+                if reason not in reasons_to_paths:
+                    reasons_to_paths[reason] = []
+                reasons_to_paths[reason].append(rel_path)
 
-            for reason, paths in reasons.items():
+            for reason, paths in reasons_to_paths.items():
                 if len(paths) <= 3:
                     # Show all paths if 3 or fewer
                     paths_str = ", ".join(paths)
@@ -253,15 +253,15 @@ class FailureTracker:
 
         if self.processing_failures:
             # Group by reason and show counts
-            reasons: Dict[str, List[str]] = {}
+            reasons_to_paths: Dict[str, List[str]] = {}
             for entry in self.processing_failures:
                 reason = entry.get("reason", "unknown")
                 rel_path = self._relative_path(entry["file_path"])
-                if reason not in reasons:
-                    reasons[reason] = []
-                reasons[reason].append(rel_path)
+                if reason not in reasons_to_paths:
+                    reasons_to_paths[reason] = []
+                reasons_to_paths[reason].append(rel_path)
 
-            for reason, paths in reasons.items():
+            for reason, paths in reasons_to_paths.items():
                 if len(paths) <= 3:
                     paths_str = ", ".join(paths)
                     logger.debug(
@@ -274,11 +274,11 @@ class FailureTracker:
                     )
 
         if self.export_failures:
-            reasons: Dict[str, int] = {}
+            reason_counts: Dict[str, int] = {}
             for entry in self.export_failures:
                 reason = entry.get("reason", "unknown")
-                reasons[reason] = reasons.get(reason, 0) + 1
-            for reason, count in reasons.items():
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            for reason, count in reason_counts.items():
                 logger.debug(f"Tracked {count} export-level failures ({reason})")
 
     def generate_report(self) -> Dict[str, Any]:

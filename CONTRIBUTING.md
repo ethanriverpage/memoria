@@ -283,11 +283,6 @@ class MyPlatformProcessor(ProcessorBase):
         
         # Return True on success, False on failure
         return True
-
-
-def get_processor():
-    """Return processor class for auto-discovery"""
-    return MyPlatformProcessor
 ```
 
 ### 3. Test Your Processor

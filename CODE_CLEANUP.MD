@@ -1,25 +1,16 @@
+# Code Cleanup
 
-### 1. Executive Summary
+## 1. Executive Summary
 
 Overall the repo is **well-structured and test-backed** (clear processor boundaries in `processors/`, shared utilities in `common/`, and broad test coverage under `tests/`).
 
 ---
 
-### 2. Findings
+## 2. Findings
 
-#### 2.1 `common/` Directory Audit
+## 2.1 `common/` Directory Audit
 
-##### Finding N — `common/preprocess/__init__.py` exports are incomplete vs actual usage
-
-- **Category**: API inconsistency
-- **Location**: `common/preprocess/__init__.py`
-- **Description & evidence**
-  - `merge_imessage_context()` is used by preprocessors, but `common/preprocess/__init__.py` only exports `merge_albums` and `merge_snapchat_context`.
-- **Impact**
-  - **Low**: Works (callers import from `common.preprocess.context_mergers`), but increases drift and inconsistent "public API" conventions.
-- **Confidence**: **High**
-
-##### Finding 74 — `HashDatabase` is a concrete class with no abstract interface
+## Finding 74 — `HashDatabase` is a concrete class with no abstract interface
 
 - **Category**: DIP violation
 - **Location**: `common/dedup/database.py`
@@ -32,7 +23,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Works, but limits testability and extensibility.
 - **Confidence**: **High**
 
-##### Finding 75 — Environment variable parsing is scattered across multiple modules
+## Finding 75 — Environment variable parsing is scattered across multiple modules
 
 - **Category**: DRY violation
 - **Location**: `common/config/runtime.py`, `common/processing/cache.py`, `common/dedup/service.py`, `common/dedup/config.py`
@@ -46,7 +37,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Medium**: Configuration drift; hard to audit all env vars.
 - **Confidence**: **High**
 
-##### Finding 76 — `exiftool.py` mixes command building with process execution
+## Finding 76 — `exiftool.py` mixes command building with process execution
 
 - **Category**: SRP violation
 - **Location**: `common/media/exiftool.py`
@@ -61,7 +52,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Medium**: Large module, harder to test, duplicated execution logic.
 - **Confidence**: **High**
 
-##### Finding 78 — Long functions in DeduplicationService exceed reasonable length
+## Finding 78 — Long functions in DeduplicationService exceed reasonable length
 
 - **Category**: Code smell
 - **Location**: `common/dedup/service.py`
@@ -74,7 +65,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Works, but reduces testability and readability.
 - **Confidence**: **High**
 
-##### Finding 79 — Circular import workarounds via lazy imports
+## Finding 79 — Circular import workarounds via lazy imports
 
 - **Category**: Architectural smell
 - **Location**: `common/processing/cache.py`, `common/media/exiftool.py`
@@ -87,28 +78,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Works, but architectural smell indicating need for restructuring.
 - **Confidence**: **Medium**
 
-##### Finding 80 — Inconsistent type hints in processing functions
-
-- **Category**: Type safety gap
-- **Location**: `common/processing/batch.py`
-- **Description & evidence**
-  - TypeVars T, R are defined (lines 31-32) and used in `process_items_parallel()` (line 164).
-  - But `process_batches_parallel()` (line 117) still uses `List[Any]`:
-
-    ```python
-    def process_batches_parallel(
-        tasks: List[Any],                    # Should use TypeVar T
-        worker_fn: Callable[[List[Any]], List[Any]],
-        ...
-    ) -> List[Any]:
-    ```
-
-  - Inconsistent type safety across similar functions.
-- **Impact**
-  - **Low**: Works, but misses static analysis benefits.
-- **Confidence**: **High**
-
-##### Finding 81 — Inconsistent error handling patterns across modules
+## Finding 81 — Inconsistent error handling patterns across modules
 
 - **Category**: Inconsistency
 - **Location**: Multiple files in `common/`
@@ -140,7 +110,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Medium**: Unpredictable error handling makes debugging harder.
 - **Confidence**: **High**
 
-##### Finding 82 — `FailureTracker` handles both tracking and report generation
+## Finding 82 — `FailureTracker` handles both tracking and report generation
 
 - **Category**: SRP violation
 - **Location**: `common/failures/tracker.py`
@@ -153,7 +123,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Works, but class is larger than necessary.
 - **Confidence**: **High**
 
-##### Finding 83 — No retry logic for external process calls
+## Finding 83 — No retry logic for external process calls
 
 - **Category**: Missing resilience
 - **Location**: `common/media/exiftool.py`, `common/media/overlay.py`
@@ -165,7 +135,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Only relevant if transient failures are observed in production.
 - **Confidence**: **Medium**
 
-##### Finding 84 — `get_media_type()` returns magic strings instead of Enum
+## Finding 84 — `get_media_type()` returns magic strings instead of Enum
 
 - **Category**: Type safety gap
 - **Location**: `common/files/types.py`
@@ -177,7 +147,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Works, but misses static analysis benefits.
 - **Confidence**: **High**
 
-##### Finding 4 — Database connection overhead in hot paths
+## Finding 4 — Database connection overhead in hot paths
 
 - **Category**: Performance
 - **Location**: `common/dedup/database.py` (lines 77-89)
@@ -191,7 +161,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Medium**: Potential 2-4min savings at scale.
 - **Confidence**: **High**
 
-##### Finding 7 — `get_similar` pulls all hashes into memory
+## Finding 7 — `get_similar` pulls all hashes into memory
 
 - **Category**: Performance
 - **Location**: `common/dedup/database.py`
@@ -202,7 +172,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Dedup is already fast (11min for 1.2B comparisons); not worth the effort.
 - **Confidence**: **Medium**
 
-##### Finding C1 — Deprecated string processor argument in `common/upload/targets.py`
+## Finding C1 — Deprecated string processor argument in `common/upload/targets.py`
 
 - **Category**: Dead / unused code
 - **Location**: `common/upload/targets.py` (`build_upload_targets`)
@@ -215,9 +185,9 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 
 ---
 
-#### 2.2 Processor-Level Findings
+## 2.2 Processor-Level Findings
 
-##### Finding M — Unmaintained standalone scripts
+## Finding M — Unmaintained standalone scripts
 
 - **Category**: Dead code / maintenance debt
 - **Location**: `standalone/` directory
@@ -228,7 +198,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Clutter; potential confusion for new contributors.
 - **Confidence**: **Medium** (Check utility before deletion).
 
-##### Finding P2 — Duplicated `_process_working_directory` boilerplate
+## Finding P2 — Duplicated `_process_working_directory` boilerplate
 
 - **Category**: DRY violation
 - **Location**: All 11 processors implement variants of this pattern
@@ -239,7 +209,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **High**: ~2500 lines of near-identical boilerplate across processors.
 - **Confidence**: **High**
 
-##### Finding P4 — Massive code duplication between iMessage processors
+## Finding P4 — Massive code duplication between iMessage processors
 
 - **Category**: DRY violation
 - **Location**: `processors/imessage/processor.py`, `processors/imessage_imazing/processor.py`
@@ -252,7 +222,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **High**: ~600+ lines of duplicated code; high risk of drift.
 - **Confidence**: **High**
 
-##### Finding P5 — Duplicated timestamp extraction functions
+## Finding P5 — Duplicated timestamp extraction functions
 
 - **Category**: DRY violation
 - **Location**: `processors/imessage/processor.py:538+`, `processors/imessage_imazing/processor.py:449+`, `processors/snapchat_messages/processor.py:480+`
@@ -263,7 +233,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: ~50 lines duplicated; straightforward to consolidate.
 - **Confidence**: **High**
 
-##### Finding P11 — Internal backwards-compat timestamp fallback in Snapchat Messages processing
+## Finding P11 — Internal backwards-compat timestamp fallback in Snapchat Messages processing
 
 - **Category**: Legacy internal compatibility path
 - **Location**: `processors/snapchat_messages/processor.py:390+`, `processors/snapchat_messages/processor.py:505+`
@@ -274,7 +244,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Medium**: Allows non-canonical internal metadata formats to persist; increases timestamp handling drift and makes downstream behavior harder to reason about.
 - **Confidence**: **High**
 
-##### Finding P15 — Duplicated Instagram username extraction and timestamp parsing across two preprocessors
+## Finding P15 — Duplicated Instagram username extraction and timestamp parsing across two preprocessors
 
 - **Category**: DRY violation
 - **Location**: `processors/instagram_messages/preprocess.py:108-171`, `processors/instagram_public_media/preprocess.py:112-174`
@@ -286,7 +256,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Medium**: Fixes for future Instagram export HTML changes must be applied twice; easy to drift.
 - **Confidence**: **High**
 
-##### Finding P16 — Duplicated Google username detection logic across preprocessors
+## Finding P16 — Duplicated Google username detection logic across preprocessors
 
 - **Category**: DRY violation
 - **Location**: `processors/google_photos/preprocess.py:135-196`, `processors/google_chat/preprocess.py:99-160`
@@ -299,7 +269,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low-Medium**: Maintenance overhead; changes to detection heuristics must be duplicated.
 - **Confidence**: **Medium**
 
-##### Finding 52 — Inconsistent dedup check patterns across processors
+## Finding 52 — Inconsistent dedup check patterns across processors
 
 - **Category**: Inconsistency
 - **Location**: All 11 processors
@@ -325,7 +295,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Works, but inconsistent and less efficient for Pattern B.
 - **Confidence**: **High**
 
-##### Finding 55 — All processors have identical `process()` structure
+## Finding 55 — All processors have identical `process()` structure
 
 - **Category**: DRY violation
 - **Location**: `processors/base.py`, all 11 processors
@@ -355,7 +325,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Medium**: ~220 lines of duplicated boilerplate.
 - **Confidence**: **High**
 
-##### Finding 56 — Near-identical dedup filtering in 10 processors
+## Finding 56 — Near-identical dedup filtering in 10 processors
 
 - **Category**: DRY violation
 - **Location**: `processors/base.py` or `common/dedup/service.py`, 10 processors
@@ -383,7 +353,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **High**: ~300 lines of duplicated filtering logic.
 - **Confidence**: **High**
 
-##### Finding 63 — No automated enforcement of processor patterns
+## Finding 63 — No automated enforcement of processor patterns
 
 - **Category**: Missing test infrastructure
 - **Location**: `tests/` (missing `test_processor_compliance.py`)
@@ -401,7 +371,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Medium**: Pattern violations not caught until runtime.
 - **Confidence**: **High**
 
-##### Finding 67 — Nine processors have identical `preprocess()` structure
+## Finding 67 — Nine processors have identical `preprocess()` structure
 
 - **Category**: DRY violation
 - **Location**: `processors/base.py`, 9 processors
@@ -427,7 +397,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Medium**: ~135 lines of duplicated boilerplate.
 - **Confidence**: **High**
 
-##### Finding 68 — Nine processors have similar `needs_preprocessing()` pattern
+## Finding 68 — Nine processors have similar `needs_preprocessing()` pattern
 
 - **Category**: DRY violation
 - **Location**: `processors/base.py`, 9 processors
@@ -450,7 +420,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: ~90 lines of duplicated boilerplate.
 - **Confidence**: **High**
 
-##### Finding 70 — Similar `_build_metadata_requests()` structure in all 11 processors
+## Finding 70 — Similar `_build_metadata_requests()` structure in all 11 processors
 
 - **Category**: DRY violation
 - **Location**: `common/media/exiftool.py` or `processors/base.py`, all 11 processors
@@ -474,7 +444,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Medium**: ~200 lines of duplicated metadata request building.
 - **Confidence**: **High**
 
-##### Finding 72 — Overlapping imports across all 11 processor modules
+## Finding 72 — Overlapping imports across all 11 processor modules
 
 - **Category**: DRY violation
 - **Location**: All 11 processor modules
@@ -503,7 +473,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: ~200 lines of duplicated imports.
 - **Confidence**: **High**
 
-##### Finding P17 — Duplicated logic between Instagram processors
+## Finding P17 — Duplicated logic between Instagram processors
 
 - **Category**: DRY Violation
 - **Location**: `processors/instagram_messages/processor.py`, `processors/instagram_public_media/processor.py`
@@ -514,7 +484,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Medium-High**: Maintenance burden; logic updates must be mirrored.
 - **Confidence**: **High**
 
-##### Finding P18 — Duplicated logic between Snapchat processors
+## Finding P18 — Duplicated logic between Snapchat processors
 
 - **Category**: DRY Violation
 - **Location**: `processors/snapchat_memories/processor.py`, `processors/snapchat_messages/processor.py`
@@ -527,9 +497,9 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 
 ---
 
-#### 2.3 CLI / Orchestration Findings (`memoria.py`)
+## 2.3 CLI / Orchestration Findings (`memoria.py`)
 
-##### Finding S — Hardcoded platform/service taxonomies in upload-only scanning will drift
+## Finding S — Hardcoded platform/service taxonomies in upload-only scanning will drift
 
 - **Category**: DRY violation / architectural drift
 - **Location**: `memoria.py` (lines 1178-1262), `processors/preprocess_base.py` (lines 481-494)
@@ -542,7 +512,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Medium**: Drift-prone behavior and silent functional gaps (missing uploads) when processors evolve.
 - **Confidence**: **High**
 
-##### Finding S2 — Upload-only "legacy detection" mode is a superseded internal compatibility branch
+## Finding S2 — Upload-only "legacy detection" mode is a superseded internal compatibility branch
 
 - **Category**: Legacy internal compatibility path (internal behavior)
 - **Location**: `memoria.py` (lines 1283-1420)
@@ -554,7 +524,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Medium**: High maintenance; two target-derivation semantics to maintain/test.
 - **Confidence**: **High**
 
-##### Finding S3 — Bespoke file scanning in `memoria.py`
+## Finding S3 — Bespoke file scanning in `memoria.py`
 
 - **Category**: Bespoke Logic
 - **Location**: `memoria.py` (`_collect_upload_files`)
@@ -568,9 +538,9 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 
 ---
 
-#### 2.4 Performance Findings
+## 2.4 Performance Findings
 
-##### Finding 39 — Repeated exiftool invocations incur startup overhead at scale
+## Finding 39 — Repeated exiftool invocations incur startup overhead at scale
 
 - **Category**: Performance
 - **Location**: `common/media/exiftool.py`
@@ -584,7 +554,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **High**: Potential 15-30min savings at scale.
 - **Confidence**: **High**
 
-##### Finding 9 — Multi-pass video processing causes multiple re-encodes
+## Finding 9 — Multi-pass video processing causes multiple re-encodes
 
 - **Category**: Performance
 - **Location**: `common/media/overlay.py` (lines 130-680, 890-1003)
@@ -596,7 +566,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **High**: Potential 7-12min savings at scale.
 - **Confidence**: **High**
 
-##### Finding 2 — `is_file_primary_by_hash` iterates all duplicates per call
+## Finding 2 — `is_file_primary_by_hash` iterates all duplicates per call
 
 - **Category**: Performance
 - **Location**: `common/dedup/service.py` (lines 1080-1173)
@@ -609,7 +579,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **High**: Potential 5-10min savings at scale.
 - **Confidence**: **High**
 
-##### Finding 3 — Sequential hash computation in `filter_primary_files`
+## Finding 3 — Sequential hash computation in `filter_primary_files`
 
 - **Category**: Performance
 - **Location**: `common/dedup/service.py` (lines 1282-1334)
@@ -621,7 +591,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Medium**: Potential 3-7min savings at scale.
 - **Confidence**: **High**
 
-##### Finding 10 — PIL pre-scales overlays before FFmpeg
+## Finding 10 — PIL pre-scales overlays before FFmpeg
 
 - **Category**: Performance
 - **Location**: `common/media/overlay.py` (lines 427-443)
@@ -633,7 +603,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Medium**: Potential 3-5min savings at scale.
 - **Confidence**: **High**
 
-##### Finding 12 — `ThreadPoolExecutor` for CPU-bound hashing limited by GIL
+## Finding 12 — `ThreadPoolExecutor` for CPU-bound hashing limited by GIL
 
 - **Category**: Performance
 - **Location**: `common/dedup/catalog.py` (lines 170, 542)
@@ -645,7 +615,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low-Medium**: Potential 1-3min savings at scale.
 - **Confidence**: **Medium**
 
-##### Finding 5 — `iterdir()` + `is_file()` slower than `os.scandir()`
+## Finding 5 — `iterdir()` + `is_file()` slower than `os.scandir()`
 
 - **Category**: Performance
 - **Location**: `common/files/scanner.py` (lines 64, 127, 232)
@@ -657,7 +627,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Potential <1min savings at scale.
 - **Confidence**: **High**
 
-##### Finding 34 — HTTP requests without connection pooling for Discord
+## Finding 34 — HTTP requests without connection pooling for Discord
 
 - **Category**: Performance
 - **Location**: `processors/discord/preprocess.py`
@@ -669,7 +639,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Potential <1min savings at scale.
 - **Confidence**: **High**
 
-##### Finding 35 — Discord downloads to disk then re-reads for content_hash
+## Finding 35 — Discord downloads to disk then re-reads for content_hash
 
 - **Category**: Performance
 - **Location**: `processors/discord/preprocess.py`, `processors/preprocess_base.py`
@@ -682,7 +652,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Potential <1min savings at scale.
 - **Confidence**: **High**
 
-##### Finding 36 — Per-file SQLite overhead in download dedup
+## Finding 36 — Per-file SQLite overhead in download dedup
 
 - **Category**: Performance
 - **Location**: `processors/preprocess_base.py`
@@ -693,7 +663,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Potential <1min savings at scale.
 - **Confidence**: **High**
 
-##### Finding 19 — Perceptual comparisons scale O(n^2)
+## Finding 19 — Perceptual comparisons scale O(n^2)
 
 - **Category**: Performance
 - **Location**: `common/dedup/service.py`
@@ -705,7 +675,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Dedup already fast; limited ROI.
 - **Confidence**: **Medium**
 
-##### Finding 22 — Pickling overhead in IPC for perceptual comparison
+## Finding 22 — Pickling overhead in IPC for perceptual comparison
 
 - **Category**: Performance
 - **Location**: `common/dedup/service.py` (lines 33-62)
@@ -717,7 +687,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Dedup already fast; limited ROI.
 - **Confidence**: **Medium**
 
-##### Finding 8 — Large HEIC fully decoded during hashing
+## Finding 8 — Large HEIC fully decoded during hashing
 
 - **Category**: Performance
 - **Location**: `common/dedup/hashing.py`
@@ -729,7 +699,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Current approach acceptable.
 - **Confidence**: **Medium**
 
-##### Finding 24 — Full metadata through compare phases when only subset needed
+## Finding 24 — Full metadata through compare phases when only subset needed
 
 - **Category**: Performance
 - **Location**: `common/dedup/catalog.py`, `common/dedup/service.py`
@@ -742,9 +712,9 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 
 ---
 
-#### 2.5 Code Quality Findings
+## 2.5 Code Quality Findings
 
-##### Finding Q2 — TODO in test code referencing untracked bug
+## Finding Q2 — TODO in test code referencing untracked bug
 
 - **Category**: Incomplete implementation
 - **Location**: `tests/test_dedup/test_cross_processor_description.py:624`
@@ -755,7 +725,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Test incompleteness; may indicate unfixed bug.
 - **Confidence**: **High**
 
-##### Finding Q3 — Bare `pass` statements in exception handlers
+## Finding Q3 — Bare `pass` statements in exception handlers
 
 - **Category**: Code smell / potential silent failures
 - **Location**: 17 occurrences across codebase
@@ -773,7 +743,7 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low**: Most are intentional; worth documenting.
 - **Confidence**: **Medium**
 
-##### Finding Q4 — Duplicated `MEDIA_EXTENSIONS` constant in standalone script
+## Finding Q4 — Duplicated `MEDIA_EXTENSIONS` constant in standalone script
 
 - **Category**: DRY violation
 - **Location**: `standalone/sample_metadata_audit.py:26-29`
@@ -781,38 +751,4 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - Defines local `MEDIA_EXTENSIONS` instead of importing from `common.files.types` (e.g., `ALL_MEDIA_EXTENSIONS`).
 - **Impact**
   - **Very Low**: Standalone script isolation, but risks drift.
-- **Confidence**: **High**
-
-##### Finding Q5 — Misleading "legacy mode" comment in catalog worker docstring
-
-- **Category**: Dead code / misleading comment
-- **Location**: `memoria.py` (lines 200-300)
-- **Description & evidence**
-  - Docstring (line 216) claims: "legacy mode returns empty count for compatibility".
-  - Implementation (lines 297-299) actually counts files via `for _ in processor.build_catalog(...): file_count += 1`.
-  - Function always returns `(export_dir.name, file_count)`, so count is never empty.
-- **Impact**
-  - **Low-Medium**: Misleading comment about legacy behavior.
-- **Confidence**: **High**
-
-##### Finding Q6 — Orphaned internal backwards-compat type alias in dedup hashing
-
-- **Category**: Legacy internal compatibility artifact
-- **Location**: `common/dedup/hashing.py` (line 72)
-- **Description & evidence**
-  - Defines `VideoInfo = VideoMetadata` with comment "Backwards-compatible alias for internal usage".
-  - Used only internally in `_get_video_info()` return type annotation (lines 253, 264).
-  - Alias can be removed by updating internal usages to `VideoMetadata` directly.
-- **Impact**
-  - **Very Low**: Minimal functional risk, but contributes to "compat creep" contrary to stateless batch constraints.
-- **Confidence**: **High**
-
-##### Finding Q7 — Unused `ProcessorBase.get_processor()` helper
-
-- **Category**: Dead / unused code
-- **Location**: `processors/base.py` (`ProcessorBase.get_processor`)
-- **Description & evidence**
-  - `ProcessorBase.get_processor()` is defined as an auto-discovery helper, but repo-wide reference search finds no call sites (only the definition).
-- **Impact**
-  - **Low**: Small but concrete surface-area reduction; avoids carrying a misleading “API” that isn’t actually used.
 - **Confidence**: **High**

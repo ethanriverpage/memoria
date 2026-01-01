@@ -26,7 +26,7 @@ import subprocess
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 import pytest
 
@@ -208,7 +208,7 @@ def run_memoria(input_dir: Path, output_dir: Path) -> bool:
 
 
 @pytest.fixture(scope="session")
-def dataset_paths(request) -> Tuple[Path, Path]:
+def dataset_paths(request) -> Generator[Tuple[Path, Path], None, None]:
     """Session-scoped fixture that provides dataset paths.
 
     If --run-full-pipeline is set, creates a fresh dataset, processes it,
@@ -246,9 +246,9 @@ def dataset_paths(request) -> Tuple[Path, Path]:
     processed_dir = temp_base / "processed"
     manifest_path = temp_base / "selection_manifest.json"
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("FULL PIPELINE TEST MODE")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"Temp directory: {temp_base}")
     print(f"Source (originals): {ORIGINALS_PATH}")
     if seed is not None:
@@ -257,7 +257,9 @@ def dataset_paths(request) -> Tuple[Path, Path]:
     try:
         # Step 1: Sample dataset
         print("\nStep 1: Sampling dataset...")
-        if not run_sampler(source_dir, ORIGINALS_PATH, seed=seed, manifest_out=manifest_path):
+        if not run_sampler(
+            source_dir, ORIGINALS_PATH, seed=seed, manifest_out=manifest_path
+        ):
             pytest.fail("Failed to sample dataset")
         print(f"  Sampled to: {source_dir}")
         print(f"  Manifest: {manifest_path}")
@@ -268,9 +270,9 @@ def dataset_paths(request) -> Tuple[Path, Path]:
             pytest.fail("Failed to process dataset with memoria")
         print(f"  Processed to: {processed_dir}")
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("Pipeline complete, running tests...")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
         yield source_dir, processed_dir
 
@@ -381,9 +383,9 @@ class TestDatasetStructure:
             # Some exports may not produce output (e.g., Google Chat only)
             # but most should have output directories
             if output_export.exists():
-                assert (
-                    output_export.is_dir()
-                ), f"{source_export.name} output should be a directory"
+                assert output_export.is_dir(), (
+                    f"{source_export.name} output should be a directory"
+                )
 
     def test_dedup_manifest_exists(self, processed_path):
         """Deduplication manifest should be created."""
@@ -410,9 +412,9 @@ class TestDatasetStructure:
                 file_count = sum(1 for f in files if f.is_file())
                 # Allow some directories to be empty (e.g., issues folders)
                 # but the export should have at least some output
-                assert file_count > 0 or "issues" in str(
-                    export_dir
-                ), f"{export_dir.name} should contain output files"
+                assert file_count > 0 or "issues" in str(export_dir), (
+                    f"{export_dir.name} should contain output files"
+                )
 
 
 @pytest.mark.integration
@@ -536,9 +538,9 @@ class TestSnapchatOutput:
             for file_path in media_files[:5]:  # Sample
                 name = file_path.stem
                 # Should start with snap-memories-
-                assert name.startswith(
-                    "snap-memories-"
-                ), f"{file_path.name} should start with snap-memories-"
+                assert name.startswith("snap-memories-"), (
+                    f"{file_path.name} should start with snap-memories-"
+                )
 
 
 @pytest.mark.integration
@@ -697,17 +699,17 @@ class TestDeduplicationResults:
         # Duplicates are keyed by content hash, value is a dict with primary/secondary
         if isinstance(duplicates, dict):
             for hash_key, dup_info in duplicates.items():
-                assert (
-                    "primary" in dup_info
-                ), f"Duplicate {hash_key} should have primary reference"
-                assert (
-                    "source_path" in dup_info["primary"]
-                ), "Primary should have source_path"
+                assert "primary" in dup_info, (
+                    f"Duplicate {hash_key} should have primary reference"
+                )
+                assert "source_path" in dup_info["primary"], (
+                    "Primary should have source_path"
+                )
         elif isinstance(duplicates, list):
             for dup in duplicates:
-                assert (
-                    "file_path" in dup or "path" in dup or "primary" in dup
-                ), "Duplicate should have file path or primary"
+                assert "file_path" in dup or "path" in dup or "primary" in dup, (
+                    "Duplicate should have file path or primary"
+                )
 
 
 @pytest.mark.integration
@@ -736,6 +738,8 @@ class TestMetadataIntegrity:
                     # Validate GPS is reasonable
                     lat = exif.get("GPSLatitude")
                     lon = exif.get("GPSLongitude")
+                    assert isinstance(lat, (int, float)), f"Invalid latitude: {lat}"
+                    assert isinstance(lon, (int, float)), f"Invalid longitude: {lon}"
                     assert -90 <= lat <= 90, f"Invalid latitude: {lat}"
                     assert -180 <= lon <= 180, f"Invalid longitude: {lon}"
 
@@ -769,9 +773,9 @@ class TestMetadataIntegrity:
                             try:
                                 dt = datetime.strptime(dto, fmt)
                                 # Sanity check: date should be reasonable
-                                assert (
-                                    1990 <= dt.year <= 2030
-                                ), f"Year {dt.year} seems invalid"
+                                assert 1990 <= dt.year <= 2030, (
+                                    f"Year {dt.year} seems invalid"
+                                )
                                 break
                             except ValueError:
                                 continue
@@ -821,9 +825,9 @@ class TestFileIntegrity:
                 with open(file_path, "rb") as f:
                     header = f.read(3)
                 # JPEG magic number
-                assert (
-                    header[:2] == b"\xff\xd8"
-                ), f"{file_path.name} should have JPEG header"
+                assert header[:2] == b"\xff\xd8", (
+                    f"{file_path.name} should have JPEG header"
+                )
                 checked += 1
 
         assert checked > 0, "Should have checked some JPG files"
@@ -858,7 +862,8 @@ class TestProcessorSpecificInvariants:
 
             # Should use year-based organization
             year_dirs = [
-                d for d in photos_dir.iterdir()
+                d
+                for d in photos_dir.iterdir()
                 if d.is_dir() and d.name.isdigit() and len(d.name) == 4
             ]
             if year_dirs:
@@ -873,7 +878,9 @@ class TestProcessorSpecificInvariants:
                     # No media found in any year directory is fine if export is small
                     pass
 
-    def test_snapchat_messages_ambiguous_overlays_in_needs_matching(self, processed_path):
+    def test_snapchat_messages_ambiguous_overlays_in_needs_matching(
+        self, processed_path
+    ):
         """Snapchat Messages with ambiguous overlays should create needs_matching."""
         snapchat_exports = [
             d
@@ -957,16 +964,6 @@ class TestProcessorSpecificInvariants:
                 for entry in failed[:10]:
                     # Each failure should have a reason
                     assert "reason" in entry, f"Failure should have reason: {entry}"
-                    # Common Discord failure reasons
-                    valid_reasons = {
-                        "attachment_download_failed",
-                        "expired_url",
-                        "file_not_found",
-                        "exif_embed_failed",
-                        "exif_target_missing",
-                        "overlay_embed_failed",
-                        "ffmpeg_failed",
-                    }
                     # Reason should be descriptive (not just checking against list)
                     assert entry["reason"], f"Reason should not be empty: {entry}"
 
@@ -974,7 +971,18 @@ class TestProcessorSpecificInvariants:
 def is_media_file(path: Path) -> bool:
     """Check if path is a media file."""
     media_extensions = {
-        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif",
-        ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".3gp",
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".webp",
+        ".heic",
+        ".heif",
+        ".mp4",
+        ".mov",
+        ".m4v",
+        ".avi",
+        ".mkv",
+        ".3gp",
     }
     return path.suffix.lower() in media_extensions

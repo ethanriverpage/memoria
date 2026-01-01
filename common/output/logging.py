@@ -235,7 +235,7 @@ def add_export_log_handler(
     return file_handler
 
 
-def remove_export_log_handler(handler: logging.FileHandler) -> None:
+def remove_export_log_handler(handler: Optional[logging.FileHandler]) -> None:
     """Remove a per-export log file handler from the root logger.
 
     Should be called after processing an export to clean up the handler

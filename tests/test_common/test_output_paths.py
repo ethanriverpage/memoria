@@ -42,7 +42,7 @@ class TestOutputInfo:
             username_prefix="google",
         )
         with pytest.raises(AttributeError):
-            info.platform = "Instagram"
+            setattr(info, "platform", "Instagram")
 
 
 class TestBuildProcessorOutputPath:

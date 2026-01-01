@@ -22,7 +22,6 @@ from common.dedup.config import DedupConfig, get_dedup_config
 from common.dedup.description import (
     SourceEntry,
     build_image_description,
-    create_source_entry,
     get_platform_service,
 )
 from common.dedup.database import HashDatabase
@@ -1264,7 +1263,7 @@ def get_live_photo_base_for_hash(
         dt = None
         for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]:
             try:
-                dt = datetime.strptime(ts_clean[:len("2000-01-01 00:00:00")], fmt)
+                dt = datetime.strptime(ts_clean[: len("2000-01-01 00:00:00")], fmt)
                 break
             except ValueError:
                 continue

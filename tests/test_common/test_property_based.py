@@ -165,7 +165,9 @@ class TestFilenameGeneratorProperties:
         extension: str,
     ) -> None:
         """Generator should produce unique filenames for valid timestamps."""
-        timestamp = f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
+        timestamp = (
+            f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
+        )
         gen = FilenameGenerator(platform, username, service=service)
         filename = gen.generate(timestamp, extension)
 

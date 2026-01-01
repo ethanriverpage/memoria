@@ -214,7 +214,7 @@ Each processor:
 - Lives in its own directory under `processors/`
 - Implements `ProcessorBase` abstract class
 - Provides `detect()`, `get_name()`, `get_priority()`, and `process()` methods
-- Exports `get_processor()` function for auto-discovery
+- Is auto-discovered by scanning for `ProcessorBase` subclasses in the module
 
 Many processors also have a preprocessor that extends `PreprocessorBase`, providing:
 

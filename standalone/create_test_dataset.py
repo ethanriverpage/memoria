@@ -1114,14 +1114,12 @@ def create_filtered_imessage_db(
         # 1. attachment table - only selected attachments
         if attachment_ids:
             placeholders = ",".join("?" * len(attachment_ids))
-            src_cursor.execute(
-                f"SELECT * FROM attachment WHERE ROWID IN ({placeholders})",
-                list(attachment_ids),
-            )
+            sql = f"SELECT * FROM attachment WHERE ROWID IN ({placeholders})"  # nosec B608
+            src_cursor.execute(sql, list(attachment_ids))
             rows = src_cursor.fetchall()
             if rows:
                 cols = [desc[0] for desc in src_cursor.description]
-                insert_sql = f"INSERT INTO attachment ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"
+                insert_sql = f"INSERT INTO attachment ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"  # nosec B608
                 for row in rows:
                     try:
                         dest_cursor.execute(insert_sql, list(row))
@@ -1131,14 +1129,12 @@ def create_filtered_imessage_db(
         # 2. message table - only messages with selected attachments
         if message_ids:
             placeholders = ",".join("?" * len(message_ids))
-            src_cursor.execute(
-                f"SELECT * FROM message WHERE ROWID IN ({placeholders})",
-                list(message_ids),
-            )
+            sql = f"SELECT * FROM message WHERE ROWID IN ({placeholders})"  # nosec B608
+            src_cursor.execute(sql, list(message_ids))
             rows = src_cursor.fetchall()
             if rows:
                 cols = [desc[0] for desc in src_cursor.description]
-                insert_sql = f"INSERT INTO message ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"
+                insert_sql = f"INSERT INTO message ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"  # nosec B608
                 for row in rows:
                     try:
                         dest_cursor.execute(insert_sql, list(row))
@@ -1148,14 +1144,12 @@ def create_filtered_imessage_db(
         # 3. chat table - only related chats
         if chat_ids:
             placeholders = ",".join("?" * len(chat_ids))
-            src_cursor.execute(
-                f"SELECT * FROM chat WHERE ROWID IN ({placeholders})",
-                list(chat_ids),
-            )
+            sql = f"SELECT * FROM chat WHERE ROWID IN ({placeholders})"  # nosec B608
+            src_cursor.execute(sql, list(chat_ids))
             rows = src_cursor.fetchall()
             if rows:
                 cols = [desc[0] for desc in src_cursor.description]
-                insert_sql = f"INSERT INTO chat ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"
+                insert_sql = f"INSERT INTO chat ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"  # nosec B608
                 for row in rows:
                     try:
                         dest_cursor.execute(insert_sql, list(row))
@@ -1166,16 +1160,14 @@ def create_filtered_imessage_db(
         if message_ids and attachment_ids:
             msg_placeholders = ",".join("?" * len(message_ids))
             att_placeholders = ",".join("?" * len(attachment_ids))
-            src_cursor.execute(
-                f"""SELECT * FROM message_attachment_join
+            sql = f"""SELECT * FROM message_attachment_join
                     WHERE message_id IN ({msg_placeholders})
-                    AND attachment_id IN ({att_placeholders})""",
-                list(message_ids) + list(attachment_ids),
-            )
+                    AND attachment_id IN ({att_placeholders})"""  # nosec B608
+            src_cursor.execute(sql, list(message_ids) + list(attachment_ids))
             rows = src_cursor.fetchall()
             if rows:
                 cols = [desc[0] for desc in src_cursor.description]
-                insert_sql = f"INSERT INTO message_attachment_join ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"
+                insert_sql = f"INSERT INTO message_attachment_join ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"  # nosec B608
                 for row in rows:
                     try:
                         dest_cursor.execute(insert_sql, list(row))
@@ -1186,16 +1178,14 @@ def create_filtered_imessage_db(
         if chat_ids and message_ids:
             chat_placeholders = ",".join("?" * len(chat_ids))
             msg_placeholders = ",".join("?" * len(message_ids))
-            src_cursor.execute(
-                f"""SELECT * FROM chat_message_join
+            sql = f"""SELECT * FROM chat_message_join
                     WHERE chat_id IN ({chat_placeholders})
-                    AND message_id IN ({msg_placeholders})""",
-                list(chat_ids) + list(message_ids),
-            )
+                    AND message_id IN ({msg_placeholders})"""  # nosec B608
+            src_cursor.execute(sql, list(chat_ids) + list(message_ids))
             rows = src_cursor.fetchall()
             if rows:
                 cols = [desc[0] for desc in src_cursor.description]
-                insert_sql = f"INSERT INTO chat_message_join ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"
+                insert_sql = f"INSERT INTO chat_message_join ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"  # nosec B608
                 for row in rows:
                     try:
                         dest_cursor.execute(insert_sql, list(row))
@@ -1205,16 +1195,14 @@ def create_filtered_imessage_db(
         # 6. handle table - get handles from selected messages
         if message_ids:
             msg_placeholders = ",".join("?" * len(message_ids))
-            src_cursor.execute(
-                f"""SELECT DISTINCT h.* FROM handle h
+            sql = f"""SELECT DISTINCT h.* FROM handle h
                     JOIN message m ON m.handle_id = h.ROWID
-                    WHERE m.ROWID IN ({msg_placeholders})""",
-                list(message_ids),
-            )
+                    WHERE m.ROWID IN ({msg_placeholders})"""  # nosec B608
+            src_cursor.execute(sql, list(message_ids))
             rows = src_cursor.fetchall()
             if rows:
                 cols = [desc[0] for desc in src_cursor.description]
-                insert_sql = f"INSERT INTO handle ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"
+                insert_sql = f"INSERT INTO handle ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"  # nosec B608
                 for row in rows:
                     try:
                         dest_cursor.execute(insert_sql, list(row))
@@ -1230,16 +1218,14 @@ def create_filtered_imessage_db(
             if inserted_handle_ids:
                 chat_placeholders = ",".join("?" * len(chat_ids))
                 handle_placeholders = ",".join("?" * len(inserted_handle_ids))
-                src_cursor.execute(
-                    f"""SELECT * FROM chat_handle_join
+                sql = f"""SELECT * FROM chat_handle_join
                         WHERE chat_id IN ({chat_placeholders})
-                        AND handle_id IN ({handle_placeholders})""",
-                    list(chat_ids) + list(inserted_handle_ids),
-                )
+                        AND handle_id IN ({handle_placeholders})"""  # nosec B608
+                src_cursor.execute(sql, list(chat_ids) + list(inserted_handle_ids))
                 rows = src_cursor.fetchall()
                 if rows:
                     cols = [desc[0] for desc in src_cursor.description]
-                    insert_sql = f"INSERT INTO chat_handle_join ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"
+                    insert_sql = f"INSERT INTO chat_handle_join ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"  # nosec B608
                     for row in rows:
                         try:
                             dest_cursor.execute(insert_sql, list(row))

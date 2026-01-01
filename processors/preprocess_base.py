@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Generator, List, Mapping, Optional, Tuple, Union
 
 import json
 
@@ -649,7 +649,7 @@ class PreprocessorBase(ABC):
             self.stats[key] = self.stats.get(key, 0) + amount
 
     def summarize_dedup_results(
-        self, results: Dict[Path, Union["HashResult", "CopyResult"]]
+        self, results: Mapping[Path, Union["HashResult", "CopyResult"]]
     ) -> Tuple[int, int]:
         """Summarize deduplication results and update shared stats.
 
@@ -1009,7 +1009,7 @@ class PreprocessorBase(ABC):
 
         try:
             require_non_unknown_username(
-                detection.username,
+                detection.username or "",
                 source=detection.source,
                 export_dir=self.export_path,
                 processor=self.processor_name,

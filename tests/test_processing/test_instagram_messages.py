@@ -22,7 +22,9 @@ class TestInstagramMessagesPreprocessing:
         self, instagram_messages_processor, temp_export_dir, temp_output_dir
     ):
         """Should preprocess current format (your_instagram_activity/)."""
-        from processors.instagram_messages.preprocess import InstagramMessagesPreprocessor
+        from processors.instagram_messages.preprocess import (
+            InstagramMessagesPreprocessor,
+        )
 
         copy_export_fixture(
             "instagram_messages", "current_format_doc_html", temp_export_dir
@@ -49,7 +51,9 @@ class TestInstagramMessagesPreprocessing:
         self, instagram_messages_processor, temp_export_dir, temp_output_dir
     ):
         """Should preprocess legacy format (messages/inbox/)."""
-        from processors.instagram_messages.preprocess import InstagramMessagesPreprocessor
+        from processors.instagram_messages.preprocess import (
+            InstagramMessagesPreprocessor,
+        )
 
         copy_export_fixture(
             "instagram_messages", "legacy_format_doc_html", temp_export_dir
@@ -196,7 +200,9 @@ class TestInstagramMessagesMedia:
         (conv_dir / "message_1.html").write_text(html_content)
 
         # Create personal_information directory for detection
-        personal_info_dir = temp_export_dir / "personal_information" / "personal_information"
+        personal_info_dir = (
+            temp_export_dir / "personal_information" / "personal_information"
+        )
         personal_info_dir.mkdir(parents=True)
         (personal_info_dir / "personal_information.html").write_text("<html></html>")
 

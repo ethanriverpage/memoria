@@ -1,6 +1,5 @@
 """Snapchat Messages Processor - handles chat media with overlays and metadata."""
 
-import json
 import logging
 import re
 from pathlib import Path
@@ -388,9 +387,8 @@ def _build_metadata_requests(
         is_merged = "messages" in message and isinstance(message["messages"], list)
 
         # Build datetime tags (handles both legacy date-only and standard formats)
-        date_str = (
-            message.get("canonical_timestamp")
-            or (message.get("primary_created") if is_merged else message.get("created"))
+        date_str = message.get("canonical_timestamp") or (
+            message.get("primary_created") if is_merged else message.get("created")
         )
         datetime_tags = build_datetime_tags(date_str, strip_utc=True)
 
@@ -652,9 +650,7 @@ def _create_file_worker(args_tuple):
             elif is_image:
                 # Image with overlay - composite
                 try:
-                    create_image_with_overlay(
-                        media_path, overlay_path, output_path
-                    )
+                    create_image_with_overlay(media_path, overlay_path, output_path)
                     _update_snapchat_timestamps(output_path, message)
                     # Image needs batch EXIF processing
                     return (
@@ -1047,9 +1043,15 @@ def _process_snapchat_working_directory(
                 reason="overlay_embed_failed",
                 error_details=overlay_failure_context.get("error", "Unknown error"),
                 context={
-                    "source_media_path": overlay_failure_context.get("source_media_path"),
-                    "overlay_source_path": overlay_failure_context.get("overlay_source_path"),
-                    "intended_mkv_path": overlay_failure_context.get("intended_mkv_path"),
+                    "source_media_path": overlay_failure_context.get(
+                        "source_media_path"
+                    ),
+                    "overlay_source_path": overlay_failure_context.get(
+                        "overlay_source_path"
+                    ),
+                    "intended_mkv_path": overlay_failure_context.get(
+                        "intended_mkv_path"
+                    ),
                 },
             )
             overlay_failure_count += 1
@@ -1105,7 +1107,7 @@ def _process_snapchat_working_directory(
         logger.info("Processing %d unmatched files...", len(unmatched_files))
         for media_file in unmatched_files:
             failure_tracker.add_orphaned_media(
-                source_path=media_file,
+                media_path=Path(media_file),
                 reason="No matching metadata found",
             )
 

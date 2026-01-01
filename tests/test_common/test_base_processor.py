@@ -32,10 +32,13 @@ class TestBatchProcessExif:
         mock_write = MagicMock(return_value=BatchWriteOutcome())
         mock_request_builder = MagicMock(return_value=[])
 
-        with patch("common.media.exiftool.batch_validate_exif", mock_validate), patch(
-            "common.media.exiftool.batch_read_existing_metadata", mock_read_metadata
-        ), patch("common.media.exiftool.batch_rebuild_exif", mock_rebuild), patch(
-            "common.media.exiftool.batch_write_metadata_requests", mock_write
+        with (
+            patch("common.media.exiftool.batch_validate_exif", mock_validate),
+            patch(
+                "common.media.exiftool.batch_read_existing_metadata", mock_read_metadata
+            ),
+            patch("common.media.exiftool.batch_rebuild_exif", mock_rebuild),
+            patch("common.media.exiftool.batch_write_metadata_requests", mock_write),
         ):
             result = ProcessorBase.batch_process_exif(
                 file_paths, file_info, mock_request_builder
@@ -80,10 +83,13 @@ class TestBatchProcessExif:
         mock_write = MagicMock(return_value=BatchWriteOutcome())
         mock_request_builder = MagicMock(return_value=[])
 
-        with patch("common.media.exiftool.batch_validate_exif", mock_validate), patch(
-            "common.media.exiftool.batch_read_existing_metadata", mock_read_metadata
-        ), patch("common.media.exiftool.batch_rebuild_exif", mock_rebuild), patch(
-            "common.media.exiftool.batch_write_metadata_requests", mock_write
+        with (
+            patch("common.media.exiftool.batch_validate_exif", mock_validate),
+            patch(
+                "common.media.exiftool.batch_read_existing_metadata", mock_read_metadata
+            ),
+            patch("common.media.exiftool.batch_rebuild_exif", mock_rebuild),
+            patch("common.media.exiftool.batch_write_metadata_requests", mock_write),
         ):
             result = ProcessorBase.batch_process_exif(
                 file_paths, file_info, mock_request_builder
@@ -140,10 +146,13 @@ class TestBatchProcessExif:
 
         mock_write = MagicMock(side_effect=capture_write)
 
-        with patch("common.media.exiftool.batch_validate_exif", mock_validate), patch(
-            "common.media.exiftool.batch_read_existing_metadata", mock_read_metadata
-        ), patch("common.media.exiftool.batch_rebuild_exif", mock_rebuild), patch(
-            "common.media.exiftool.batch_write_metadata_requests", mock_write
+        with (
+            patch("common.media.exiftool.batch_validate_exif", mock_validate),
+            patch(
+                "common.media.exiftool.batch_read_existing_metadata", mock_read_metadata
+            ),
+            patch("common.media.exiftool.batch_rebuild_exif", mock_rebuild),
+            patch("common.media.exiftool.batch_write_metadata_requests", mock_write),
         ):
             ProcessorBase.batch_process_exif(
                 file_paths, file_info, mock_request_builder
@@ -162,8 +171,11 @@ class TestBatchProcessExif:
         mock_read_metadata = MagicMock()
         mock_request_builder = MagicMock()
 
-        with patch("common.media.exiftool.batch_validate_exif", mock_validate), patch(
-            "common.media.exiftool.batch_read_existing_metadata", mock_read_metadata
+        with (
+            patch("common.media.exiftool.batch_validate_exif", mock_validate),
+            patch(
+                "common.media.exiftool.batch_read_existing_metadata", mock_read_metadata
+            ),
         ):
             result = ProcessorBase.batch_process_exif([], [], mock_request_builder)
 
@@ -199,10 +211,13 @@ class TestBatchProcessExif:
         mock_write = MagicMock(return_value=BatchWriteOutcome())
         mock_request_builder = MagicMock(return_value=[])
 
-        with patch("common.media.exiftool.batch_validate_exif", mock_validate), patch(
-            "common.media.exiftool.batch_read_existing_metadata", mock_read_metadata
-        ), patch("common.media.exiftool.batch_rebuild_exif", mock_rebuild), patch(
-            "common.media.exiftool.batch_write_metadata_requests", mock_write
+        with (
+            patch("common.media.exiftool.batch_validate_exif", mock_validate),
+            patch(
+                "common.media.exiftool.batch_read_existing_metadata", mock_read_metadata
+            ),
+            patch("common.media.exiftool.batch_rebuild_exif", mock_rebuild),
+            patch("common.media.exiftool.batch_write_metadata_requests", mock_write),
         ):
             result = ProcessorBase.batch_process_exif(
                 file_paths, file_info, mock_request_builder

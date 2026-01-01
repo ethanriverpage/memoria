@@ -66,4 +66,3 @@ def merge_imessage_context(existing: Dict[str, Any], new: Dict[str, Any]) -> Non
 
     # New context contains message data to accumulate
     existing["messages"].append(new)
-

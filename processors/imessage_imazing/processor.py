@@ -230,7 +230,7 @@ class ImazingProcessor(ProcessorBase):
         )
 
 
-def _extract_date_from_source_export(source_export: str) -> Optional[str]:
+def _extract_date_from_source_export(source_export: Optional[str]) -> Optional[str]:
     """Extract date string from source_export directory name.
 
     Examples:
@@ -411,9 +411,8 @@ def _build_metadata_requests(
         is_merged = "messages" in message and isinstance(message["messages"], list)
 
         # Build datetime tags (iMessage format: "YYYY-MM-DD HH:MM:SS UTC")
-        date_str = (
-            message.get("canonical_timestamp")
-            or (message.get("primary_created") if is_merged else message.get("created"))
+        date_str = message.get("canonical_timestamp") or (
+            message.get("primary_created") if is_merged else message.get("created")
         )
         datetime_tags = build_datetime_tags(date_str, strip_utc=True)
 

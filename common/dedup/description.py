@@ -123,7 +123,7 @@ class SourceEntry:
     timestamp: Optional[datetime] = None
 
 
-def truncate_text(text: str, max_length: int, suffix: str = "...") -> str:
+def truncate_text(text: Optional[str], max_length: int, suffix: str = "...") -> str:
     """Truncate text to max length, preserving word boundaries.
 
     Args:
@@ -701,7 +701,9 @@ def build_image_description(
         seen_contexts.add(primary_context_key)
 
     # Calculate remaining budget (account for &#xa; separators between lines)
-    current_len = sum(len(line) for line in lines) + 5 * (len(lines) - 1) if lines else 0
+    current_len = (
+        sum(len(line) for line in lines) + 5 * (len(lines) - 1) if lines else 0
+    )
     remaining = max_total - current_len
 
     # 3. Group secondaries by source identity

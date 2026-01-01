@@ -3,7 +3,6 @@
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
 
 import pytest
 
@@ -688,9 +687,7 @@ class TestProcessorSideValidation:
         metadata_file.write_text(json.dumps(invalid_metadata))
 
         # Should NOT raise when validate=False
-        result = ProcessorBase.load_metadata(
-            metadata_file, validate=False
-        )
+        result = ProcessorBase.load_metadata(metadata_file, validate=False)
         assert result["conversations"] == []
 
     def test_load_metadata_validation_accepts_media_files_content_type(
@@ -717,9 +714,7 @@ class TestProcessorSideValidation:
         assert result["export_info"]["export_username"] == "test"
         assert len(result["media_files"]) == 1
 
-    def test_load_metadata_validation_accepts_media_content_type(
-        self, tmp_path: Path
-    ):
+    def test_load_metadata_validation_accepts_media_content_type(self, tmp_path: Path):
         """Processor load_metadata should validate media content type correctly."""
         metadata_file = tmp_path / "metadata.json"
         valid_metadata = {
@@ -740,4 +735,3 @@ class TestProcessorSideValidation:
         )
         assert result["export_info"]["export_username"] == "test"
         assert len(result["media"]) == 1
-

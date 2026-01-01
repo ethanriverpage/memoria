@@ -283,12 +283,7 @@ class TestInstagramMessagesRealisticFixtures:
         assert instagram_messages_processor.detect(temp_export_dir) is True
 
         # Verify structure matches docs
-        inbox_dir = (
-            temp_export_dir
-            / "your_instagram_activity"
-            / "messages"
-            / "inbox"
-        )
+        inbox_dir = temp_export_dir / "your_instagram_activity" / "messages" / "inbox"
         assert inbox_dir.exists()
         assert (inbox_dir / "friend_user_123456" / "message_1.html").exists()
 
@@ -351,9 +346,7 @@ class TestInstagramPublicRealisticFixtures:
         media_dir = temp_export_dir / "media"
         assert (media_dir / "posts" / "202301" / "photo_123.jpg").exists()
         assert (media_dir / "posts" / "202302" / "video_456.mp4").exists()
-        assert (
-            media_dir / "archived_posts" / "202212" / "archived_photo.jpg"
-        ).exists()
+        assert (media_dir / "archived_posts" / "202212" / "archived_photo.jpg").exists()
 
     def test_posts_json_metadata_format(
         self, instagram_public_processor, temp_export_dir

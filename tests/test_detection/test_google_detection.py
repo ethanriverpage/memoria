@@ -250,7 +250,9 @@ class TestGooglePhotosRealisticFixtures:
         assert google_photos_processor.detect(takeout_dir) is True
 
         # Verify both locations exist
-        photos_lib = takeout_dir / "Google Photos" / "Photos from 2023" / "shared_photo.jpg"
+        photos_lib = (
+            takeout_dir / "Google Photos" / "Photos from 2023" / "shared_photo.jpg"
+        )
         photos_album = (
             takeout_dir / "Google Photos" / "Albums" / "Favorites" / "shared_photo.jpg"
         )
@@ -263,7 +265,9 @@ class TestGooglePhotosRealisticFixtures:
         """Should detect fixture with mixed JSON metadata presence."""
         from tests.fixtures.export_tree import copy_export_fixture
 
-        copy_export_fixture("google_photos", "takeout_missing_json_some", temp_export_dir)
+        copy_export_fixture(
+            "google_photos", "takeout_missing_json_some", temp_export_dir
+        )
 
         takeout_dir = temp_export_dir / "Takeout"
         assert google_photos_processor.detect(takeout_dir) is True

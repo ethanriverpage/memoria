@@ -27,7 +27,11 @@ def test_quick_isobmff_header_check_flags_missing_ftyp(tmp_path: Path) -> None:
 
     ok, reason = quick_isobmff_header_check(p, header_bytes=1024)
     assert ok is False
-    assert reason in {"header_missing_ftyp", "read_failed:ValueError", "read_failed:OSError"}
+    assert reason in {
+        "header_missing_ftyp",
+        "read_failed:ValueError",
+        "read_failed:OSError",
+    }
 
 
 @pytest.mark.skipif(shutil.which("ffprobe") is None, reason="ffprobe not available")
@@ -41,5 +45,3 @@ def test_get_video_metadata_with_failure_returns_failure_for_invalid_file(
     assert metadata is None
     assert failure is not None
     assert failure.reason_code
-
-

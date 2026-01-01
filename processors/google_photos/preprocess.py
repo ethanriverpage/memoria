@@ -1081,6 +1081,14 @@ class GooglePhotosPreprocessor(PreprocessorBase):
             """Wrapper to include album_tuple in result for post-processing."""
             return (album_tuple, self._collect_album_tasks(album_tuple))
 
+        def on_album_error(tid: Any, e: Exception) -> None:
+            self.log_message(
+                "ALBUM_PROCESSING_ERROR",
+                f"Failed to process album {tid}",
+                str(e),
+            )
+            logger.error("Failed to process album %s: %s", tid, e)
+
         results = process_parallel_threaded(
             tasks=album_list,
             worker_fn=process_album_with_context,
@@ -1088,14 +1096,7 @@ class GooglePhotosPreprocessor(PreprocessorBase):
             phase=PHASE_PREPROCESS,
             description="Parsing albums",
             task_id_fn=lambda t: t[0],  # album_name
-            on_error=lambda tid, e: (
-                self.log_message(
-                    "ALBUM_PROCESSING_ERROR",
-                    f"Failed to process album {tid}",
-                    str(e),
-                ),
-                logger.error("Failed to process album %s: %s", tid, e),
-            ),
+            on_error=on_album_error,
         )
 
         # Post-process results

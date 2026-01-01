@@ -184,9 +184,7 @@ class TestGoogleChatProcessing:
         # Google Chat processor requires specific export format that
         # minimal test generators don't fully replicate - may exit on validation
         try:
-            result = GoogleChatProcessor.process(
-                working_dir, str(output_dir)
-            )
+            result = GoogleChatProcessor.process(working_dir, str(output_dir))
             assert result is True
         except SystemExit:
             # Processor may exit if export validation fails
@@ -225,9 +223,7 @@ class TestGoogleVoiceProcessing:
         # Google Voice processor requires specific export format that
         # minimal test generators don't fully replicate - may exit on validation
         try:
-            result = GoogleVoiceProcessor.process(
-                working_dir, str(output_dir)
-            )
+            result = GoogleVoiceProcessor.process(working_dir, str(output_dir))
             assert result is True
         except SystemExit:
             # Processor may exit if export validation fails
@@ -267,9 +263,7 @@ class TestSnapchatMemoriesProcessing:
             SnapchatMemoriesProcessor, export_dir, cache_dir
         )
 
-        result = SnapchatMemoriesProcessor.process(
-            working_dir, str(output_dir)
-        )
+        result = SnapchatMemoriesProcessor.process(working_dir, str(output_dir))
 
         assert result is True
 
@@ -302,9 +296,7 @@ class TestSnapchatMemoriesProcessing:
             SnapchatMemoriesProcessor, export_dir, cache_dir
         )
 
-        result = SnapchatMemoriesProcessor.process(
-            working_dir, str(output_dir)
-        )
+        result = SnapchatMemoriesProcessor.process(working_dir, str(output_dir))
 
         assert result is True
 
@@ -333,9 +325,7 @@ class TestSnapchatMessagesProcessing:
         # Snapchat Messages processor requires chat_media directory
         # that minimal test generators don't create - may exit on validation
         try:
-            result = SnapchatMessagesProcessor.process(
-                working_dir, str(output_dir)
-            )
+            result = SnapchatMessagesProcessor.process(working_dir, str(output_dir))
             assert result is True
         except SystemExit:
             # Processor may exit if export validation fails
@@ -360,9 +350,7 @@ class TestSnapchatMessagesProcessing:
         )
 
         try:
-            result = SnapchatMessagesProcessor.process(
-                working_dir, str(output_dir)
-            )
+            result = SnapchatMessagesProcessor.process(working_dir, str(output_dir))
             assert result is True
         except SystemExit:
             pytest.skip("Snapchat Messages processor requires complete export format")
@@ -388,9 +376,7 @@ class TestInstagramMessagesProcessing:
             InstagramMessagesProcessor, export_dir, cache_dir
         )
 
-        result = InstagramMessagesProcessor.process(
-            working_dir, str(output_dir)
-        )
+        result = InstagramMessagesProcessor.process(working_dir, str(output_dir))
 
         assert result is True
 
@@ -410,9 +396,7 @@ class TestInstagramMessagesProcessing:
             InstagramMessagesProcessor, export_dir, cache_dir
         )
 
-        result = InstagramMessagesProcessor.process(
-            working_dir, str(output_dir)
-        )
+        result = InstagramMessagesProcessor.process(working_dir, str(output_dir))
 
         assert result is True
 
@@ -442,9 +426,7 @@ class TestInstagramPublicProcessing:
         # Instagram Public Media processor requires HTML metadata directory
         # that minimal test generators don't create - may exit on validation
         try:
-            result = InstagramPublicMediaProcessor.process(
-                working_dir, str(output_dir)
-            )
+            result = InstagramPublicMediaProcessor.process(working_dir, str(output_dir))
             assert result is True
         except SystemExit:
             pytest.skip(
@@ -472,9 +454,7 @@ class TestInstaloaderProcessing:
         # Preprocess first
         working_dir = preprocess_export(InstaloaderProcessor, export_dir, cache_dir)
 
-        result = InstaloaderProcessor.process(
-            working_dir, str(output_dir)
-        )
+        result = InstaloaderProcessor.process(working_dir, str(output_dir))
 
         assert result is True
 

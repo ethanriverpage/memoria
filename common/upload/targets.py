@@ -96,7 +96,9 @@ def build_upload_targets(
         output_info = processor.get_output_info()
 
     # Extract username using the prefix from OutputInfo
-    username = detect_from_dirname(Path(input_dir), output_info.username_prefix) or "unknown"
+    username = (
+        detect_from_dirname(Path(input_dir), output_info.username_prefix) or "unknown"
+    )
 
     # Handle Instagram Public Media specially (has nested subfolder structure)
     # Note: Only apply to "Instagram Public Media" processor, NOT "Instaloader"

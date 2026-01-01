@@ -488,18 +488,6 @@ class ProcessorBase(ABC):
         )
 
     @classmethod
-    def get_processor(cls):
-        """Return processor class for auto-discovery.
-
-        This class method is used by memoria.py during automatic processor
-        discovery. Subclasses inherit this automatically.
-
-        Returns:
-            The processor class itself.
-        """
-        return cls
-
-    @classmethod
     def load_metadata(
         cls,
         metadata_path: Path,

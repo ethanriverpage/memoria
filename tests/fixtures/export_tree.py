@@ -7,7 +7,7 @@ and represent schema-faithful export structures matching the docs.
 
 import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 
 # Path to the committed fixtures directory
@@ -107,4 +107,3 @@ def fixture_exists(platform: str, case: str) -> bool:
         True if the fixture exists
     """
     return (FIXTURES_DIR / platform / case).exists()
-

@@ -196,10 +196,7 @@ class TestDiscordRealisticFixtures:
 
         # Verify channel types are strings as documented
         channel_json = (
-            temp_export_dir
-            / "Messages"
-            / "c184324186284621824"
-            / "channel.json"
+            temp_export_dir / "Messages" / "c184324186284621824" / "channel.json"
         )
         channel_data = json.loads(channel_json.read_text())
         assert channel_data["type"] == "GUILD_TEXT"
@@ -232,19 +229,14 @@ class TestDiscordRealisticFixtures:
 
         # Verify messages have attachment URLs with query params
         messages_json = (
-            temp_export_dir
-            / "Messages"
-            / "c184324186284621824"
-            / "messages.json"
+            temp_export_dir / "Messages" / "c184324186284621824" / "messages.json"
         )
         messages = json.loads(messages_json.read_text())
         assert "?ex=" in messages[0]["Attachments"]
         assert "&is=" in messages[0]["Attachments"]
         assert "&hm=" in messages[0]["Attachments"]
 
-    def test_detect_spoiler_filename_fixture(
-        self, discord_processor, temp_export_dir
-    ):
+    def test_detect_spoiler_filename_fixture(self, discord_processor, temp_export_dir):
         """Should detect fixture with SPOILER_ prefixed filenames."""
         from tests.fixtures.export_tree import copy_export_fixture
 
@@ -253,9 +245,6 @@ class TestDiscordRealisticFixtures:
 
         # Verify SPOILER_ file exists
         spoiler_file = (
-            temp_export_dir
-            / "Messages"
-            / "c184324186284621824"
-            / "SPOILER_secret.jpg"
+            temp_export_dir / "Messages" / "c184324186284621824" / "SPOILER_secret.jpg"
         )
         assert spoiler_file.exists()

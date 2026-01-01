@@ -14,7 +14,6 @@ Tests cover edge cases including:
 import json
 
 from tests.fixtures.export_tree import copy_export_fixture
-from tests.fixtures.media_samples import write_media_file
 
 
 class TestDiscordPreprocessing:
@@ -83,7 +82,7 @@ class TestDiscordFixtureStructure:
         # Verify required structure per docs
         assert (temp_export_dir / "Messages" / "index.json").exists()
         assert (temp_export_dir / "Account" / "user.json").exists()
-        
+
         # Verify at least one channel exists
         channel_dir = temp_export_dir / "Messages" / "c184324186284621824"
         assert channel_dir.exists()
@@ -122,10 +121,7 @@ class TestDiscordFixtureStructure:
 
         messages = json.loads(
             (
-                temp_export_dir
-                / "Messages"
-                / "c184324186284621824"
-                / "messages.json"
+                temp_export_dir / "Messages" / "c184324186284621824" / "messages.json"
             ).read_text()
         )
 
@@ -147,20 +143,14 @@ class TestDiscordFixtureStructure:
 
         # Verify the spoiler file exists
         spoiler_file = (
-            temp_export_dir
-            / "Messages"
-            / "c184324186284621824"
-            / "SPOILER_secret.jpg"
+            temp_export_dir / "Messages" / "c184324186284621824" / "SPOILER_secret.jpg"
         )
         assert spoiler_file.exists()
 
         # Verify message references spoiler filename
         messages = json.loads(
             (
-                temp_export_dir
-                / "Messages"
-                / "c184324186284621824"
-                / "messages.json"
+                temp_export_dir / "Messages" / "c184324186284621824" / "messages.json"
             ).read_text()
         )
         assert "SPOILER_secret.jpg" in messages[0]["Attachments"]
@@ -173,7 +163,9 @@ class TestDiscordFixtureStructure:
 
         # Verify Servers directory exists with guild info
         assert (temp_export_dir / "Servers" / "index.json").exists()
-        assert (temp_export_dir / "Servers" / "184315303323238400" / "guild.json").exists()
+        assert (
+            temp_export_dir / "Servers" / "184315303323238400" / "guild.json"
+        ).exists()
 
 
 class TestDiscordAttachments:
@@ -188,7 +180,7 @@ class TestDiscordAttachments:
         )
 
         channel_dir = temp_export_dir / "Messages" / "c184324186284621824"
-        
+
         # Verify attachment files exist
         assert (channel_dir / "photo.jpg").exists()
         assert (channel_dir / "file1.jpg").exists()
@@ -202,7 +194,7 @@ class TestDiscordAttachments:
 
         channel_dir = temp_export_dir / "Messages" / "c184324186284621824"
         messages = json.loads((channel_dir / "messages.json").read_text())
-        
+
         # Check for messages with empty attachments
         has_empty_attachments = any(
             msg.get("Attachments", "") == "" for msg in messages
@@ -246,7 +238,7 @@ class TestDiscordIndexFile:
         copy_export_fixture("discord", "raw_string_channel_types", temp_export_dir)
 
         index = json.loads((temp_export_dir / "Messages" / "index.json").read_text())
-        
+
         # Should have 3 channels (GUILD_TEXT, DM, GROUP_DM)
         assert len(index) == 3
         assert "c184324186284621824" in index

@@ -100,7 +100,7 @@ class TestNullAndNoneHandling:
         # Should not raise
         tracker = FailureTracker(
             processor_name="Test",
-            export_directory=None,
+            export_directory="",
         )
         assert tracker is not None
 
@@ -122,7 +122,7 @@ class TestCorruptedData:
         """Should handle files that appear truncated."""
         # Create a file with just a few bytes
         truncated = tmp_path / "truncated.jpg"
-        truncated.write_bytes(b"\xFF\xD8\xFF")  # Partial JPEG header
+        truncated.write_bytes(b"\xff\xd8\xff")  # Partial JPEG header
 
         # Should still produce a hash
         result = compute_content_hash(truncated)
@@ -172,6 +172,7 @@ class TestFilesystemEdgeCases:
         special_dir.mkdir()
 
         from tests.fixtures.media_samples import write_media_file
+
         write_media_file(special_dir / "photo.jpg", "jpeg")
 
         result = list(iter_media_files(special_dir))
@@ -224,6 +225,7 @@ class TestFilesystemEdgeCases:
         readonly_dir.mkdir()
 
         from tests.fixtures.media_samples import write_media_file
+
         write_media_file(readonly_dir / "photo.jpg", "jpeg")
 
         try:
@@ -264,7 +266,7 @@ class TestEncodingIssues:
         """Should handle filenames with non-UTF8 byte sequences."""
         # This might happen with files from other systems
         try:
-            result = sanitize_filename("file\xFF\xFEname.jpg")
+            result = sanitize_filename("file\xff\xfename.jpg")
             assert result is not None
         except UnicodeError:
             # Also acceptable if it can't handle
@@ -337,7 +339,7 @@ class TestResourceLimits:
         """Should return reasonable worker count."""
         count = default_worker_count()
         assert count >= 1
-        assert count <= os.cpu_count() or 1
+        assert count <= (os.cpu_count() or 1)
 
     def test_many_files_in_directory(self, tmp_path: Path) -> None:
         """Should handle directories with many files."""
@@ -421,7 +423,7 @@ class TestFailureTrackerEdgeCases:
             file2,
             metadata={"title": "test"},
             reason="Test reason",
-            error_details="Test error"
+            error_details="Test error",
         )
 
         # Check that failures were tracked correctly
@@ -431,8 +433,12 @@ class TestFailureTrackerEdgeCases:
         assert summary["failed_processing"] == 1
 
         # Check that paths are stored correctly
-        assert any("photo (1).jpg" in entry["file_path"] for entry in tracker.orphaned_media)
-        assert any("file[2].jpg" in entry["file_path"] for entry in tracker.processing_failures)
+        assert any(
+            "photo (1).jpg" in entry["file_path"] for entry in tracker.orphaned_media
+        )
+        assert any(
+            "file[2].jpg" in entry["file_path"] for entry in tracker.processing_failures
+        )
 
 
 # ============================================================================
@@ -478,4 +484,3 @@ class TestBannedFilterEdgeCases:
         # .unknown extension is banned
         assert filter_instance.is_banned(tmp_path / "file.unknown") is True
         assert filter_instance.is_banned(tmp_path / "file.jpg") is False
-

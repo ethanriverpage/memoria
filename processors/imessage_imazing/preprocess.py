@@ -246,9 +246,7 @@ class ImazingPreprocessor(PreprocessorBase):
         """
         csv_files = list(self.export_path.glob("Messages - *.csv"))
 
-        for csv_file in progress_bar(
-            csv_files, PHASE_PREPROCESS, "Loading CSV files"
-        ):
+        for csv_file in progress_bar(csv_files, PHASE_PREPROCESS, "Loading CSV files"):
             try:
                 self._parse_csv_file(csv_file)
             except Exception as e:

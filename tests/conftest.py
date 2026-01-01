@@ -11,7 +11,7 @@ This module provides:
 import shutil
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Type
+from typing import Dict, Generator, List, Optional, Type
 
 import pytest
 
@@ -30,7 +30,7 @@ from common.output.logging import set_logs_dir  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)
-def redirect_logs_to_temp(tmp_path_factory) -> Path:
+def redirect_logs_to_temp(tmp_path_factory) -> Generator[Path, None, None]:
     """Redirect all log file output to a temp directory during tests.
 
     This prevents pytest from polluting the regular logs folder with

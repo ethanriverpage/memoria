@@ -11,7 +11,7 @@ into standardized metadata.json format with source_path entries.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from common.dedup.description import (
     SourceEntry,
@@ -328,7 +328,7 @@ class SnapchatMemoriesProcessor(ProcessorBase):
 
 
 def _build_metadata_requests(
-    file_info: List[Tuple[Optional[str], dict, str, Optional[str], Optional[str]]],
+    file_info: Sequence[Tuple[Optional[str], dict, str, Optional[str], Optional[str]]],
 ) -> List[MetadataWriteRequest]:
     """Build MetadataWriteRequest objects for Snapchat Memories files.
 

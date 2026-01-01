@@ -179,9 +179,12 @@ class TestUpload:
         mock_result = MagicMock()
         mock_result.returncode = 0
 
-        with patch(
-            "common.upload.immich.subprocess.run", return_value=mock_result
-        ) as mock_run, patch.dict(os.environ, {}, clear=False):
+        with (
+            patch(
+                "common.upload.immich.subprocess.run", return_value=mock_result
+            ) as mock_run,
+            patch.dict(os.environ, {}, clear=False),
+        ):
             # Clear any env override
             os.environ.pop("IMMICH_SKIP_HASH", None)
             upload(str(test_path), "Album", None, None, skip_hash=False)
@@ -255,9 +258,7 @@ class TestUpload:
         mock_result = MagicMock()
         mock_result.returncode = 42
 
-        with patch(
-            "common.upload.immich.subprocess.run", return_value=mock_result
-        ):
+        with patch("common.upload.immich.subprocess.run", return_value=mock_result):
             result = upload(str(test_path), "Album", None, None)
 
         assert result == 42
@@ -270,9 +271,12 @@ class TestUpload:
         mock_result = MagicMock()
         mock_result.returncode = 0
 
-        with patch(
-            "common.upload.immich.subprocess.run", return_value=mock_result
-        ) as mock_run, patch.dict(os.environ, {"IMMICH_SKIP_HASH": "false"}):
+        with (
+            patch(
+                "common.upload.immich.subprocess.run", return_value=mock_result
+            ) as mock_run,
+            patch.dict(os.environ, {"IMMICH_SKIP_HASH": "false"}),
+        ):
             upload(str(test_path), "Album", None, None, skip_hash=True)
 
         cmd = mock_run.call_args[0][0]
@@ -440,7 +444,9 @@ class TestInstaloaderVsInstagramPublicMedia:
         assert "Instagram/testuser/posts" in albums
         assert "Instagram/testuser/stories" in albums
 
-    def test_output_info_alone_does_not_trigger_subfolders(self, tmp_path: Path) -> None:
+    def test_output_info_alone_does_not_trigger_subfolders(
+        self, tmp_path: Path
+    ) -> None:
         """OutputInfo alone (without processor name) should not trigger subfolder logic."""
         # Create subfolders that would match Instagram Public Media pattern
         (tmp_path / "posts").mkdir()
@@ -489,4 +495,3 @@ class TestIntegration:
         path, album = targets[0]
         assert Path(path) == output_base
         assert album == "Snapchat/myuser/memories"
-

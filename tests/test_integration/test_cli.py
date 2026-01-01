@@ -49,7 +49,13 @@ class TestCLIBasic:
         env_file.write_text("", encoding="utf-8")
         memoria_script = project_root / "memoria.py"
         result = subprocess.run(
-            [sys.executable, str(memoria_script), "--env-file", str(env_file), "--help"],
+            [
+                sys.executable,
+                str(memoria_script),
+                "--env-file",
+                str(env_file),
+                "--help",
+            ],
             cwd=tmp_path,
             capture_output=True,
             text=True,
@@ -82,7 +88,13 @@ class TestCLIBasic:
         memoria_script = project_root / "memoria.py"
 
         result = subprocess.run(
-            [sys.executable, str(memoria_script), "--env-file", str(env_file), str(fake_path)],
+            [
+                sys.executable,
+                str(memoria_script),
+                "--env-file",
+                str(env_file),
+                str(fake_path),
+            ],
             cwd=tmp_path,
             capture_output=True,
             text=True,

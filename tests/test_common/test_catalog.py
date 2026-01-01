@@ -373,9 +373,9 @@ class TestProcessorBuildCatalogStreaming:
         result = GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=2)
 
         # Result should be a generator, not a dict
-        assert isinstance(
-            result, types.GeneratorType
-        ), f"build_catalog should return a generator, got {type(result)}"
+        assert isinstance(result, types.GeneratorType), (
+            f"build_catalog should return a generator, got {type(result)}"
+        )
 
     def test_build_catalog_yields_entries_lazily(self, temp_export_dir):
         """Test that entries are yielded one at a time (lazy evaluation)."""
@@ -562,9 +562,7 @@ class TestMultipleProcessorStreaming:
                             "id": "msg1",
                             "media_files": ["attachment1.png"],
                             "source_paths": {
-                                "attachment1.png": str(
-                                    source_dir / "attachment1.png"
-                                ),
+                                "attachment1.png": str(source_dir / "attachment1.png"),
                             },
                             "timestamp": "2024-01-01T00:00:00Z",
                             "sender": "test_user",
@@ -573,9 +571,7 @@ class TestMultipleProcessorStreaming:
                             "id": "msg2",
                             "media_files": ["attachment2.jpg"],
                             "source_paths": {
-                                "attachment2.jpg": str(
-                                    source_dir / "attachment2.jpg"
-                                ),
+                                "attachment2.jpg": str(source_dir / "attachment2.jpg"),
                             },
                             "timestamp": "2024-01-02T00:00:00Z",
                             "sender": "test_user",
@@ -686,9 +682,9 @@ class TestMultipleProcessorStreaming:
                 result = processor.build_catalog(str(proc_dir), workers=1)
 
                 # Should be a generator type
-                assert isinstance(
-                    result, types.GeneratorType
-                ), f"{processor.get_name()}.build_catalog() should return a generator"
+                assert isinstance(result, types.GeneratorType), (
+                    f"{processor.get_name()}.build_catalog() should return a generator"
+                )
 
                 # Consume to ensure it doesn't error
                 list(result)
@@ -796,9 +792,9 @@ class TestStreamingMemoryBehavior:
             workers=1,
         ):
             # Verify we get a fresh entry each time
-            assert (
-                entry is not current_entry
-            ), "Should get new entry object each iteration"
+            assert entry is not current_entry, (
+                "Should get new entry object each iteration"
+            )
 
             # Track unique hashes to verify all files processed
             processed_hashes.add(entry["content_hash"])
@@ -825,9 +821,9 @@ class TestStreamingMemoryBehavior:
         )
 
         # collect_catalog should have all entries in memory at once
-        assert (
-            len(catalog["files"]) == 100
-        ), "collect_catalog should hold all 100 entries"
+        assert len(catalog["files"]) == 100, (
+            "collect_catalog should hold all 100 entries"
+        )
 
         # All entries should be accessible (they're all in memory)
         hashes = {entry["content_hash"] for entry in catalog["files"]}
@@ -898,18 +894,16 @@ class TestStreamingMemoryBehavior:
         for entry in DiscordProcessor.build_catalog(str(tmp_path), workers=1):
             batch.append(entry)
             if len(batch) >= 100:
-                mock_db.write_catalog_entries_batch(
-                    "test_run", "test_export", batch
-                )
+                mock_db.write_catalog_entries_batch("test_run", "test_export", batch)
                 batch = []
 
         if batch:
             mock_db.write_catalog_entries_batch("test_run", "test_export", batch)
 
         # Verify multiple batch writes occurred
-        assert (
-            len(write_call_counts) >= 2
-        ), f"Expected multiple batch writes, got {len(write_call_counts)}"
+        assert len(write_call_counts) >= 2, (
+            f"Expected multiple batch writes, got {len(write_call_counts)}"
+        )
 
         # Each batch should be <= 100 entries (except possibly the last)
         for i, count in enumerate(write_call_counts[:-1]):

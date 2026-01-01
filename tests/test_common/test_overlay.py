@@ -364,6 +364,7 @@ class TestCreateImageWithOverlay:
         # Check that blending occurred (neither pure red nor pure green)
         with Image.open(output_path) as img:
             pixel = img.getpixel((50, 50))
+            assert isinstance(pixel, tuple)
             # Should be a blend - not pure red (255,0,0) and not pure green (0,255,0)
             assert pixel[0] > 0  # Some red
             assert pixel[1] > 0  # Some green
@@ -649,21 +650,26 @@ class TestVideoOverlayErrors:
 
         assert result is False
 
-    def test_preserves_audio_track(
-        self, test_overlay: Path, tmp_path: Path
-    ) -> None:
+    def test_preserves_audio_track(self, test_overlay: Path, tmp_path: Path) -> None:
         """Should preserve audio track from source video."""
         # Create video with audio
         video_with_audio = tmp_path / "video_audio.mp4"
         cmd = [
             "ffmpeg",
-            "-f", "lavfi",
-            "-i", "color=c=blue:s=100x100:d=1",
-            "-f", "lavfi",
-            "-i", "sine=frequency=440:duration=1",
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-strict", "experimental",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:s=100x100:d=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-strict",
+            "experimental",
             "-y",
             str(video_with_audio),
         ]
@@ -677,10 +683,15 @@ class TestVideoOverlayErrors:
 
         # Check for audio stream
         probe_cmd = [
-            "ffprobe", "-v", "error",
-            "-select_streams", "a",
-            "-show_entries", "stream=codec_type",
-            "-of", "json",
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "json",
             str(output_path),
         ]
         probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)

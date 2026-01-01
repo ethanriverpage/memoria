@@ -119,7 +119,9 @@ PLATFORM_PREFIXES = {"google", "discord", "insta", "snap", "imessage"}
 # Regex pattern to match any Memoria filename
 # Format: {platform}-{username}[-{service}]-{YYYYMMDD}[_seq].ext
 MEMORIA_FILENAME_PATTERN = re.compile(
-    r"^(" + "|".join(re.escape(p) for p in sorted(PLATFORM_PREFIXES, key=len, reverse=True)) + r")-"
+    r"^("
+    + "|".join(re.escape(p) for p in sorted(PLATFORM_PREFIXES, key=len, reverse=True))
+    + r")-"
 )
 
 
@@ -246,7 +248,9 @@ class ImmichClient:
 
             if not quiet:
                 if total > 0:
-                    print(f"  Fetched {len(all_assets)}/{total} assets (page {page})...")
+                    print(
+                        f"  Fetched {len(all_assets)}/{total} assets (page {page})..."
+                    )
                 else:
                     print(f"  Fetched {len(all_assets)} assets (page {page})...")
 
@@ -649,7 +653,9 @@ def run_filename_mode(client: ImmichClient, args) -> int:
 
     # If just listing (dry-run), exit here
     if not args.delete:
-        print("Dry-run mode. Use --delete to PERMANENTLY DELETE these assets from Immich.")
+        print(
+            "Dry-run mode. Use --delete to PERMANENTLY DELETE these assets from Immich."
+        )
         return 0
 
     # Confirm action
@@ -800,7 +806,9 @@ Environment Variables:
         parser.error("--prefix requires --by-filename mode")
 
     if args.delete_albums and args.by_filename:
-        parser.error("--delete-albums is only valid in album mode (without --by-filename)")
+        parser.error(
+            "--delete-albums is only valid in album mode (without --by-filename)"
+        )
 
     if args.delete_albums and not args.delete:
         parser.error("--delete-albums requires --delete")

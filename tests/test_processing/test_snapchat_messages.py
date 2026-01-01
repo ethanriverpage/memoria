@@ -280,6 +280,10 @@ class TestSnapchatMessagesOverlayFailure:
         )
         mkv_files = list(messages_dir.glob("*.mkv"))
 
+        assert len(mp4_files) > 0, (
+            f"Should have produced fallback MP4s, found: {mp4_files}"
+        )
+
         # There should be no .mkv files (overlay failed)
         assert len(mkv_files) == 0, f"Should have no MKV files, found: {mkv_files}"
 
@@ -294,9 +298,9 @@ class TestSnapchatMessagesOverlayFailure:
         overlay_failures = [
             f for f in processing_failures if f.get("reason") == "overlay_embed_failed"
         ]
-        assert (
-            len(overlay_failures) == 1
-        ), f"Should have 1 overlay_embed_failed, found: {processing_failures}"
+        assert len(overlay_failures) == 1, (
+            f"Should have 1 overlay_embed_failed, found: {processing_failures}"
+        )
 
         # Verify there are NO exif_target_missing failures for .mkv paths
         exif_missing_failures = [

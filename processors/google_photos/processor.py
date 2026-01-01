@@ -16,7 +16,6 @@ from common.dedup.service import (
     get_canonical_timestamp,
     save_dedup_metadata,
 )
-from common.detection import detect_from_dirname
 from common.failures import FailureTracker
 from common.files.naming import FilenameGenerator
 from common.media.exiftool import (

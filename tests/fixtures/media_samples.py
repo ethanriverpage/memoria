@@ -220,11 +220,16 @@ def write_real_mp4_if_available(path: Path, duration_seconds: float = 0.1) -> bo
     cmd = [
         "ffmpeg",
         "-y",  # Overwrite
-        "-f", "lavfi",
-        "-i", f"color=red:s=16x16:d={duration_seconds}",
-        "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-pix_fmt", "yuv420p",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=red:s=16x16:d={duration_seconds}",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-pix_fmt",
+        "yuv420p",
         "-an",  # No audio
         str(path),
     ]
@@ -237,13 +242,19 @@ def write_real_mp4_if_available(path: Path, duration_seconds: float = 0.1) -> bo
             timeout=10,
         )
         return True
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+    ):
         # Fallback to minimal MP4
         write_media_file(path, "mp4")
         return False
 
 
-def write_scof_wrapped_png(path: Path, overlay_png_bytes: Optional[bytes] = None) -> Path:
+def write_scof_wrapped_png(
+    path: Path, overlay_png_bytes: Optional[bytes] = None
+) -> Path:
     """Create a Snapchat SCOF-wrapped overlay file.
 
     SCOF (Snapchat Overlay Format) files have:
@@ -306,13 +317,33 @@ def write_heic_placeholder(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     # HEIC files use JPEG-like ftyp box structure
     # This is a minimal valid HEIC-like ftyp
-    heic_ftyp = bytes([
-        0x00, 0x00, 0x00, 0x18,  # Box size: 24 bytes
-        0x66, 0x74, 0x79, 0x70,  # Box type: 'ftyp'
-        0x68, 0x65, 0x69, 0x63,  # Major brand: 'heic'
-        0x00, 0x00, 0x00, 0x00,  # Minor version
-        0x6D, 0x69, 0x66, 0x31,  # Compatible brand: 'mif1'
-        0x68, 0x65, 0x69, 0x63,  # Compatible brand: 'heic'
-    ])
+    heic_ftyp = bytes(
+        [
+            0x00,
+            0x00,
+            0x00,
+            0x18,  # Box size: 24 bytes
+            0x66,
+            0x74,
+            0x79,
+            0x70,  # Box type: 'ftyp'
+            0x68,
+            0x65,
+            0x69,
+            0x63,  # Major brand: 'heic'
+            0x00,
+            0x00,
+            0x00,
+            0x00,  # Minor version
+            0x6D,
+            0x69,
+            0x66,
+            0x31,  # Compatible brand: 'mif1'
+            0x68,
+            0x65,
+            0x69,
+            0x63,  # Compatible brand: 'heic'
+        ]
+    )
     path.write_bytes(heic_ftyp)
     return path

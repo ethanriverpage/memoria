@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for DeduplicationService."""
 
-
 import pytest
 
 from common.dedup.config import DedupConfig
@@ -448,7 +447,8 @@ class TestBuildDuplicateEntry:
         ]
 
         entry, dup_count, space_saved = service._build_duplicate_entry(
-            files, "perceptual"  # No content_hash for perceptual
+            files,
+            "perceptual",  # No content_hash for perceptual
         )
 
         # Best should be largest file

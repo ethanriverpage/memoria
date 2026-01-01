@@ -622,6 +622,7 @@ class DiscordPreprocessor(PreprocessorBase):
         # Use cached detection result from the run() pipeline
         # Note: detection.username is guaranteed non-None by invariant enforcement in run()
         detection = self.ensure_detection_result()
+        assert detection.username is not None
         self.export_username = detection.username
 
         # Build just the conversations structure - export_info is handled by save_metadata

@@ -32,5 +32,3 @@ def test_common_facade_exports_and_all():
     for name in expected_names:
         assert hasattr(common, name), f"common is missing facade export: {name}"
         assert name in common.__all__, f"common.__all__ is missing: {name}"
-
-

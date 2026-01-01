@@ -10,6 +10,7 @@ Processes iMessage exports from Mac and iPhone backups:
 - Supports cross-export deduplication via xxHash64
 - Generates metadata.json matching Snapchat messages structure
 """
+
 import logging
 import re
 import sqlite3

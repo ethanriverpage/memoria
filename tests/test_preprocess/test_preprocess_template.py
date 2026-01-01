@@ -11,13 +11,12 @@ Tests cover:
 
 from pathlib import Path
 from typing import Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from common.detection import DetectionResult
 from processors.preprocess_base import (
-    CopyResult,
     HashResult,
     PreprocessorBase,
     SHARED_STATS_KEYS,
@@ -328,15 +327,15 @@ class TestCachedUsernameDetection:
 class TestValidationHelpers:
     """Tests for validation helper methods."""
 
-    def test_resolve_first_existing_dir_returns_first_match(self, preprocessor, tmp_path):
+    def test_resolve_first_existing_dir_returns_first_match(
+        self, preprocessor, tmp_path
+    ):
         """Should return first existing directory from candidates."""
         dir1 = tmp_path / "dir1"
         dir2 = tmp_path / "dir2"
         dir2.mkdir()  # Only dir2 exists
 
-        result = preprocessor.resolve_first_existing_dir(
-            [dir1, dir2], label="Test"
-        )
+        result = preprocessor.resolve_first_existing_dir([dir1, dir2], label="Test")
         assert result == dir2
 
     def test_resolve_first_existing_dir_raises_when_none_exist(
@@ -371,18 +370,16 @@ class TestValidationHelpers:
         (dir_path / "file1.json").touch()
         (dir_path / "file2.json").touch()
 
-        assert (
-            preprocessor.require_any_files(dir_path, "*.json", label="JSON") is True
-        )
+        assert preprocessor.require_any_files(dir_path, "*.json", label="JSON") is True
 
-    def test_require_any_files_returns_false_when_no_files(self, preprocessor, tmp_path):
+    def test_require_any_files_returns_false_when_no_files(
+        self, preprocessor, tmp_path
+    ):
         """Should return False when no matching files exist."""
         dir_path = tmp_path / "empty_dir"
         dir_path.mkdir()
 
-        assert (
-            preprocessor.require_any_files(dir_path, "*.json", label="JSON") is False
-        )
+        assert preprocessor.require_any_files(dir_path, "*.json", label="JSON") is False
 
     def test_require_any_dirs_returns_true_when_subdirs_exist(
         self, preprocessor, tmp_path
@@ -597,4 +594,3 @@ class TestProductionPreprocessorStats:
                 assert key in instance.stats, (
                     f"{name} preprocessor missing shared stats key: {key}"
                 )
-

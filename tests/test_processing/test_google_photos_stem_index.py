@@ -56,7 +56,9 @@ class TestStemIndexConstruction:
         assert "metadata_by_stem" in catalog
         assert isinstance(catalog["metadata_by_stem"], dict)
 
-    def test_stem_index_contains_lowercase_stems(self, preprocessor, album_with_metadata):
+    def test_stem_index_contains_lowercase_stems(
+        self, preprocessor, album_with_metadata
+    ):
         """Stem index keys should be lowercase stems (without extension)."""
         catalog = preprocessor.build_album_catalog(album_with_metadata)
         stem_index = catalog["metadata_by_stem"]
@@ -86,7 +88,10 @@ class TestStemIndexConstruction:
         stem_index = catalog["metadata_by_stem"]
 
         # Original stem with trailing dash
-        assert "photo_with_trailing-.jpg" in stem_index or "photo_with_trailing-" in stem_index
+        assert (
+            "photo_with_trailing-.jpg" in stem_index
+            or "photo_with_trailing-" in stem_index
+        )
 
         # Cleaned stem without trailing dash should also be indexed
         # The stem without extension for trailing chars matcher
@@ -172,7 +177,10 @@ class TestFindMetadataWithStemIndex:
         album_dir.mkdir()
 
         # Create metadata files
-        metadata_content = {"title": "test", "photoTakenTime": {"timestamp": "1609459200"}}
+        metadata_content = {
+            "title": "test",
+            "photoTakenTime": {"timestamp": "1609459200"},
+        }
 
         files = [
             "IMG_0001.JPG",
@@ -198,7 +206,9 @@ class TestFindMetadataWithStemIndex:
 
     def test_exact_match_returns_immediately(self, preprocessor, catalog_with_index):
         """Exact match should return metadata path directly."""
-        result = preprocessor.find_metadata_for_media("IMG_0001.JPG", catalog_with_index)
+        result = preprocessor.find_metadata_for_media(
+            "IMG_0001.JPG", catalog_with_index
+        )
 
         assert result is not None
         assert result.name == "IMG_0001.JPG.json"
@@ -214,7 +224,9 @@ class TestFindMetadataWithStemIndex:
     def test_stem_lookup_finds_candidates(self, preprocessor, catalog_with_index):
         """Stem-based lookup should find matching candidates."""
         # IMG_0002.PNG has a stem of "img_0002" which should find IMG_0002.PNG metadata
-        result = preprocessor.find_metadata_for_media("IMG_0002.PNG", catalog_with_index)
+        result = preprocessor.find_metadata_for_media(
+            "IMG_0002.PNG", catalog_with_index
+        )
 
         assert result is not None
         assert "IMG_0002" in result.name
@@ -301,10 +313,10 @@ class TestFindMetadataEdgeCases:
 
         # Metadata sidecar file lacks extension in its filename, but has a title that includes it
         metadata_filename = "52738308278__E577206E-8A5D-49EB-B93E-636E23081.json"
-        metadata_title = (
-            "52738308278__E577206E-8A5D-49EB-B93E-636E23081DE1.JPG"
+        metadata_title = "52738308278__E577206E-8A5D-49EB-B93E-636E23081DE1.JPG"
+        (album_dir / metadata_filename).write_text(
+            json.dumps({"title": metadata_title})
         )
-        (album_dir / metadata_filename).write_text(json.dumps({"title": metadata_title}))
 
         catalog = preprocessor.build_album_catalog(album_dir)
 
@@ -381,7 +393,10 @@ class TestEditedFileMatching:
 
         # Create original file and its metadata
         write_media_file(album_dir / "IMG_6205.JPG", "jpeg")
-        metadata = {"title": "IMG_6205.JPG", "photoTakenTime": {"timestamp": "1609459200"}}
+        metadata = {
+            "title": "IMG_6205.JPG",
+            "photoTakenTime": {"timestamp": "1609459200"},
+        }
         (album_dir / "IMG_6205.JPG.supplemental-metadata.json").write_text(
             json.dumps(metadata)
         )
@@ -392,13 +407,20 @@ class TestEditedFileMatching:
         # Create another example with -effects suffix
         write_media_file(album_dir / "photo_001.jpg", "jpeg")
         (album_dir / "photo_001.jpg.json").write_text(
-            json.dumps({"title": "photo_001.jpg", "photoTakenTime": {"timestamp": "1609459200"}})
+            json.dumps(
+                {
+                    "title": "photo_001.jpg",
+                    "photoTakenTime": {"timestamp": "1609459200"},
+                }
+            )
         )
         write_media_file(album_dir / "photo_001-effects.jpg", "jpeg")
 
         return album_dir
 
-    def test_edited_file_matches_original_metadata(self, preprocessor, album_with_edited_files):
+    def test_edited_file_matches_original_metadata(
+        self, preprocessor, album_with_edited_files
+    ):
         """An -edited file should match the original file's metadata."""
         catalog = preprocessor.build_album_catalog(album_with_edited_files)
 
@@ -409,7 +431,9 @@ class TestEditedFileMatching:
         assert "IMG_6205" in result.name
         assert "edited" not in result.name.lower()
 
-    def test_effects_file_matches_original_metadata(self, preprocessor, album_with_edited_files):
+    def test_effects_file_matches_original_metadata(
+        self, preprocessor, album_with_edited_files
+    ):
         """An -effects file should match the original file's metadata."""
         catalog = preprocessor.build_album_catalog(album_with_edited_files)
 
@@ -419,7 +443,9 @@ class TestEditedFileMatching:
         assert "photo_001" in result.name
         assert "effects" not in result.name.lower()
 
-    def test_original_file_still_matches_directly(self, preprocessor, album_with_edited_files):
+    def test_original_file_still_matches_directly(
+        self, preprocessor, album_with_edited_files
+    ):
         """Original file should still match its metadata directly."""
         catalog = preprocessor.build_album_catalog(album_with_edited_files)
 
@@ -457,12 +483,16 @@ class TestEditedFileMatching:
         # Create original file and duplicates with metadata
         write_media_file(album_dir / "26.jpg", "jpeg")
         (album_dir / "26.jpg.supplemental-metadata.json").write_text(
-            json.dumps({"title": "26.jpg", "photoTakenTime": {"timestamp": "1609459200"}})
+            json.dumps(
+                {"title": "26.jpg", "photoTakenTime": {"timestamp": "1609459200"}}
+            )
         )
 
         write_media_file(album_dir / "26 (3).jpg", "jpeg")
         (album_dir / "26 (3).jpg.supplemental-metadata.json").write_text(
-            json.dumps({"title": "26.jpg", "photoTakenTime": {"timestamp": "1609459200"}})
+            json.dumps(
+                {"title": "26.jpg", "photoTakenTime": {"timestamp": "1609459200"}}
+            )
         )
 
         # Create edited version with internal duplicate index
@@ -476,4 +506,3 @@ class TestEditedFileMatching:
         assert result is not None
         assert "26 (3)" in result.name
         assert "edited" not in result.name.lower()
-

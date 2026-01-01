@@ -391,7 +391,11 @@ def create_snapchat_messages_export(
                             "sender": "Other User",
                             "media_id": "b~abc123",
                             "media_files": ["2021-01-01_b~abc123.jpg"],
-                            "source_paths": {"2021-01-01_b~abc123.jpg": str(media_dir / "2021-01-01_b~abc123.jpg")},
+                            "source_paths": {
+                                "2021-01-01_b~abc123.jpg": str(
+                                    media_dir / "2021-01-01_b~abc123.jpg"
+                                )
+                            },
                         }
                     ],
                 }
@@ -506,9 +510,9 @@ def create_instagram_messages_export(
 """
         for msg in conv_data.get("messages", []):
             html_content += f"""<div class="_a6-p">
-<div class="_3-95 _a6-o">{msg['sender']}</div>
-<div class="_a6-p">{msg.get('content', '')}</div>
-<div class="_3-94 _a6-o">{msg['timestamp']}</div>
+<div class="_3-95 _a6-o">{msg["sender"]}</div>
+<div class="_a6-p">{msg.get("content", "")}</div>
+<div class="_3-94 _a6-o">{msg["timestamp"]}</div>
 </div>
 """
             # Create media file if present

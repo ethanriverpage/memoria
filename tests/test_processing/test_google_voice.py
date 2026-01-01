@@ -61,9 +61,7 @@ class TestGoogleVoiceFilenameMatching:
 
         pre = GoogleVoicePreprocessor(export_path=tmp_path, output_dir=tmp_path / "out")
 
-        disk_name = (
-            "Catherine Hinojosa - Text - 2016-04-25T13_13_36Z-1(1).jpg"
-        )
+        disk_name = "Catherine Hinojosa - Text - 2016-04-25T13_13_36Z-1(1).jpg"
         file_catalog = {disk_name: tmp_path / disk_name}
 
         media_src = "Catherine Hinojosa - Text - 2016-04-25T13_13_36Z-10-1"

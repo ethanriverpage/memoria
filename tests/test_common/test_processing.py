@@ -147,7 +147,9 @@ class TestTempProcessingDirectory:
     def test_no_cleanup_when_disabled(self, tmp_path):
         """Test that directory is preserved when cleanup is disabled."""
         # Set DISABLE_PREPROCESSING_CLEANUP to disable cleanup
-        with patch.dict(os.environ, {"DISABLE_PREPROCESSING_CLEANUP": "true"}, clear=False):
+        with patch.dict(
+            os.environ, {"DISABLE_PREPROCESSING_CLEANUP": "true"}, clear=False
+        ):
             with temp_processing_directory(str(tmp_path), "test") as temp_dir:
                 temp_path = temp_dir
                 assert temp_path.exists()

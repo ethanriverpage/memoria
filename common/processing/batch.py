@@ -17,13 +17,13 @@ R = TypeVar("R")
 
 
 def process_batches_parallel(
-    tasks: List[Any],
-    worker_fn: Callable[[List[Any]], List[Any]],
+    tasks: List[T],
+    worker_fn: Callable[[List[T]], List[R]],
     num_workers: int,
     batch_size: int = 100,
     phase: str = PHASE_PROCESS,
     description: str = "Processing",
-) -> List[Any]:
+) -> List[R]:
     """Process tasks in batches using multiprocessing pool with progress bar."""
     if not tasks:
         return []
@@ -56,7 +56,7 @@ def process_batches_parallel(
             )
 
     # Flatten results
-    results = []
+    results: List[R] = []
     for batch_result in batch_results:
         results.extend(batch_result)
 

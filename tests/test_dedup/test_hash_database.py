@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for HashDatabase."""
 
-
 import pytest
 
 from common.dedup.database import HashDatabase

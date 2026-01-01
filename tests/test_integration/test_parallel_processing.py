@@ -121,9 +121,7 @@ class TestWorkerCountValidation:
         create_google_photos_export(export_dir)
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
-        result = GooglePhotosProcessor.process(
-            working_dir, str(output_dir), workers=1
-        )
+        result = GooglePhotosProcessor.process(working_dir, str(output_dir), workers=1)
 
         assert result is True
         assert output_dir.exists()
@@ -140,9 +138,7 @@ class TestWorkerCountValidation:
         create_google_photos_export(export_dir)
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
-        result = GooglePhotosProcessor.process(
-            working_dir, str(output_dir), workers=4
-        )
+        result = GooglePhotosProcessor.process(working_dir, str(output_dir), workers=4)
 
         assert result is True
         assert output_dir.exists()
@@ -178,9 +174,7 @@ class TestWorkerCountValidation:
         create_google_photos_export(export_dir)
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
-        result = GooglePhotosProcessor.process(
-            working_dir, str(output_dir), workers=16
-        )
+        result = GooglePhotosProcessor.process(working_dir, str(output_dir), workers=16)
 
         assert result is True
 
@@ -204,14 +198,10 @@ class TestOutputConsistency:
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         # Process with 1 worker
-        GooglePhotosProcessor.process(
-            working_dir, str(output1), workers=1
-        )
+        GooglePhotosProcessor.process(working_dir, str(output1), workers=1)
 
         # Process with 4 workers
-        GooglePhotosProcessor.process(
-            working_dir, str(output2), workers=4
-        )
+        GooglePhotosProcessor.process(working_dir, str(output2), workers=4)
 
         count1 = count_files(output1)
         count2 = count_files(output2)
@@ -231,21 +221,17 @@ class TestOutputConsistency:
         create_large_google_photos_export(export_dir, num_albums=5, files_per_album=3)
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
-        GooglePhotosProcessor.process(
-            working_dir, str(output1), workers=1
-        )
+        GooglePhotosProcessor.process(working_dir, str(output1), workers=1)
 
-        GooglePhotosProcessor.process(
-            working_dir, str(output2), workers=4
-        )
+        GooglePhotosProcessor.process(working_dir, str(output2), workers=4)
 
         files1 = get_file_names(output1)
         files2 = get_file_names(output2)
 
         # Same file names should be produced
-        assert (
-            files1 == files2
-        ), f"File sets differ: {files1.symmetric_difference(files2)}"
+        assert files1 == files2, (
+            f"File sets differ: {files1.symmetric_difference(files2)}"
+        )
 
 
 @pytest.mark.integration
@@ -266,17 +252,15 @@ class TestRaceConditions:
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         # Process with high parallelism
-        GooglePhotosProcessor.process(
-            working_dir, str(output_dir), workers=8
-        )
+        GooglePhotosProcessor.process(working_dir, str(output_dir), workers=8)
 
         # No duplicate file names should exist in same directory
         # (though same name in different dirs is OK)
         for dir_path in [d for d in output_dir.rglob("*") if d.is_dir()]:
             dir_files = [f.name for f in dir_path.iterdir() if f.is_file()]
-            assert len(dir_files) == len(
-                set(dir_files)
-            ), "Duplicate files in same directory"
+            assert len(dir_files) == len(set(dir_files)), (
+                "Duplicate files in same directory"
+            )
 
     @skip_no_exiftool
     def test_no_missing_files(self, tmp_path):
@@ -294,9 +278,7 @@ class TestRaceConditions:
         )
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
-        GooglePhotosProcessor.process(
-            working_dir, str(output_dir), workers=4
-        )
+        GooglePhotosProcessor.process(working_dir, str(output_dir), workers=4)
 
         # Should have processed all input files
         output_files = list(output_dir.rglob("*"))
@@ -331,7 +313,6 @@ class TestResourceCleanup:
             working_dir,
             str(output_dir),
             workers=4,
-            
         )
 
         # Check that output exists and has files
@@ -358,14 +339,13 @@ class TestResourceCleanup:
                 working_dir,
                 str(output_dir),
                 workers=2,
-                
             )
             file_counts.append(count_files(output_dir))
 
         # All runs should produce same file count
-        assert all(
-            c == file_counts[0] for c in file_counts
-        ), f"File counts differ across runs: {file_counts}"
+        assert all(c == file_counts[0] for c in file_counts), (
+            f"File counts differ across runs: {file_counts}"
+        )
 
 
 @pytest.mark.integration
@@ -387,9 +367,7 @@ class TestLargeExportProcessing:
         create_large_google_photos_export(export_dir, num_albums=20, files_per_album=10)
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
-        result = GooglePhotosProcessor.process(
-            working_dir, str(output_dir), workers=4
-        )
+        result = GooglePhotosProcessor.process(working_dir, str(output_dir), workers=4)
 
         assert result is True
         assert count_files(output_dir) > 0
@@ -408,18 +386,14 @@ class TestLargeExportProcessing:
         working_dir = preprocess_export(GooglePhotosProcessor, export_dir, cache_dir)
 
         # Sequential
-        GooglePhotosProcessor.process(
-            working_dir, str(output_seq), workers=1
-        )
+        GooglePhotosProcessor.process(working_dir, str(output_seq), workers=1)
 
         # Parallel
-        GooglePhotosProcessor.process(
-            working_dir, str(output_par), workers=4
-        )
+        GooglePhotosProcessor.process(working_dir, str(output_par), workers=4)
 
         seq_count = count_files(output_seq)
         par_count = count_files(output_par)
 
-        assert (
-            seq_count == par_count
-        ), f"Counts differ: seq={seq_count}, par={par_count}"
+        assert seq_count == par_count, (
+            f"Counts differ: seq={seq_count}, par={par_count}"
+        )

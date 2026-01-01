@@ -19,7 +19,6 @@ from common.dedup.description import (
     SERVICE_POSTS,
     # Processor mapping
     PROCESSOR_TO_PLATFORM_SERVICE,
-    CONSOLIDATING_PROCESSORS,
     get_platform_service,
     is_consolidating_processor,
     format_relative_source_path,

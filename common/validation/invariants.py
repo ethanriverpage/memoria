@@ -50,4 +50,3 @@ def validate_gps(lat: float, lon: float, *, processor: str, file_path: str) -> N
             f"[{processor}] GPS coordinates out of range for {file_path}: "
             f"({lat}, {lon})"
         )
-

@@ -24,24 +24,23 @@ Performance Optimizations:
 """
 
 import io
+import logging
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional
-import logging
-from common.files.utils import copy_file
 
 from PIL import Image  # type: ignore
 
-# SCOF container format constants
-# Some Snapchat overlay files are wrapped in a proprietary SCOF container
-# with the actual PNG/image payload starting at byte offset 136
-SCOF_MAGIC = b"SCOF"
-SCOF_MAGIC_OFFSET = 4  # Magic appears at offset 4 (after 4-byte header size)
-SCOF_PAYLOAD_OFFSET = 136  # Embedded image starts at byte 136
-
-# Import video encoder detection
+from common.dedup.description import (
+    PLATFORM_SNAPCHAT,
+    SERVICE_MESSAGES,
+    SourceEntry,
+    build_message_context,
+    build_source_line,
+)
+from common.files.utils import copy_file
 from common.media.encoder import (
     get_encoder_args,
     get_encoder_input_args,
@@ -50,18 +49,14 @@ from common.media.encoder import (
     is_hardware_accelerated,
     is_hardware_acceleration_error,
 )
-
-# Import shared video metadata extraction
 from common.media.probe import VideoMetadata, get_video_metadata
 
-# Import unified description format utilities
-from common.dedup.description import (
-    PLATFORM_SNAPCHAT,
-    SERVICE_MESSAGES,
-    SourceEntry,
-    build_source_line,
-    build_message_context,
-)
+# SCOF container format constants
+# Some Snapchat overlay files are wrapped in a proprietary SCOF container
+# with the actual PNG/image payload starting at byte offset 136
+SCOF_MAGIC = b"SCOF"
+SCOF_MAGIC_OFFSET = 4  # Magic appears at offset 4 (after 4-byte header size)
+SCOF_PAYLOAD_OFFSET = 136  # Embedded image starts at byte 136
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -81,8 +76,14 @@ def _extract_scof_payload(data: bytes) -> bytes:
         The embedded image payload if SCOF container detected, otherwise original data
     """
     # Check for SCOF magic at offset 4
-    if len(data) > SCOF_PAYLOAD_OFFSET and data[SCOF_MAGIC_OFFSET : SCOF_MAGIC_OFFSET + 4] == SCOF_MAGIC:
-        logger.debug("Detected SCOF container, extracting payload from offset %d", SCOF_PAYLOAD_OFFSET)
+    if (
+        len(data) > SCOF_PAYLOAD_OFFSET
+        and data[SCOF_MAGIC_OFFSET : SCOF_MAGIC_OFFSET + 4] == SCOF_MAGIC
+    ):
+        logger.debug(
+            "Detected SCOF container, extracting payload from offset %d",
+            SCOF_PAYLOAD_OFFSET,
+        )
         return data[SCOF_PAYLOAD_OFFSET:]
     return data
 
@@ -116,6 +117,7 @@ def _open_overlay_image(overlay_path: Path) -> Image.Image:
 
 class OverlayProcessingError(RuntimeError):
     """Raised when an overlay exists but cannot be processed (corrupt/unreadable)."""
+
 
 # Detect encoder once at module load time
 _ENCODER_NAME = get_encoder_name()
@@ -179,9 +181,7 @@ def _pass1_rotate_video_impl_with_metadata(
     """
     # Use pre-fetched metadata - validate dimensions are present
     if video_meta.width is None or video_meta.height is None:
-        raise RuntimeError(
-            f"[{video_path.name}] Video has no dimensions in metadata"
-        )
+        raise RuntimeError(f"[{video_path.name}] Video has no dimensions in metadata")
 
     orig_width: int = video_meta.width
     orig_height: int = video_meta.height
@@ -442,7 +442,7 @@ def _pass2_apply_overlay_impl(
             scaled_overlay.close()  # Close after saving
         finally:
             # Ensure overlay_img is closed if an error occurs mid-processing
-            if not overlay_img.fp is None:
+            if overlay_img.fp is not None:
                 try:
                     overlay_img.close()
                 except Exception:
@@ -792,7 +792,9 @@ def _pass3_combine_and_embed(
         stream_count = len(streams)
         if stream_count != 2:
             logger.warning(
-                "[%s] Expected 2 video streams, got %s", with_overlay_path.name, stream_count
+                "[%s] Expected 2 video streams, got %s",
+                with_overlay_path.name,
+                stream_count,
             )
 
     return True

@@ -185,9 +185,9 @@ def assert_no_failures(result: ProcessingResult) -> None:
     assert result.success, "Processing should succeed"
     if result.failure_report:
         failed_processing = result.failure_report.get("failed_processing", [])
-        assert (
-            len(failed_processing) == 0
-        ), f"Expected no processing failures, got: {failed_processing}"
+        assert len(failed_processing) == 0, (
+            f"Expected no processing failures, got: {failed_processing}"
+        )
 
 
 def assert_has_media_files(
@@ -197,9 +197,9 @@ def assert_has_media_files(
 ) -> None:
     """Assert that the output contains at least min_count media files."""
     count = result.count_output_media(extensions)
-    assert (
-        count >= min_count
-    ), f"Expected at least {min_count} media files, found {count}"
+    assert count >= min_count, (
+        f"Expected at least {min_count} media files, found {count}"
+    )
 
 
 def assert_metadata_json_valid(result: ProcessingResult) -> None:
@@ -217,9 +217,9 @@ def assert_no_mkv_on_overlay_fail(result: ProcessingResult) -> None:
     overlay_failures = result.get_failures_by_reason("overlay_embed_failed")
     if overlay_failures:
         mkv_files = [f for f in result.output_files if f.suffix.lower() == ".mkv"]
-        assert (
-            len(mkv_files) == 0
-        ), f"Found .mkv files with overlay failures: {mkv_files}"
+        assert len(mkv_files) == 0, (
+            f"Found .mkv files with overlay failures: {mkv_files}"
+        )
 
 
 def count_output_files(

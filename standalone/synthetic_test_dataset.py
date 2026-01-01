@@ -23,7 +23,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -100,9 +100,13 @@ def _maybe_make_mp4(path: Path, seconds: int = 1, size: str = "320x240") -> None
         str(path),
     ]
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(
+            cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
     except FileNotFoundError as e:
-        raise RuntimeError("ffmpeg is required to generate synthetic video fixtures") from e
+        raise RuntimeError(
+            "ffmpeg is required to generate synthetic video fixtures"
+        ) from e
 
 
 def _touch_mtime(path: Path, dt: datetime) -> None:
@@ -110,7 +114,9 @@ def _touch_mtime(path: Path, dt: datetime) -> None:
     os.utime(path, (ts, ts))
 
 
-def create_synthetic_exports(output_root: Path, dry_run: bool = False) -> SyntheticDatasetStats:
+def create_synthetic_exports(
+    output_root: Path, dry_run: bool = False
+) -> SyntheticDatasetStats:
     """
     Create synthetic exports directly under output_root.
     """
@@ -178,7 +184,9 @@ def create_synthetic_exports(output_root: Path, dry_run: bool = False) -> Synthe
     gc_base = google_root / "Google Chat"
     group_dir = gc_base / "Groups" / "Space 00000001"
     dm_dir = gc_base / "Users" / "User 00000002"
-    write_json(group_dir / "group_info.json", {"name": "Synthetic Space", "members": []})
+    write_json(
+        group_dir / "group_info.json", {"name": "Synthetic Space", "members": []}
+    )
     write_json(dm_dir / "user_info.json", {"user": {"email": "synthetic@example.com"}})
     write_bytes(group_dir / "File-2016-09-06.png", _TINY_PNG_1X1)
     write_json(
@@ -186,10 +194,16 @@ def create_synthetic_exports(output_root: Path, dry_run: bool = False) -> Synthe
         {
             "messages": [
                 {
-                    "creator": {"name": "Sender A", "email": "a@example.com", "user_type": "Human"},
+                    "creator": {
+                        "name": "Sender A",
+                        "email": "a@example.com",
+                        "user_type": "Human",
+                    },
                     "created_date": "Thursday, November 3, 2016 at 11:59:50 AM UTC",
                     "text": "Check this out",
-                    "attached_files": [{"original_name": "x.png", "export_name": "File-2016-09-06.png"}],
+                    "attached_files": [
+                        {"original_name": "x.png", "export_name": "File-2016-09-06.png"}
+                    ],
                     "topic_id": "topic1",
                     "message_id": "msg1",
                 }
@@ -232,7 +246,9 @@ def create_synthetic_exports(output_root: Path, dry_run: bool = False) -> Synthe
     if not dry_run:
         local_dir.mkdir(parents=True, exist_ok=True)
     # Local attachment and a missing attachment to exercise failure tracking
-    write_bytes(local_dir / "shared_dup.jpg", shared_jpg.read_bytes() if not dry_run else b"")
+    write_bytes(
+        local_dir / "shared_dup.jpg", shared_jpg.read_bytes() if not dry_run else b""
+    )
     write_bytes(local_dir / "note.png", _TINY_PNG_1X1)
 
     # Build file:// URLs with absolute paths to the synthetic dataset
@@ -240,8 +256,13 @@ def create_synthetic_exports(output_root: Path, dry_run: bool = False) -> Synthe
     note_url = f"file://{(local_dir / 'note.png').absolute()}"
     missing_url = f"file://{(local_dir / 'missing.jpg').absolute()}"
 
-    write_json(messages_dir / "index.json", {"1234567890": "Direct Message with synthetic#0"})
-    write_json(channel_dir / "channel.json", {"id": "1234567890", "type": "DM", "recipients": ["1", "2"]})
+    write_json(
+        messages_dir / "index.json", {"1234567890": "Direct Message with synthetic#0"}
+    )
+    write_json(
+        channel_dir / "channel.json",
+        {"id": "1234567890", "type": "DM", "recipients": ["1", "2"]},
+    )
     write_json(
         channel_dir / "messages.json",
         [
@@ -270,8 +291,14 @@ def create_synthetic_exports(output_root: Path, dry_run: bool = False) -> Synthe
     conv_a = inbox_dir / "user_a_0001"
     conv_b = inbox_dir / "user_b_0002"
     # Same media filename in two conversations to exercise within-processor dedup
-    write_bytes(conv_a / "photos" / "shared_dup.jpg", shared_jpg.read_bytes() if not dry_run else b"")
-    write_bytes(conv_b / "photos" / "shared_dup.jpg", shared_jpg.read_bytes() if not dry_run else b"")
+    write_bytes(
+        conv_a / "photos" / "shared_dup.jpg",
+        shared_jpg.read_bytes() if not dry_run else b"",
+    )
+    write_bytes(
+        conv_b / "photos" / "shared_dup.jpg",
+        shared_jpg.read_bytes() if not dry_run else b"",
+    )
 
     msg_html = """<!doctype html>
 <html>
@@ -312,10 +339,18 @@ def create_synthetic_exports(output_root: Path, dry_run: bool = False) -> Synthe
 
     base = "2025-01-01_00-00-00_UTC"
     write_bytes(instaloader_root / f"{base}.jpg", _TINY_JPEG_1X1)
-    write_text(instaloader_root / f"{base}.txt", "Synthetic caption with unicode’s apostrophe")
+    write_text(
+        instaloader_root / f"{base}.txt", "Synthetic caption with unicode’s apostrophe"
+    )
     write_json(
         instaloader_root / f"{base}.json",
-        {"node": {"owner": {"username": "synthetic"}, "taken_at_timestamp": 1735689600, "__typename": "GraphImage"}},
+        {
+            "node": {
+                "owner": {"username": "synthetic"},
+                "taken_at_timestamp": 1735689600,
+                "__typename": "GraphImage",
+            }
+        },
     )
 
     # -------------------------------------------------------------------------
@@ -433,7 +468,9 @@ def create_synthetic_exports(output_root: Path, dry_run: bool = False) -> Synthe
     # -------------------------------------------------------------------------
     # iMessage (Mac + iPhone) exports (SQLite + attachments)
     # -------------------------------------------------------------------------
-    def build_imessage_db(db_path: Path, attachments_root: Path, is_phone: bool) -> None:
+    def build_imessage_db(
+        db_path: Path, attachments_root: Path, is_phone: bool
+    ) -> None:
         nonlocal files_written
         if dry_run:
             return
@@ -529,8 +566,14 @@ def create_synthetic_exports(output_root: Path, dry_run: bool = False) -> Synthe
         missing_rel = "~/Library/Messages/Attachments/00/00/MISSING/missing.jpg"
 
         # attachment rows
-        def insert_attachment(rowid: int, transfer_name: str, filename: str, mime: str) -> None:
-            size = (att_dir / transfer_name).stat().st_size if (att_dir / transfer_name).exists() else 0
+        def insert_attachment(
+            rowid: int, transfer_name: str, filename: str, mime: str
+        ) -> None:
+            size = (
+                (att_dir / transfer_name).stat().st_size
+                if (att_dir / transfer_name).exists()
+                else 0
+            )
             cur.execute(
                 "INSERT INTO attachment(ROWID,guid,filename,mime_type,transfer_name,total_bytes,is_outgoing,created_date,transfer_state) VALUES(?,?,?,?,?,?,?,?,?)",
                 (
@@ -546,7 +589,11 @@ def create_synthetic_exports(output_root: Path, dry_run: bool = False) -> Synthe
                 ),
             )
 
-        prefix = "~/Library/SMS/Attachments" if is_phone else "~/Library/Messages/Attachments"
+        prefix = (
+            "~/Library/SMS/Attachments"
+            if is_phone
+            else "~/Library/Messages/Attachments"
+        )
         insert_attachment(
             1,
             shared_name,
@@ -567,15 +614,28 @@ def create_synthetic_exports(output_root: Path, dry_run: bool = False) -> Synthe
 
         # Joins: same shared attachment appears in two messages (dedup within export)
         for msg_id in [1, 2]:
-            cur.execute("INSERT INTO message_attachment_join(message_id,attachment_id) VALUES(?,?)", (msg_id, 1))
+            cur.execute(
+                "INSERT INTO message_attachment_join(message_id,attachment_id) VALUES(?,?)",
+                (msg_id, 1),
+            )
         # Live photo image attached to first message
-        cur.execute("INSERT INTO message_attachment_join(message_id,attachment_id) VALUES(?,?)", (1, 2))
+        cur.execute(
+            "INSERT INTO message_attachment_join(message_id,attachment_id) VALUES(?,?)",
+            (1, 2),
+        )
         # Missing attachment referenced
-        cur.execute("INSERT INTO message_attachment_join(message_id,attachment_id) VALUES(?,?)", (1, 3))
+        cur.execute(
+            "INSERT INTO message_attachment_join(message_id,attachment_id) VALUES(?,?)",
+            (1, 3),
+        )
 
         # Chat joins
-        cur.execute("INSERT INTO chat_message_join(chat_id,message_id) VALUES(?,?)", (1, 1))
-        cur.execute("INSERT INTO chat_message_join(chat_id,message_id) VALUES(?,?)", (2, 2))
+        cur.execute(
+            "INSERT INTO chat_message_join(chat_id,message_id) VALUES(?,?)", (1, 1)
+        )
+        cur.execute(
+            "INSERT INTO chat_message_join(chat_id,message_id) VALUES(?,?)", (2, 2)
+        )
 
         conn.commit()
         conn.close()
@@ -601,7 +661,9 @@ def create_synthetic_exports(output_root: Path, dry_run: bool = False) -> Synthe
     # -------------------------------------------------------------------------
     imazing_root = output_root / "iph14-messages-20250103"
     exports_created += 1
-    write_text(imazing_root / "Device-Info.txt", "Exported by iMazing (DigiDNA)\nName: iph14\n")
+    write_text(
+        imazing_root / "Device-Info.txt", "Exported by iMazing (DigiDNA)\nName: iph14\n"
+    )
     # A valid iMazing media filename
     imazing_media_name = "2025-01-01 00 02 00 - Contact A - shared_dup.jpg"
     if not dry_run:
@@ -615,7 +677,6 @@ def create_synthetic_exports(output_root: Path, dry_run: bool = False) -> Synthe
         "Contact A,2025-01-01 00:03:00,missing.jpg,Incoming,Contact A,missing\n",
     )
 
-    return SyntheticDatasetStats(exports_created=exports_created, files_written=files_written)
-
-
-
+    return SyntheticDatasetStats(
+        exports_created=exports_created, files_written=files_written
+    )

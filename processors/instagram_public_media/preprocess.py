@@ -603,6 +603,14 @@ class InstagramPreprocessor(PreprocessorBase):
 
         html_files = list(self.MEDIA_TYPES.items())
 
+        def on_html_error(tid: Any, e: Exception) -> None:
+            self.log_message(
+                "HTML_PROCESSING_ERROR",
+                f"Failed to process {tid}.html",
+                str(e),
+            )
+            logger.error("Failed to process %s.html: %s", tid, e)
+
         # Process HTML files in parallel
         results = process_parallel_threaded(
             tasks=html_files,
@@ -611,14 +619,7 @@ class InstagramPreprocessor(PreprocessorBase):
             phase=PHASE_PREPROCESS,
             description="Parsing HTML files",
             task_id_fn=lambda t: t[0],  # html_basename
-            on_error=lambda tid, e: (
-                self.log_message(
-                    "HTML_PROCESSING_ERROR",
-                    f"Failed to process {tid}.html",
-                    str(e),
-                ),
-                logger.error("Failed to process %s.html: %s", tid, e),
-            ),
+            on_error=on_html_error,
         )
 
         # Flatten results - each result is (basename, posts_list)

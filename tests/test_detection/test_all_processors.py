@@ -353,7 +353,9 @@ class TestCrossProcessorDetection:
 
         copy_export_fixture("google_photos", "takeout_basic", exports["google_photos"])
         copy_export_fixture("google_chat", "groups_and_users", exports["google_chat"])
-        copy_export_fixture("google_voice", "takeout_calls_basic", exports["google_voice"])
+        copy_export_fixture(
+            "google_voice", "takeout_calls_basic", exports["google_voice"]
+        )
         copy_export_fixture(
             "snapchat_memories", "memories_basic", exports["snapchat_memories"]
         )
@@ -361,7 +363,9 @@ class TestCrossProcessorDetection:
             "snapchat_messages", "raw_conversation_id_map", exports["snapchat_messages"]
         )
         copy_export_fixture(
-            "instagram_messages", "current_format_doc_html", exports["instagram_messages"]
+            "instagram_messages",
+            "current_format_doc_html",
+            exports["instagram_messages"],
         )
         copy_export_fixture(
             "instagram_public",
@@ -469,4 +473,3 @@ class TestDetectionEdgeCases:
 
         copy_export_fixture("google_photos", "takeout_basic", deep_path)
         assert detect_google_photos(deep_path) is True
-

@@ -627,4 +627,3 @@ class TestCopyResult:
         assert result.content_hash == "abc123"
         assert result.is_duplicate is False
         assert result.primary_source == Path("/source/photo.jpg")
-

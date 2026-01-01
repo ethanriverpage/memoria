@@ -19,10 +19,10 @@ class TestDetectionModule:
     def test_resolve_username_first_match(self, tmp_path):
         """Should return the first successful detector result."""
 
-        def detector_fail(_path: Path) -> str:
+        def detector_fail(_path: Path) -> str | None:
             return None
 
-        def detector_success(_path: Path) -> str:
+        def detector_success(_path: Path) -> str | None:
             return "found_user"
 
         result = resolve_username(
@@ -39,7 +39,7 @@ class TestDetectionModule:
     def test_resolve_username_all_fail(self, tmp_path):
         """Should return None when all detectors fail."""
 
-        def detector_fail(_path: Path) -> str:
+        def detector_fail(_path: Path) -> str | None:
             return None
 
         result = resolve_username(
@@ -56,10 +56,10 @@ class TestDetectionModule:
     def test_resolve_username_exception_handling(self, tmp_path):
         """Should catch exceptions and continue to next detector."""
 
-        def detector_raises(_path: Path) -> str:
+        def detector_raises(_path: Path) -> str | None:
             raise ValueError("Test error")
 
-        def detector_success(_path: Path) -> str:
+        def detector_success(_path: Path) -> str | None:
             return "recovered"
 
         result = resolve_username(

@@ -93,9 +93,7 @@ class TestMergeSnapchatContext:
 
     def test_extends_messages_list(self) -> None:
         """Should extend existing messages with new messages."""
-        existing: Dict[str, Any] = {
-            "messages": [{"sender": "me", "text": "hello"}]
-        }
+        existing: Dict[str, Any] = {"messages": [{"sender": "me", "text": "hello"}]}
         new = {
             "messages": [
                 {"sender": "friend", "text": "hey"},
@@ -109,9 +107,7 @@ class TestMergeSnapchatContext:
 
     def test_handles_empty_new_messages(self) -> None:
         """Should handle empty messages in new context."""
-        existing: Dict[str, Any] = {
-            "messages": [{"sender": "me", "text": "hello"}]
-        }
+        existing: Dict[str, Any] = {"messages": [{"sender": "me", "text": "hello"}]}
         new: Dict[str, Any] = {"messages": []}
 
         merge_snapchat_context(existing, new)
@@ -120,9 +116,7 @@ class TestMergeSnapchatContext:
 
     def test_handles_missing_messages_in_new(self) -> None:
         """Should handle missing messages key in new context."""
-        existing: Dict[str, Any] = {
-            "messages": [{"sender": "me", "text": "hello"}]
-        }
+        existing: Dict[str, Any] = {"messages": [{"sender": "me", "text": "hello"}]}
         new: Dict[str, Any] = {}
 
         merge_snapchat_context(existing, new)
@@ -238,4 +232,3 @@ class TestMergerIntegration:
         assert len(existing["messages"]) == 3
         senders = [m["sender"] for m in existing["messages"]]
         assert senders == ["A", "B", "C"]
-

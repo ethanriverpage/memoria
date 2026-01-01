@@ -260,9 +260,7 @@ class TestIMessageRealisticFixtures:
         assert imessage_processor.detect(temp_export_dir) is True
 
         # Verify both HEIC and MOV exist (MOV not tracked in DB)
-        lp_dir = (
-            temp_export_dir / "Attachments" / "lp" / "00" / "LIVEPHOTO-UUID"
-        )
+        lp_dir = temp_export_dir / "Attachments" / "lp" / "00" / "LIVEPHOTO-UUID"
         assert (lp_dir / "lp_image.HEIC").exists()
         assert (lp_dir / "lp_image.MOV").exists()
 

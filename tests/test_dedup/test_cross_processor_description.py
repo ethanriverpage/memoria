@@ -12,9 +12,7 @@ parameter in processors/base.py, so merged descriptions are never applied.
 """
 
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -605,6 +603,7 @@ class TestMergedDescriptionWiring:
 
         # If signature is correct, verify it's passed through by checking source code
         import processors.base as base_module
+
         source = inspect.getsource(base_module.ProcessorBase.batch_process_exif)
 
         # The source should contain a call that passes dedup_manifest
@@ -691,7 +690,11 @@ class TestDescriptionContentPreservation:
         result = format_secondary_source(entry)
 
         # Content should be included (possibly truncated)
-        assert "sunset" in result.lower() or "everyone" in result.lower() or "beautiful" in result.lower()
+        assert (
+            "sunset" in result.lower()
+            or "everyone" in result.lower()
+            or "beautiful" in result.lower()
+        )
 
     def test_long_content_truncated_appropriately(self):
         """Test that very long content is truncated but meaningful."""
@@ -728,4 +731,3 @@ class TestDescriptionContentPreservation:
 
         # Content should be space-separated
         assert "Line 1" in result
-

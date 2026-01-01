@@ -6,7 +6,6 @@ Processes Discord data exports, handling attachment downloads
 and metadata embedding for media files.
 """
 
-import json
 import logging
 import re
 from pathlib import Path
@@ -626,7 +625,7 @@ def _process_working_directory(
         log.logger.info("Processing %d unmatched files...", len(unmatched_files))
         for media_file in unmatched_files:
             failure_tracker.add_orphaned_media(
-                source_path=media_file,
+                media_path=Path(media_file),
                 reason="No matching metadata found",
             )
 

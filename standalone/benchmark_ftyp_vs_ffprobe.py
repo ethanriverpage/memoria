@@ -134,7 +134,11 @@ def main() -> int:
     print()
     print(summarize(t1))
     print(summarize(t2))
-    ratio = (statistics.mean(t2.per_file_ms) / statistics.mean(t1.per_file_ms)) if statistics.mean(t1.per_file_ms) > 0 else float('inf')
+    ratio = (
+        (statistics.mean(t2.per_file_ms) / statistics.mean(t1.per_file_ms))
+        if statistics.mean(t1.per_file_ms) > 0
+        else float("inf")
+    )
     print(f"Speed ratio (avg ffprobe / avg ftyp): {ratio:.1f}x")
     print(f"ftyp-missing in sample: {placeholder_like}/{len(sample)}")
 

@@ -21,7 +21,9 @@ from common.dedup.hashing import _extract_frame_unchecked
         RuntimeError("boom"),
     ],
 )
-def test_extract_frame_unchecked_deletes_tempfile_on_exceptions(tmp_path: Path, run_side_effect):
+def test_extract_frame_unchecked_deletes_tempfile_on_exceptions(
+    tmp_path: Path, run_side_effect
+):
     created_paths: list[Path] = []
     real_named_temporary_file = std_tempfile.NamedTemporaryFile
 
@@ -43,5 +45,3 @@ def test_extract_frame_unchecked_deletes_tempfile_on_exceptions(tmp_path: Path, 
     assert result is None
     assert len(created_paths) == 1
     assert created_paths[0].exists() is False
-
-

@@ -103,11 +103,7 @@ class TestGoogleChatFixtureStructure:
         copy_export_fixture("google_chat", "file_naming_patterns", temp_export_dir)
 
         messages_path = (
-            temp_export_dir
-            / "Google Chat"
-            / "Groups"
-            / "DM 98765432"
-            / "messages.json"
+            temp_export_dir / "Google Chat" / "Groups" / "DM 98765432" / "messages.json"
         )
         data = json.loads(messages_path.read_text())
 

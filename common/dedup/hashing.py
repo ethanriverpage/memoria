@@ -49,6 +49,12 @@ if PERCEPTION_AVAILABLE:
 
 from common.files.utils import short_path
 from common.files.filter import BannedFilesFilter
+from common.files.types import (
+    IMAGE_EXTENSIONS,
+    LIVE_PHOTO_IMAGE_EXTENSIONS,
+    LIVE_PHOTO_VIDEO_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+)
 from common.media.probe import VideoMetadata, get_video_metadata
 
 logger = logging.getLogger(__name__)
@@ -56,20 +62,8 @@ logger = logging.getLogger(__name__)
 # Default dhash size (16x16 grid = 256-bit hash)
 DEFAULT_HASH_SIZE = 16
 
-# Import extension definitions from files/types.py (single source of truth)
-from common.files.types import (
-    IMAGE_EXTENSIONS,
-    VIDEO_EXTENSIONS,
-    LIVE_PHOTO_IMAGE_EXTENSIONS,
-    LIVE_PHOTO_VIDEO_EXTENSIONS,
-)
-
 # Only images/videos are eligible for perceptual hashing (audio is not).
 PERCEPTUAL_HASH_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
-
-
-# Backwards-compatible alias for internal usage
-VideoInfo = VideoMetadata
 
 
 def is_supported_for_perceptual_hashing(
@@ -250,7 +244,7 @@ def compute_image_hash_with_dims(
         return (None, None)
 
 
-def _get_video_info(video_path: Path) -> Optional[VideoInfo]:
+def _get_video_info(video_path: Path) -> Optional[VideoMetadata]:
     """Get video stream presence and dimensions in ONE ffprobe call.
 
     This is a thin wrapper around get_video_metadata() from common.media.probe.
@@ -261,7 +255,7 @@ def _get_video_info(video_path: Path) -> Optional[VideoInfo]:
         video_path: Path to the video file.
 
     Returns:
-        VideoInfo with has_video and dimensions, or None if ffprobe failed.
+        VideoMetadata with has_video and dimensions, or None if ffprobe failed.
     """
     return get_video_metadata(video_path)
 

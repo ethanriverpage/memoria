@@ -17,7 +17,7 @@ import logging
 import lzma
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
@@ -451,6 +451,14 @@ class InstaloaderPreprocessor(PreprocessorBase):
 
         catalog_items = list(catalog.items())
 
+        def on_post_error(tid: Any, e: Exception) -> None:
+            self.log_message(
+                "POST_PROCESSING_ERROR",
+                f"Failed to process post {tid}",
+                str(e),
+            )
+            logger.error("Failed to process post %s: %s", tid, e)
+
         # Process posts in parallel
         all_posts = process_parallel_threaded(
             tasks=catalog_items,
@@ -459,14 +467,7 @@ class InstaloaderPreprocessor(PreprocessorBase):
             phase=PHASE_PREPROCESS,
             description="Parsing posts",
             task_id_fn=lambda t: t[0],  # post_name
-            on_error=lambda tid, e: (
-                self.log_message(
-                    "POST_PROCESSING_ERROR",
-                    f"Failed to process post {tid}",
-                    str(e),
-                ),
-                logger.error("Failed to process post %s: %s", tid, e),
-            ),
+            on_error=on_post_error,
         )
 
         with self.stats_lock:

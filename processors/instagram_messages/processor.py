@@ -22,7 +22,6 @@ from common.dedup.description import (
     PLATFORM_INSTAGRAM,
     SERVICE_MESSAGES,
 )
-from common.detection import detect_from_dirname
 from common.failures import FailureTracker
 from common.files.naming import FilenameGenerator
 from common.files.utils import short_path
@@ -195,12 +194,14 @@ class InstagramMessagesProcessor(ProcessorBase):
                 result["timestamp"] = entry["timestamp"]
             return result
 
-        catalog_iter = InstagramMessagesProcessor.catalog_from_preprocessed_if_available(
-            processor_name="Instagram Messages",
-            input_path=input_path,
-            workers=workers,
-            metadata_extractor=extract_preprocessed_metadata,
-            container_key="conversations",
+        catalog_iter = (
+            InstagramMessagesProcessor.catalog_from_preprocessed_if_available(
+                processor_name="Instagram Messages",
+                input_path=input_path,
+                workers=workers,
+                metadata_extractor=extract_preprocessed_metadata,
+                container_key="conversations",
+            )
         )
         if catalog_iter is not None:
             yield from catalog_iter
@@ -444,7 +445,6 @@ def _process_working_directory(
                         missing_examples.append(media_file)
                     continue
 
-                source_file_path = os.path.dirname(full_source_path)
                 source_file_name = os.path.basename(full_source_path)
 
                 if InstagramMessagesProcessor.should_skip_for_dedup(

@@ -58,7 +58,9 @@ def read_window(path: Path, *, start: int, length: int) -> bytes:
         return f.read(length)
 
 
-def analyze_file(path: Path, *, header_bytes: int, tail_bytes: int) -> tuple[int, bool, bool]:
+def analyze_file(
+    path: Path, *, header_bytes: int, tail_bytes: int
+) -> tuple[int, bool, bool]:
     size = path.stat().st_size
 
     header = read_window(path, start=0, length=min(header_bytes, size))
@@ -91,7 +93,9 @@ def main() -> int:
     ap.add_argument(
         "--log",
         type=Path,
-        default=Path("/home/ethan/media-processing/logs/media_processor_20251227_184304.log"),
+        default=Path(
+            "/home/ethan/media-processing/logs/media_processor_20251227_184304.log"
+        ),
     )
     ap.add_argument(
         "--export-root",
@@ -101,7 +105,12 @@ def main() -> int:
     ap.add_argument("--header-bytes", type=int, default=64 * 1024)
     ap.add_argument("--tail-bytes", type=int, default=256 * 1024)
     ap.add_argument("--ffprobe-sample", type=int, default=5)
-    ap.add_argument("--limit", type=int, default=0, help="Limit number of basenames checked (0 = all)")
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Limit number of basenames checked (0 = all)",
+    )
     args = ap.parse_args()
 
     names = extract_basenames(args.log)
@@ -118,11 +127,29 @@ def main() -> int:
     for name in names:
         p = index.get(name.lower())
         if not p:
-            results.append(CheckResult(name=name, path=None, size=None, header_has_ftyp=None, tail_has_moov=None))
+            results.append(
+                CheckResult(
+                    name=name,
+                    path=None,
+                    size=None,
+                    header_has_ftyp=None,
+                    tail_has_moov=None,
+                )
+            )
             continue
 
-        size, has_ftyp, has_moov = analyze_file(p, header_bytes=args.header_bytes, tail_bytes=args.tail_bytes)
-        results.append(CheckResult(name=name, path=p, size=size, header_has_ftyp=has_ftyp, tail_has_moov=has_moov))
+        size, has_ftyp, has_moov = analyze_file(
+            p, header_bytes=args.header_bytes, tail_bytes=args.tail_bytes
+        )
+        results.append(
+            CheckResult(
+                name=name,
+                path=p,
+                size=size,
+                header_has_ftyp=has_ftyp,
+                tail_has_moov=has_moov,
+            )
+        )
 
     found = [r for r in results if r.path is not None]
     missing = [r for r in results if r.path is None]
@@ -152,7 +179,9 @@ def main() -> int:
             if ffprobe_ok(p):
                 ok += 1
         print("\n=== ffprobe sanity sample ===")
-        print(f"Sample size: {len(sample_paths)}  ffprobe OK: {ok}  ffprobe FAIL: {len(sample_paths) - ok}")
+        print(
+            f"Sample size: {len(sample_paths)}  ffprobe OK: {ok}  ffprobe FAIL: {len(sample_paths) - ok}"
+        )
 
     return 0
 

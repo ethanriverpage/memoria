@@ -408,7 +408,9 @@ class TestIMessageLivePhotoPairing:
         lp_mov_name = results["lp_image.MOV"]
         heic_base = heic_name.rsplit(".", 1)[0]
         lp_mov_base = lp_mov_name.rsplit(".", 1)[0]
-        assert heic_base == lp_mov_base, f"Live photo pair mismatch: {heic_base} != {lp_mov_base}"
+        assert heic_base == lp_mov_base, (
+            f"Live photo pair mismatch: {heic_base} != {lp_mov_base}"
+        )
 
         # Verify: regular video has different base (got a sequence number)
         regular_mov_name = results["regular_video.MOV"]
@@ -419,7 +421,9 @@ class TestIMessageLivePhotoPairing:
 
         # All filenames should be unique
         all_names = list(results.values())
-        assert len(all_names) == len(set(all_names)), f"Duplicate filenames: {all_names}"
+        assert len(all_names) == len(set(all_names)), (
+            f"Duplicate filenames: {all_names}"
+        )
 
     def test_live_photo_video_without_image_falls_back(self, tmp_path):
         """Live photo video without paired image should fall back to independent name."""
@@ -691,9 +695,7 @@ class TestIMessageOrphanDetection:
         )
 
         # Simulate "processed" attachments - only the processed file was in the database
-        processed_attachments = [
-            {"source_path": str(processed_file.resolve())}
-        ]
+        processed_attachments = [{"source_path": str(processed_file.resolve())}]
 
         # Run orphan detection
         orphaned_media = preprocessor._detect_orphaned_media(processed_attachments)
@@ -730,9 +732,7 @@ class TestIMessageOrphanDetection:
 
         # Simulate that this file was processed from the database
         # Note: _query_attachments uses "resolved_path" key
-        processed_attachments = [
-            {"resolved_path": str(media_file.resolve())}
-        ]
+        processed_attachments = [{"resolved_path": str(media_file.resolve())}]
 
         orphaned_media = preprocessor._detect_orphaned_media(processed_attachments)
 
@@ -881,6 +881,7 @@ class TestIMessageLivePhotoPairingPreprocessing:
 
         # Rename directory to match expected pattern for username detection
         import shutil
+
         renamed_dir = temp_export_dir.parent / "imessage-testdev-20251230"
         if renamed_dir.exists():
             shutil.rmtree(renamed_dir)
@@ -1001,7 +1002,6 @@ class TestIMessageCrossExportLivePhotoPairing:
 
     def test_cross_export_fallback_uses_heic_hash(self, tmp_path):
         """MOV should pair with HEIC via hash when local HEIC is skipped."""
-        from common.files.naming import FilenameGenerator
         from common.dedup.service import get_live_photo_base_for_hash
 
         # Simulate a dedup manifest where HEIC is primary in a different export
@@ -1049,14 +1049,7 @@ class TestIMessageCrossExportLivePhotoPairing:
 
     def test_live_photo_video_cross_export_fallback_logic(self, tmp_path):
         """Full simulation of cross-export fallback for Live Photo MOV."""
-        from common.files.naming import FilenameGenerator
         from common.dedup.service import get_live_photo_base_for_hash
-
-        filename_gen = FilenameGenerator(
-            "imessage",
-            "testuser",
-            timestamp_format="%Y-%m-%d %H:%M:%S UTC",
-        )
 
         # Simulate: MOV has no local pair key match (HEIC was in different export)
         heic_hash = "abc123def456"

@@ -85,14 +85,14 @@ class TestGooglePhotosPreprocessing:
 
         media_files = output_metadata.get("media_files", [])
         for media_entry in media_files:
-            assert (
-                "content_hash" in media_entry
-            ), "Each media entry should have content_hash"
+            assert "content_hash" in media_entry, (
+                "Each media entry should have content_hash"
+            )
             assert media_entry["content_hash"], "content_hash should not be empty"
             # xxHash64 produces 16-character hex string
-            assert (
-                len(media_entry["content_hash"]) == 16
-            ), "content_hash should be a 16-char xxHash64 hex digest"
+            assert len(media_entry["content_hash"]) == 16, (
+                "content_hash should be a 16-char xxHash64 hex digest"
+            )
 
     def test_takeout_duplicate_detection_in_metadata(
         self, preprocessor_factory, temp_export_dir, temp_output_dir
@@ -113,10 +113,6 @@ class TestGooglePhotosPreprocessing:
 
         # Duplicates should be tracked - either via content_hash or is_duplicate flag
         media_files = output_metadata.get("media_files", [])
-        content_hashes = [m.get("content_hash") for m in media_files if m.get("content_hash")]
-        
-        # If there are duplicate files, some content_hashes should be the same
-        # or there should be duplicate tracking
         assert len(media_files) >= 1, "Should have processed media files"
 
     def test_takeout_missing_json_fallback(
@@ -148,7 +144,9 @@ class TestGooglePhotosPreprocessing:
         failure_report_path = temp_output_dir / "issues" / "failure-report.json"
         assert failure_report_path.exists(), "Failure report should exist"
         failure_report = json.loads(failure_report_path.read_text())
-        orphaned_media = failure_report.get("failed_matching", {}).get("orphaned_media", [])
+        orphaned_media = failure_report.get("failed_matching", {}).get(
+            "orphaned_media", []
+        )
         assert len(orphaned_media) == 1
 
         # Entries should always include source_path.

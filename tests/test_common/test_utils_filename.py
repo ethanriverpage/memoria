@@ -55,7 +55,9 @@ class TestFilenameGenerator:
         assert r3 == "snap-ethriverpage-msgs-20240115_3.jpg"
 
     def test_sequence_start_configuration(self):
-        gen = FilenameGenerator("snap", "ethriverpage", service="msgs", sequence_start=10)
+        gen = FilenameGenerator(
+            "snap", "ethriverpage", service="msgs", sequence_start=10
+        )
 
         r1 = gen.generate("2024-01-15 10:30:00", ".jpg")
         r2 = gen.generate("2024-01-15 10:30:00", ".jpg")
