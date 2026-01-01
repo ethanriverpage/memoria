@@ -13,7 +13,190 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class HashDatabaseProtocol(Protocol):
+    """Protocol defining the interface for hash database operations.
+
+    This protocol enables:
+    - Easy mocking for unit tests
+    - Alternative implementations (e.g., PostgreSQL, in-memory)
+    - Clear contract for database operations
+    """
+
+    @property
+    def db_path(self) -> Path:
+        """Path to the database file."""
+        ...
+
+    def register(
+        self,
+        content_hash: str,
+        processor: str,
+        source_path: str,
+        perceptual_hash: Optional[str] = None,
+        file_size: Optional[int] = None,
+        dimensions: Optional[tuple] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        is_primary: bool = False,
+    ) -> bool:
+        """Register a file in the database."""
+        ...
+
+    def get_duplicates(self, content_hash: str) -> List[Dict[str, Any]]:
+        """Get all files with the same content hash."""
+        ...
+
+    def get_similar(
+        self,
+        perceptual_hash: str,
+        threshold: float = 0.92,
+    ) -> List[Dict[str, Any]]:
+        """Get files with similar perceptual hashes."""
+        ...
+
+    def get_by_processor(self, processor: str) -> List[Dict[str, Any]]:
+        """Get all files from a specific processor."""
+        ...
+
+    def get_all_content_hashes(self) -> List[str]:
+        """Get all unique content hashes in the database."""
+        ...
+
+    def set_primary(self, content_hash: str, source_path: str) -> bool:
+        """Set a file as the primary copy for its content hash."""
+        ...
+
+    def update_metadata(
+        self,
+        content_hash: str,
+        source_path: str,
+        metadata: Dict[str, Any],
+    ) -> bool:
+        """Update metadata for a specific file."""
+        ...
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get database statistics."""
+        ...
+
+    def clear(self) -> None:
+        """Clear all data from the database."""
+        ...
+
+    def clear_processor(self, processor: str) -> int:
+        """Clear all entries for a specific processor."""
+        ...
+
+    def write_catalog_entry(
+        self,
+        run_id: str,
+        export_name: str,
+        entry: Dict[str, Any],
+    ) -> bool:
+        """Write a single catalog entry to the database."""
+        ...
+
+    def write_catalog_entries_batch(
+        self,
+        run_id: str,
+        export_name: str,
+        entries: List[Dict[str, Any]],
+    ) -> int:
+        """Write multiple catalog entries in a single transaction."""
+        ...
+
+    def get_duplicate_content_hashes(self, run_id: str) -> List[str]:
+        """Get content hashes that appear more than once in a run."""
+        ...
+
+    def get_entries_by_hash(
+        self,
+        run_id: str,
+        content_hash: str,
+    ) -> List[Dict[str, Any]]:
+        """Get all catalog entries with a specific content hash."""
+        ...
+
+    def iter_all_entries(
+        self,
+        run_id: str,
+        batch_size: int = 1000,
+    ) -> Iterator[Dict[str, Any]]:
+        """Iterate over all catalog entries for a run."""
+        ...
+
+    def iter_entries_with_perceptual_hash(
+        self,
+        run_id: str,
+        exclude_hashes: Optional[set] = None,
+        batch_size: int = 1000,
+    ) -> Iterator[Dict[str, Any]]:
+        """Iterate over entries with perceptual hashes."""
+        ...
+
+    def get_run_statistics(self, run_id: str) -> Dict[str, Any]:
+        """Get statistics for a specific processing run."""
+        ...
+
+    def clear_run(self, run_id: str) -> int:
+        """Clear all catalog entries for a specific run."""
+        ...
+
+    def get_cached_hashes(
+        self,
+        source_path: str,
+        file_size: int,
+        mtime: float,
+    ) -> Optional[Dict[str, Any]]:
+        """Look up cached hashes for a file."""
+        ...
+
+    def cache_hashes(
+        self,
+        source_path: str,
+        file_size: int,
+        mtime: float,
+        content_hash: str,
+        perceptual_hash: Optional[str] = None,
+        dimensions: Optional[tuple] = None,
+    ) -> bool:
+        """Store computed hashes in the cache."""
+        ...
+
+    def cache_hashes_batch(
+        self,
+        entries: List[Dict[str, Any]],
+    ) -> int:
+        """Store multiple hash entries in the cache."""
+        ...
+
+    def get_hash_cache_statistics(self) -> Dict[str, Any]:
+        """Get statistics about the hash cache."""
+        ...
+
+    def clear_hash_cache(self) -> int:
+        """Clear all entries from the hash cache."""
+        ...
+
+    def prune_hash_cache(self, valid_paths: Optional[set] = None) -> int:
+        """Remove cache entries for files that no longer exist."""
+        ...
+
+    def close(self) -> None:
+        """Close the database."""
+        ...
+
+    def __enter__(self) -> "HashDatabaseProtocol":
+        """Enter context manager."""
+        ...
+
+    def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
+        """Exit context manager."""
+        ...
+
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +204,7 @@ logger = logging.getLogger(__name__)
 _thread_local = threading.local()
 
 
-def get_thread_db(db_path: Optional[Path]) -> Optional["HashDatabase"]:
+def get_thread_db(db_path: Optional[Path]) -> Optional[HashDatabaseProtocol]:
     """Get or create a thread-local database connection for cache reads.
 
     This is useful for parallel processing where each worker thread needs

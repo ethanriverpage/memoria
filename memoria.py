@@ -44,6 +44,7 @@ from common.config.dependencies import (  # noqa: E402
     print_immich_error,
 )
 from common.config.env import load_dotenv_file  # noqa: E402
+from common.config.runtime import parse_bool_env  # noqa: E402
 from common.dedup.config import is_dedup_enabled, get_dedup_config  # noqa: E402
 from common.dedup.database import HashDatabase  # noqa: E402
 from common.dedup.service import DeduplicationService, save_manifest  # noqa: E402
@@ -448,7 +449,7 @@ def run_phased_dedup_processing(
 
     catalog_results = []  # List of (export_name, file_count, status) for summary table
     total_files = 0
-    use_parallel_catalog = os.environ.get("PARALLEL_CATALOG", "true").lower() == "true"
+    use_parallel_catalog = parse_bool_env(os.environ.get("PARALLEL_CATALOG"), default=True)
 
     # Convert preprocessed_dirs to JSON-serializable format for workers
     # Key format: "export_dir|processor_name" -> "working_dir"

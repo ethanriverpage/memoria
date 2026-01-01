@@ -14,7 +14,7 @@ from common.dedup.config import (
     is_dedup_enabled,
     reset_config,
 )
-from common.dedup.database import HashDatabase
+from common.dedup.database import HashDatabase, HashDatabaseProtocol
 from common.dedup.hashing import (
     compute_content_hash,
     compute_image_hash,
@@ -92,6 +92,7 @@ __all__ = [
     "reset_config",
     # Database
     "HashDatabase",
+    "HashDatabaseProtocol",
     # Hashing
     "compute_content_hash",
     "compute_image_hash",

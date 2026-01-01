@@ -10,33 +10,6 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 
 ## 2.1 `common/` Directory Audit
 
-## Finding 74 — `HashDatabase` is a concrete class with no abstract interface
-
-- **Category**: DIP violation
-- **Location**: `common/dedup/database.py`
-- **Description & evidence**
-  - No Protocol or ABC defined for database operations.
-  - Makes testing harder (can't easily mock database operations).
-  - Future alternative implementations (e.g., PostgreSQL) harder to integrate.
-  - High-level modules depend on concrete implementation.
-- **Impact**
-  - **Low**: Works, but limits testability and extensibility.
-- **Confidence**: **High**
-
-## Finding 75 — Environment variable parsing is scattered across multiple modules
-
-- **Category**: DRY violation
-- **Location**: `common/config/runtime.py`, `common/processing/cache.py`, `common/dedup/service.py`, `common/dedup/config.py`
-- **Description & evidence**
-  - `common/config/runtime.py`: `parse_bool_env()`, `should_cleanup_preprocessing()`
-  - `common/processing/cache.py`: preprocessing cache cleanup behavior
-  - `common/dedup/service.py`: `PARALLEL_DEDUP` (line 408)
-  - `common/dedup/config.py`: Multiple dedup-related env vars (lines 97-155)
-  - Hard to find all configuration points; violates DRY.
-- **Impact**
-  - **Medium**: Configuration drift; hard to audit all env vars.
-- **Confidence**: **High**
-
 ## Finding 76 — `exiftool.py` mixes command building with process execution
 
 - **Category**: SRP violation
@@ -64,19 +37,6 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 - **Impact**
   - **Low**: Works, but reduces testability and readability.
 - **Confidence**: **High**
-
-## Finding 79 — Circular import workarounds via lazy imports
-
-- **Category**: Architectural smell
-- **Location**: `common/processing/cache.py`, `common/media/exiftool.py`
-- **Description & evidence**
-  - `common/processing/cache.py` (lines 13, 48): `from common.dedup.config import get_dedup_config`
-  - `common/media/exiftool.py` (line 767): `from common.dedup.service import get_merged_metadata_for_hash`
-  - `common/media/exiftool.py` (line 898): `from common.dedup.service import get_secondary_sources_for_hash`
-  - Lazy imports add overhead on each call, hide dependencies from static analysis, make dependency graph unclear.
-- **Impact**
-  - **Low**: Works, but architectural smell indicating need for restructuring.
-- **Confidence**: **Medium**
 
 ## Finding 81 — Inconsistent error handling patterns across modules
 
@@ -269,32 +229,6 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - **Low-Medium**: Maintenance overhead; changes to detection heuristics must be duplicated.
 - **Confidence**: **Medium**
 
-## Finding 52 — Inconsistent dedup check patterns across processors
-
-- **Category**: Inconsistency
-- **Location**: All 11 processors
-- **Description & evidence**
-  - Pattern A (most processors):
-
-    ```python
-    content_hash = file_hashes.get(media_file)
-    if dedup_manifest:
-        if content_hash:
-            if not is_file_primary_by_hash(...):
-                skipped_dedup += 1
-                continue
-        else:
-            if Processor.should_skip_for_dedup(...):
-                skipped_dedup += 1
-                continue
-    ```
-
-  - Pattern B (Snapchat Memories): Uses `should_skip_for_dedup()` without cached `file_hashes`.
-  - Pattern B always re-hashes (no cached hashes), wasting cycles.
-- **Impact**
-  - **Low**: Works, but inconsistent and less efficient for Pattern B.
-- **Confidence**: **High**
-
 ## Finding 55 — All processors have identical `process()` structure
 
 - **Category**: DRY violation
@@ -351,24 +285,6 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 
 - **Impact**
   - **High**: ~300 lines of duplicated filtering logic.
-- **Confidence**: **High**
-
-## Finding 63 — No automated enforcement of processor patterns
-
-- **Category**: Missing test infrastructure
-- **Location**: `tests/` (missing `test_processor_compliance.py`)
-- **Description & evidence**
-  - No automated enforcement of processor patterns.
-  - Should have compliance test suite checking:
-    - Inherits from base
-    - Has required static methods
-    - `get_name()` returns non-empty string
-    - `get_priority()` in valid range
-    - `get_output_info()` valid
-    - `supports_dedup()` implies `build_catalog` override
-    - `supports_consolidation()` implies `process_consolidated` override
-- **Impact**
-  - **Medium**: Pattern violations not caught until runtime.
 - **Confidence**: **High**
 
 ## Finding 67 — Nine processors have identical `preprocess()` structure
@@ -510,18 +426,6 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
   - New processors/services or naming changes require edits in multiple places.
 - **Impact**
   - **Medium**: Drift-prone behavior and silent functional gaps (missing uploads) when processors evolve.
-- **Confidence**: **High**
-
-## Finding S2 — Upload-only "legacy detection" mode is a superseded internal compatibility branch
-
-- **Category**: Legacy internal compatibility path (internal behavior)
-- **Location**: `memoria.py` (lines 1283-1420)
-- **Description & evidence**
-  - The `upload_only_mode` supports a "legacy mode" where `original_export` is provided to re-detect processors via `_build_upload_only_targets` (lines 1297-1331).
-  - Explicitly deprecated in comments and log strings ("legacy detection", "Upload-only legacy mode").
-  - Requires keeping processor detection logic working for uploads even if processing logic changes.
-- **Impact**
-  - **Medium**: High maintenance; two target-derivation semantics to maintain/test.
 - **Confidence**: **High**
 
 ## Finding S3 — Bespoke file scanning in `memoria.py`
@@ -713,17 +617,6 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 ---
 
 ## 2.5 Code Quality Findings
-
-## Finding Q2 — TODO in test code referencing untracked bug
-
-- **Category**: Incomplete implementation
-- **Location**: `tests/test_dedup/test_cross_processor_description.py:624`
-- **Description & evidence**
-  - Comment: `# TODO: When bug is fixed, add actual file metadata verification:`
-  - Bug status/tracking unclear.
-- **Impact**
-  - **Low**: Test incompleteness; may indicate unfixed bug.
-- **Confidence**: **High**
 
 ## Finding Q3 — Bare `pass` statements in exception handlers
 

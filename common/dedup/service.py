@@ -18,13 +18,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
+from common.config.runtime import parse_bool_env
 from common.dedup.config import DedupConfig, get_dedup_config
 from common.dedup.description import (
     SourceEntry,
     build_image_description,
     get_platform_service,
 )
-from common.dedup.database import HashDatabase
+from common.dedup.database import HashDatabase, HashDatabaseProtocol
 from common.dedup.hashing import compute_content_hash, hash_similarity
 from common.output.progress import PHASE_DEDUP, progress_bar
 
@@ -74,23 +75,23 @@ class DeduplicationService:
     6. Merges metadata from all sources
 
     Attributes:
-        db: HashDatabase for persistence.
+        db: HashDatabaseProtocol for persistence.
         config: DedupConfig with thresholds and settings.
     """
 
     def __init__(
         self,
-        db: Optional[HashDatabase] = None,
+        db: Optional[HashDatabaseProtocol] = None,
         config: Optional[DedupConfig] = None,
     ):
         """Initialize the deduplication service.
 
         Args:
-            db: Optional HashDatabase instance. Creates new one if not provided.
+            db: Optional HashDatabaseProtocol instance. Creates new one if not provided.
             config: Optional DedupConfig. Uses environment config if not provided.
         """
         self.config = config or get_dedup_config()
-        self.db = db or HashDatabase(self.config.database_path)
+        self.db: HashDatabaseProtocol = db or HashDatabase(self.config.database_path)
         self._reset_validation_stats()
 
     def _reset_validation_stats(self) -> None:
@@ -406,7 +407,7 @@ class DeduplicationService:
         if not hashable:
             return {}
 
-        use_parallel = os.environ.get("PARALLEL_DEDUP", "true").lower() == "true"
+        use_parallel = parse_bool_env(os.environ.get("PARALLEL_DEDUP"), default=True)
         num_pairs = len(hashable) * (len(hashable) - 1) // 2
 
         # Use parallel comparison for large datasets

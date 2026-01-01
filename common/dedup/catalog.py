@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
+from common.config.runtime import parse_bool_env
 from common.dedup.config import get_dedup_config
 from common.dedup.database import get_thread_db
 from common.dedup.hashing import (
@@ -519,11 +520,7 @@ def catalog_media_files(
             )
 
     # Check if hash caching is disabled
-    disable_cache = os.environ.get(DISABLE_HASH_CACHE_ENV, "").lower() in (
-        "1",
-        "true",
-        "yes",
-    )
+    disable_cache = parse_bool_env(os.environ.get(DISABLE_HASH_CACHE_ENV))
     if disable_cache:
         db_path = None
         logger.debug("Hash caching disabled via environment variable")

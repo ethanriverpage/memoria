@@ -30,7 +30,7 @@ from typing import Any, Callable, Dict, Generator, List, Mapping, Optional, Tupl
 
 import json
 
-from common.config.runtime import default_worker_count
+from common.config.runtime import default_worker_count, parse_bool_env
 from common.dedup.config import get_dedup_config
 from common.dedup.database import get_thread_db
 from common.dedup.hashing import compute_content_hash
@@ -777,11 +777,7 @@ class PreprocessorBase(ABC):
         db_path = config.database_path
 
         # Check if hash caching is disabled
-        disable_cache = os.environ.get("DISABLE_HASH_CACHE", "").lower() in (
-            "1",
-            "true",
-            "yes",
-        )
+        disable_cache = parse_bool_env(os.environ.get("DISABLE_HASH_CACHE"))
         if disable_cache:
             db_path = None
 
@@ -902,11 +898,7 @@ class PreprocessorBase(ABC):
         db_path = config.database_path
 
         # Check if hash caching is disabled
-        disable_cache = os.environ.get("DISABLE_HASH_CACHE", "").lower() in (
-            "1",
-            "true",
-            "yes",
-        )
+        disable_cache = parse_bool_env(os.environ.get("DISABLE_HASH_CACHE"))
         if disable_cache:
             db_path = None
 

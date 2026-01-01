@@ -6,12 +6,11 @@ import os
 import shutil
 from pathlib import Path
 
+from common.dedup.config import get_dedup_config
+
 
 def get_preprocessing_cache_path(input_dir: Path, processor_name: str) -> Path:
     """Get deterministic cache path for preprocessing a specific export."""
-    # Import here to avoid circular imports
-    from common.dedup.config import get_dedup_config
-
     config = get_dedup_config()
     cache_base = config.preprocessing_cache_dir.resolve()
 
@@ -45,7 +44,6 @@ def is_preprocessing_cache_valid(cache_path: Path) -> bool:
 
 def cleanup_preprocessing_cache() -> None:
     """Clean up preprocessing cache (respects CLEANUP_PREPROCESSING_CACHE env var)."""
-    from common.dedup.config import get_dedup_config
     from common.config.runtime import parse_bool_env
 
     cleanup_enabled = parse_bool_env(
