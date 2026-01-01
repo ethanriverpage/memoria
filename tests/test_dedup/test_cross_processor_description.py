@@ -12,6 +12,9 @@ parameter in processors/base.py, so merged descriptions are never applied.
 """
 
 from datetime import datetime
+import shutil
+import subprocess
+from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
@@ -581,7 +584,7 @@ class TestMergedDescriptionWiring:
             "Current parameters: " + ", ".join(params)
         )
 
-    def test_batch_process_exif_passes_manifest_through(self):
+    def test_batch_process_exif_passes_manifest_through(self, tmp_path):
         """Test that batch_process_exif actually passes the manifest to the writer.
 
         This test uses source inspection to verify that when batch_process_exif
@@ -590,6 +593,7 @@ class TestMergedDescriptionWiring:
         """
         from processors.base import ProcessorBase
         import inspect
+        from common.media.exiftool import DescriptionWriteSpec, MetadataWriteRequest, DEFAULT_PREAMBLE
 
         # First, verify the method signature includes dedup_manifest
         sig = inspect.signature(ProcessorBase.batch_process_exif)
@@ -620,12 +624,72 @@ class TestMergedDescriptionWiring:
             "batch_write_metadata_requests is called without passing dedup_manifest"
         )
 
-        # TODO: When bug is fixed, add actual file metadata verification:
-        # result = subprocess.run(
-        #     ["exiftool", "-ImageDescription", str(test_file)],
-        #     capture_output=True, text=True
-        # )
-        # assert "+iMessage" in result.stdout
+        # Verify actual metadata writing to file (integration-ish, skip if exiftool missing)
+        if shutil.which("exiftool") is None:
+            pytest.skip("exiftool not installed")
+
+        repo_root = Path(__file__).resolve().parents[2]
+        fixture_src = (
+            repo_root
+            / "tests"
+            / "fixtures"
+            / "exports"
+            / "imessage"
+            / "iphone_basic"
+            / "SMS"
+            / "Attachments"
+            / "ab"
+            / "cd"
+            / "AAAABBBB-1111-2222-3333-444455556666"
+            / "photo.jpeg"
+        )
+        assert fixture_src.exists(), f"Missing test fixture file: {fixture_src}"
+
+        test_file = tmp_path / "photo.jpeg"
+
+        shutil.copyfile(fixture_src, test_file)
+
+        content_hash = "abc123"
+        manifest = {
+            "duplicates": {
+                content_hash: {
+                    "secondary": [
+                        {"processor": "iMessage", "context": {"username": "iph13p"}}
+                    ]
+                }
+            }
+        }
+
+        def _builder(_file_info):
+            return [
+                MetadataWriteRequest(
+                    file_path=str(test_file),
+                    arg_preamble=DEFAULT_PREAMBLE,
+                    description=DescriptionWriteSpec(default_description="Source: Google/user/photos"),
+                    processor_name="Google Photos",
+                    content_hash=content_hash,
+                )
+            ]
+
+        exif_rebuilt_count, write_outcome, missing_files = ProcessorBase.batch_process_exif(
+            [str(test_file)],
+            [()],
+            _builder,
+            dedup_manifest=manifest,
+        )
+        assert exif_rebuilt_count == 0
+        assert not missing_files
+        assert str(test_file) in write_outcome.successes
+
+        result = subprocess.run(
+            ["exiftool", "-ImageDescription", "-s3", str(test_file)],
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "+iMessage" in (result.stdout or ""), result.stdout
 
 
 class TestMultiProcessorDescriptionCoverage:

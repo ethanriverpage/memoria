@@ -129,7 +129,7 @@ Process files but don't upload to Immich (even if configured).
 Skip processing and only upload previously processed files.
 
 ```bash
-./memoria.py /path/to/original/export --upload-only /path/to/processed/output
+./memoria.py --upload-only /path/to/processed/output
 ```
 
 See [Immich Upload](Immich-Upload#upload-only-mode) for details.

@@ -1279,58 +1279,13 @@ def _scan_platform_username_service_structure(
     return targets
 
 
-def _build_upload_only_targets(
-    upload_path: Path,
-    original_export: Path | None,
-    registry: "ProcessorRegistry | None",
-) -> list[tuple[str, str]]:
+def _build_upload_only_targets(upload_path: Path) -> list[tuple[str, str]]:
     """Derive upload-only targets (path + album name).
 
-    Modes:
-    - New mode: original_export is None -> scan Platform/Username/Service structure.
-    - Legacy mode: original_export is provided -> detect matching processors from
-      original export and map them to expected output paths under upload_path.
+    Upload-only mode scans the processed output directory for a
+    Platform/Username/Service directory structure and builds album names directly.
     """
-    if original_export is None:
-        return _scan_platform_username_service_structure(upload_path)
-
-    if registry is None:
-        raise ValueError("registry is required when original_export is provided")
-
-    matching_processors = registry.detect_all(original_export)
-    if not matching_processors:
-        return []
-
-    targets: list[tuple[str, str]] = []
-    for processor in matching_processors:
-        output_info = processor.get_output_info()
-        processor_output_dir = build_processor_output_path(
-            output_info,
-            str(original_export),
-            str(upload_path),
-        )
-
-        # Mirror main processing: service directories are nested under Platform/User
-        if output_info.service:
-            effective_output = str(Path(processor_output_dir) / output_info.service)
-        else:
-            effective_output = processor_output_dir
-
-        derived_targets = build_upload_targets(
-            processor, str(original_export), effective_output
-        )
-        for up_path, album_name in derived_targets:
-            up = Path(up_path)
-            if up.exists() and up.is_dir():
-                targets.append((up_path, album_name))
-            else:
-                logger.warning(
-                    "Upload-only legacy mode: missing output directory for %s: %s",
-                    processor.get_name(),
-                    up_path,
-                )
-
-    return targets
+    return _scan_platform_username_service_structure(upload_path)
 
 
 def upload_only_mode(
@@ -1339,29 +1294,20 @@ def upload_only_mode(
     immich_key: str,
     immich_concurrency: int,
     immich_skip_hash: bool,
-    *,
-    original_export: Path | None = None,
-    registry: "ProcessorRegistry | None" = None,
 ) -> int:
     """Handle upload-only mode: upload existing processed files to Immich.
-
-    - New mode (recommended): scans Platform/Username/Service directory structure.
-    - Legacy mode: when original_export is provided, detects matching processors
-      from the original export and derives upload targets under upload_path.
     """
     from datetime import datetime
 
     logger.info("Upload-only mode")
     logger.info("Processed output: %s", upload_path)
-    if original_export is not None:
-        logger.info("Original export (legacy detection): %s", original_export)
 
     # Create logs directory and upload log file
     logs_dir = get_logs_dir()
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_prefix = "upload-legacy" if original_export is not None else "upload"
+    log_prefix = "upload"
     log_filename = f"{log_prefix}_{upload_path.name}_{timestamp}.memoria.log"
     log_file = logs_dir / log_filename
 
@@ -1380,48 +1326,14 @@ def upload_only_mode(
         ignore_patterns = ["issues/**", "**/*matching/**"]
 
     # Derive upload targets
-    if original_export is None:
-        logger.info("Scanning directory structure for upload targets...")
-    else:
-        logger.info("Detecting processors from original export and mapping outputs...")
-
-    all_targets = _build_upload_only_targets(upload_path, original_export, registry)
+    logger.info("Scanning directory structure for upload targets...")
+    all_targets = _build_upload_only_targets(upload_path)
 
     if not all_targets:
-        if original_export is None:
-            logger.error(
-                "No Platform/Username/Service structure found in: %s", upload_path
-            )
-            logger.error(
-                "Expected structure: Platform/username/service (e.g., Google/johndoe/photos)"
-            )
-        else:
-            assert registry is not None  # required when original_export is provided
-            matching_processors = registry.detect_all(original_export)
-            if not matching_processors:
-                logger.error(
-                    "No processors matched original export directory: %s",
-                    original_export,
-                )
-                show_supported_formats()
-            else:
-                logger.error(
-                    "No upload targets found under processed output for detected processors."
-                )
-                logger.error("Processed output: %s", upload_path)
-                for p in matching_processors:
-                    output_info = p.get_output_info()
-                    expected_base = Path(
-                        build_processor_output_path(
-                            output_info, str(original_export), str(upload_path)
-                        )
-                    )
-                    expected = (
-                        expected_base / output_info.service
-                        if output_info.service
-                        else expected_base
-                    )
-                    logger.error("Expected: %s (%s)", expected, p.get_name())
+        logger.error("No Platform/Username/Service structure found in: %s", upload_path)
+        logger.error(
+            "Expected structure: Platform/username/service (e.g., Google/johndoe/photos)"
+        )
         return 1
 
     logger.info("Found %d upload target(s):", len(all_targets))
@@ -1434,8 +1346,6 @@ def upload_only_mode(
         log.write(f"{'=' * 70}\n")
         log.write(f"Timestamp: {timestamp}\n")
         log.write(f"Processed output: {upload_path}\n")
-        if original_export is not None:
-            log.write(f"Original export (legacy): {original_export}\n")
         log.write(f"Ignore patterns: {', '.join(ignore_patterns)}\n")
         log.write(f"{'=' * 70}\n\n")
 
@@ -1542,9 +1452,6 @@ Examples:
   
   # Upload previously processed export (scans Platform/Username/Service structure)
   %(prog)s --upload-only /path/to/processed/output
-
-  # Upload previously processed export (legacy: detect processors from original export)
-  %(prog)s /path/to/original/export --upload-only /path/to/processed/output
   
   # Process multiple exports sequentially
   %(prog)s --originals /path/to/originals_folder -o /path/to/output
@@ -1613,8 +1520,7 @@ Examples:
         "--upload-only",
         metavar="PATH",
         help="Upload-only mode: upload processed output to Immich (skips processing). "
-        "If input_dir is provided, uses original export for processor detection (legacy). "
-        "Otherwise scans Platform/Username/Service directory structure to determine album names.",
+        "Scans Platform/Username/Service directory structure to determine album names.",
     )
     parser.add_argument(
         "--immich-url",
@@ -1649,6 +1555,12 @@ Examples:
     if args.upload_only:
         if args.skip_upload:
             parser.error("--upload-only and --skip-upload are mutually exclusive")
+            return 1
+        if args.input_dir:
+            parser.error(
+                "--upload-only does not accept input_dir. "
+                "Pass only --upload-only /path/to/processed/output"
+            )
             return 1
         if args.originals:
             parser.error(
@@ -1869,14 +1781,6 @@ Examples:
             return 1
 
         upload_path = Path(args.upload_only).resolve()
-        original_export = Path(args.input_dir).resolve() if args.input_dir else None
-        if original_export is not None:
-            if not original_export.exists():
-                logger.error("Input directory does not exist: %s", original_export)
-                return 1
-            if not original_export.is_dir():
-                logger.error("Input path is not a directory: %s", original_export)
-                return 1
 
         # Type guard: immich_enabled is True only if these are set
         assert immich_url is not None and immich_key is not None
@@ -1887,8 +1791,6 @@ Examples:
             immich_key,
             immich_concurrency,
             immich_skip_hash,
-            original_export=original_export,
-            registry=registry,
         )
 
     # Process all directories

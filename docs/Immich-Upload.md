@@ -91,22 +91,13 @@ Upload previously processed exports to Immich without re-processing.
 
 ### Usage
 
-**Recommended (scans Platform/Username/Service structure):**
-
 ```bash
 ./memoria.py --upload-only <processed_output_dir>
-```
-
-**Legacy (uses original export for processor detection):**
-
-```bash
-./memoria.py <original_export_dir> --upload-only <processed_output_dir>
 ```
 
 #### Arguments
 
 - `--upload-only <processed_output_dir>`: Path to processed output directory (required)
-- `<original_export_dir>`: Optional original export for legacy processor detection
 
 #### Requirements
 
@@ -116,18 +107,9 @@ Upload previously processed exports to Immich without re-processing.
 
 ### How It Works
 
-**New mode (recommended for cross-processor dedup outputs):**
-
 1. Scans the processed output directory for Platform/Username/Service structure
 2. Builds album names directly from the directory structure
 3. Uploads each discovered target with the correct album name
-
-**Legacy mode (when original export is provided):**
-
-1. Detects which processor(s) match the original export structure
-2. Maps processors to their expected output subdirectories
-3. Extracts username from original export directory name
-4. Uploads each output directory with correct album naming
 
 ### Examples
 
@@ -135,17 +117,12 @@ Upload previously processed exports to Immich without re-processing.
 # Process with cross-processor dedup
 ./memoria.py instagram-johndoe-20251027 -o /mnt/media/processed
 
-# Later, upload using directory structure scanning (recommended)
+# Later, upload using directory structure scanning
 ./memoria.py --upload-only /mnt/media/processed
 
 # The above scans the structure and finds:
 #   /mnt/media/processed/Instagram/johndoe/messages -> Instagram/johndoe/messages
 #   /mnt/media/processed/Instagram/johndoe/posts    -> Instagram/johndoe/posts
-```
-
-```bash
-# Legacy mode with original export for processor detection
-./memoria.py instagram-johndoe-20251027 --upload-only /mnt/media/processed/output1
 ```
 
 ### Directory Structure
@@ -172,11 +149,6 @@ processed_output/
 
 - Verify the processed output has the expected structure (Platform/username/service)
 - Check that platform names are recognized: Google, Instagram, Snapchat, Discord, iMessage
-
-**"No processors matched original export directory"** (legacy mode)
-
-- Ensure directory is the actual original export (not processed output)
-- Verify export structure matches a supported format
 
 **"Upload-only mode requires valid Immich configuration"**
 

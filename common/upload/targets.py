@@ -16,7 +16,7 @@ Examples:
 """
 
 from pathlib import Path
-from typing import List, Optional, Tuple, Type, Union, TYPE_CHECKING
+from typing import List, Optional, Tuple, Type, TYPE_CHECKING
 
 from common.output.paths import OutputInfo
 from common.detection import detect_from_dirname
@@ -60,7 +60,7 @@ def _ig_public_media_targets(output_base: Path, username: str) -> List[Tuple[str
 
 
 def build_upload_targets(
-    processor: Union["ProcessorBase", Type["ProcessorBase"], OutputInfo, str],
+    processor: "ProcessorBase | Type[ProcessorBase] | OutputInfo",
     input_dir: str,
     output_base: str,
 ) -> List[Tuple[str, str]]:
@@ -69,7 +69,7 @@ def build_upload_targets(
     Album names follow the description.py format: Platform/username[/service]
 
     Args:
-        processor: Processor instance, OutputInfo, or processor name (deprecated)
+        processor: Processor instance/class or OutputInfo.
         input_dir: Path to export directory (for username extraction)
         output_base: Base output directory (already includes Platform/User/Service)
 
@@ -84,16 +84,17 @@ def build_upload_targets(
     # Get OutputInfo from processor
     if isinstance(processor, OutputInfo):
         output_info = processor
-    elif isinstance(processor, str):
-        # Legacy string processor names are not supported.
-        # Callers must pass a ProcessorBase instance or OutputInfo.
-        raise TypeError(
-            f"processor must be ProcessorBase or OutputInfo, got str: {processor!r}"
-        )
     else:
-        # Processor instance - get both name and output info
-        processor_name = processor.get_name()
-        output_info = processor.get_output_info()
+        get_name = getattr(processor, "get_name", None)
+        get_output_info = getattr(processor, "get_output_info", None)
+        if not callable(get_name) or not callable(get_output_info):
+            raise TypeError(
+                "processor must be ProcessorBase (or subclass) or OutputInfo"
+            )
+
+        # Processor instance/class - get both name and output info
+        processor_name = get_name()
+        output_info = get_output_info()
 
     # Extract username using the prefix from OutputInfo
     username = (
