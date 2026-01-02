@@ -420,7 +420,7 @@ The system uses a hybrid matching strategy:
 | `CROSS_PROCESSOR_DEDUP` | `false` | Enable cross-processor deduplication |
 | `DEDUP_USE_PERCEPTUAL` | `true` | Enable perceptual hashing for fuzzy matching |
 | `DEDUP_PERCEPTUAL_THRESHOLD` | `0.92` | Similarity threshold (0.0-1.0) |
-| `DEDUP_DATABASE_PATH` | `~/.memoria/dedup.db` | SQLite database for hash persistence |
+| `DEDUP_DATABASE_PATH` | `./dedup.db` | SQLite database for hash persistence |
 | `DEDUP_DESC_MAX_PER_SOURCE` | `250` | Max chars per source in ImageDescription |
 | `DEDUP_DESC_MAX_TOTAL` | `1500` | Max total chars for ImageDescription |
 

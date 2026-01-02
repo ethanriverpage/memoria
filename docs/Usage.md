@@ -438,7 +438,7 @@ Enable deduplication across different platform exports. See [Deduplication](Dedu
 | `CROSS_PROCESSOR_DEDUP` | `false` | Enable cross-processor deduplication |
 | `DEDUP_USE_PERCEPTUAL` | `true` | Enable perceptual hashing for fuzzy matching |
 | `DEDUP_PERCEPTUAL_THRESHOLD` | `0.92` | Similarity threshold (0.0-1.0) |
-| `DEDUP_DATABASE_PATH` | `~/.memoria/dedup.db` | SQLite database path |
+| `DEDUP_DATABASE_PATH` | `./dedup.db` | SQLite database path |
 | `DEDUP_DESC_MAX_PER_SOURCE` | `250` | Max chars per source in ImageDescription |
 | `DEDUP_DESC_MAX_TOTAL` | `1500` | Max total chars for ImageDescription |
 | `DEDUP_MSG_TRUNCATE` | `200` | Message content truncation length |

@@ -494,7 +494,7 @@ def catalog_media_files(
         ...     input_path=input_path,
         ...     media_files=media_files,
         ...     workers=8,
-        ...     db_path=Path("~/.memoria/dedup.db"),
+        ...     db_path=Path("./dedup.db"),
         ... ):
         ...     db.write_catalog_entry(run_id, export_name, entry)
     """

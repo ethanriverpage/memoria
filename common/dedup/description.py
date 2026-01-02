@@ -728,9 +728,9 @@ def build_image_description(
             # Format as +context (secondary context line)
             context_line = _format_context_line(entry, is_secondary=True)
             if context_line:
-                if len(context_line) + 6 <= remaining:  # +6 for &#xa; separator
+                if len(context_line) + 5 <= remaining:  # +5 for &#xa; separator
                     lines.append(context_line)
-                    remaining -= len(context_line) + 6
+                    remaining -= len(context_line) + 5
 
     # 5. Add different-source entries with relative path notation
     for entry in different_source_entries:
@@ -750,7 +750,7 @@ def build_image_description(
 
         line = _format_secondary_with_relative_path(entry, relative_path, source_budget)
         lines.append(line)
-        remaining -= len(line) + 6  # +6 for &#xa; separator
+        remaining -= len(line) + 5  # +5 for &#xa; separator
 
     return "&#xa;".join(lines)
 

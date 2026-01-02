@@ -76,7 +76,7 @@ class DedupConfig:
 
     # Storage
     database_path: Path = field(
-        default_factory=lambda: Path.home() / ".memoria" / "dedup.db"
+        default_factory=lambda: Path.cwd() / "dedup.db"
     )
 
     # ImageDescription formatting
@@ -123,7 +123,7 @@ class DedupConfig:
         if db_path_str:
             database_path = Path(db_path_str).expanduser()
         else:
-            database_path = Path.home() / ".memoria" / "dedup.db"
+            database_path = Path.cwd() / "dedup.db"
 
         # Parse preprocessing cache directory (derives from PREPROCESSING_DIR if not explicitly set)
         cache_dir_str = os.environ.get("DEDUP_PREPROCESSING_CACHE_DIR")

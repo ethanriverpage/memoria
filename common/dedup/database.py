@@ -244,10 +244,10 @@ class HashDatabase:
         """Initialize the hash database.
 
         Args:
-            db_path: Path to SQLite database file. Defaults to ~/.memoria/dedup.db
+            db_path: Path to SQLite database file. Defaults to ./dedup.db
         """
         if db_path is None:
-            db_path = Path.home() / ".memoria" / "dedup.db"
+            db_path = Path.cwd() / "dedup.db"
 
         self.db_path = Path(db_path).expanduser()
         self._ensure_directory()

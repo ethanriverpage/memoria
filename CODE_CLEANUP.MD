@@ -10,21 +10,6 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 
 ## 2.1 `common/` Directory Audit
 
-## Finding 76 — `exiftool.py` mixes command building with process execution
-
-- **Category**: SRP violation
-- **Location**: `common/media/exiftool.py`
-- **Description & evidence**
-  - Module is ~1260 lines mixing multiple concerns:
-    1. Building exiftool commands (metadata request construction, tag formatting)
-    2. Process execution (subprocess calls, argfile management, error handling)
-    3. FFmpeg remux fallback for large videos
-  - Subprocess execution logic is duplicated between `batch_write_metadata_requests()`, `batch_validate_exif()`, and `batch_rebuild_exif()`.
-  - Extracting process management would also prepare for `-stay_open` mode implementation.
-- **Impact**
-  - **Medium**: Large module, harder to test, duplicated execution logic.
-- **Confidence**: **High**
-
 ## Finding 78 — Long functions in DeduplicationService exceed reasonable length
 
 - **Category**: Code smell
@@ -443,20 +428,6 @@ Overall the repo is **well-structured and test-backed** (clear processor boundar
 ---
 
 ## 2.4 Performance Findings
-
-## Finding 39 — Repeated exiftool invocations incur startup overhead at scale
-
-- **Category**: Performance
-- **Location**: `common/media/exiftool.py`
-- **Description & evidence**
-  - Each batch write creates a new exiftool subprocess via `subprocess.run()`.
-  - Uses argfile approach for batching, but still starts/stops process per chunk.
-  - EXIF operations remain primary bottleneck for iMessage + Google Photos.
-  - Should use `-stay_open True` mode with long-lived subprocess.
-  - Requires careful error handling for persistent process.
-- **Impact**
-  - **High**: Potential 15-30min savings at scale.
-- **Confidence**: **High**
 
 ## Finding 9 — Multi-pass video processing causes multiple re-encodes
 
