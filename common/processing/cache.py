@@ -2,7 +2,6 @@
 """Preprocessing cache management."""
 
 import hashlib
-import os
 import shutil
 from pathlib import Path
 
@@ -43,19 +42,21 @@ def is_preprocessing_cache_valid(cache_path: Path) -> bool:
 
 
 def cleanup_preprocessing_cache() -> None:
-    """Clean up preprocessing cache (respects CLEANUP_PREPROCESSING_CACHE env var)."""
-    from common.config.runtime import parse_bool_env
+    """Clean up preprocessing cache (respects DISABLE_PREPROCESSING_CLEANUP env var)."""
+    import logging
 
-    cleanup_enabled = parse_bool_env(
-        os.environ.get("CLEANUP_PREPROCESSING_CACHE"),
-        default=True,
-    )
+    from common.config.runtime import should_cleanup_preprocessing
 
-    if not cleanup_enabled:
-        return
+    logger = logging.getLogger(__name__)
 
     config = get_dedup_config()
     cache_dir = config.preprocessing_cache_dir.resolve()
 
-    if cache_dir.exists():
+    if not cache_dir.exists():
+        return
+
+    if should_cleanup_preprocessing():
+        logger.debug("Cleaning up preprocessing cache: %s", cache_dir)
         shutil.rmtree(cache_dir)
+    else:
+        logger.info("Preserving preprocessing cache (cleanup disabled): %s", cache_dir)

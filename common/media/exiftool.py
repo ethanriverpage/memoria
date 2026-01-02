@@ -1223,7 +1223,7 @@ def _read_metadata_batch(file_paths: List[str]) -> Dict[str, Dict[str, bool]]:
     if result.returncode != 0:
         logger.debug(f"Exiftool returned non-zero exit code {result.returncode}")
         if result.stderr:
-            logger.debug(f"Exiftool stderr: {result.stderr[:500]}")
+            logger.debug(f"Exiftool stderr: {result.stderr[:500].strip()}")
 
         # Still try to parse whatever output we got
         if not result.stdout:

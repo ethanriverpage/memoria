@@ -26,6 +26,11 @@ class BannedFilesFilter:
         ".pluginPayloadAttachment",  # iMessage plugin payload attachment files
     ]
 
+    # Banned directory suffixes (bundle directories to skip)
+    BANNED_DIRECTORY_SUFFIXES = [
+        ".pvt",  # Apple private bundle directories (Live Photos in iMessage)
+    ]
+
     # Banned file extensions (with leading dot, lowercase)
     DEFAULT_BANNED_EXTENSIONS = [
         ".unknown",  # Snapchat export metadata files with unrecognized type
@@ -79,6 +84,11 @@ class BannedFilesFilter:
         for pattern in self.patterns:
             # Exact match or prefix match (for patterns like ._ and SYNOFILE_THUMB_)
             if name == pattern or name.startswith(pattern):
+                return True
+
+        # Check banned directory suffixes (e.g., .pvt bundle directories)
+        for suffix in self.BANNED_DIRECTORY_SUFFIXES:
+            if name.endswith(suffix):
                 return True
 
         # Check banned extensions

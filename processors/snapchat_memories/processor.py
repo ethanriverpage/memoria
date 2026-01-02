@@ -824,7 +824,7 @@ def _process_preprocessed(
                 )
 
     logger.info(
-        "\nCreated %d files (%d need EXIF processing)",
+        "Created %d files (%d need EXIF processing)",
         collected.success_count,
         len(collected.file_info),
     )
