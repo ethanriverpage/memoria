@@ -23,7 +23,7 @@ from common.output.logging import get_processor_logger
 from common.output.progress import PHASE_PREPROCESS
 from common.output.summary import print_preprocessing_stats
 from common.processing import process_parallel_threaded
-from processors.preprocess_base import CopyTask, PreprocessorBase
+from processors.preprocess_base import CopyTask, HashResult, PreprocessorBase
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -214,14 +214,16 @@ class GoogleChatPreprocessor(PreprocessorBase):
 
     def parse_timestamp(self, timestamp_str: str) -> Optional[str]:
         """
-        Convert timestamp string to ISO format
+        Convert timestamp string to canonical ISO 8601 format.
         Input format: "Wednesday, May 4, 2016 at 4:20:19 AM UTC"
-        Output format: "2016-05-04 04:20:19"
+        Output format: "2016-05-04T04:20:19Z"
         """
+        from common.text.parse import CANONICAL_TIMESTAMP_FORMAT
+
         try:
             # Parse the timestamp
             dt = datetime.strptime(timestamp_str, "%A, %B %d, %Y at %I:%M:%S %p %Z")
-            return dt.strftime("%Y-%m-%d %H:%M:%S")
+            return dt.strftime(CANONICAL_TIMESTAMP_FORMAT)
         except (ValueError, AttributeError) as e:
             self.log_message(
                 "TIMESTAMP_PARSE_ERROR",

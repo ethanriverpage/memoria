@@ -28,7 +28,7 @@ from common.output.logging import get_processor_logger
 from common.output.progress import PHASE_PREPROCESS
 from common.output.summary import print_preprocessing_stats
 from common.processing import process_parallel_threaded
-from processors.preprocess_base import PreprocessorBase
+from processors.preprocess_base import CopyResult, PreprocessorBase
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -684,10 +684,16 @@ class DiscordPreprocessor(PreprocessorBase):
                     download_tasks.append((url, channel_id, msg_id, timestamp, content))
 
                 # Create message entry (will be populated with filenames after download)
+                # Convert timestamp to canonical ISO 8601 format
+                canonical_ts = ""
+                if timestamp:
+                    from common.text.parse import normalize_timestamp
+
+                    canonical_ts = normalize_timestamp(timestamp) or ""
                 channel_messages.append(
                     {
                         "id": msg_id,
-                        "timestamp": f"{timestamp} UTC" if timestamp else "",
+                        "timestamp": canonical_ts,
                         "content": content,
                         "original_urls": attachment_urls,
                         "media_files": [],  # Populated after download

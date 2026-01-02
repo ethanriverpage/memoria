@@ -22,7 +22,7 @@ from common.detection import detect_from_dirname
 from common.failures import FailureTracker
 from common.files.naming import FilenameGenerator
 from common.files.timestamps import update_file_timestamps
-from common.files.types import get_media_type
+from common.files.types import get_media_type, MediaType
 from common.files.utils import copy_file, short_path
 from common.media.exiftool import (
     DEFAULT_PREAMBLE,
@@ -231,58 +231,44 @@ class SnapchatMessagesProcessor(ProcessorBase):
         logger.warning("Directory not preprocessed, skipping catalog: %s", input_path)
 
     @classmethod
-    def process(
+    def _process_impl(
         cls,
         input_dir: str,
-        output_dir: Optional[str] = None,
+        output_dir: str,
         dedup_manifest: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> bool:
         """Process Snapchat Messages export."""
-        # Check for required dependencies
-        if not cls.check_dependencies():
-            return False
+        # Check if this is a consolidated export with messages/ subdirectory
+        input_path = Path(input_dir)
+        messages_subdir = input_path / "messages"
 
-        try:
-            # Check if this is a consolidated export with messages/ subdirectory
-            input_path = Path(input_dir)
-            messages_subdir = input_path / "messages"
-
-            # Use messages/ subdirectory if it exists, otherwise use root
-            if messages_subdir.exists() and messages_subdir.is_dir():
-                # Verify it's actually a messages export in the subdirectory
-                json_dir = messages_subdir / "json"
-                metadata_file = messages_subdir / "metadata.json"
-                if (
-                    json_dir.exists() and (json_dir / "chat_history.json").exists()
-                ) or metadata_file.exists():
-                    actual_input_dir = str(messages_subdir)
-                    logger.info(
-                        f"Detected consolidated export structure, using: {actual_input_dir}"
-                    )
-                else:
-                    actual_input_dir = input_dir
+        # Use messages/ subdirectory if it exists, otherwise use root
+        if messages_subdir.exists() and messages_subdir.is_dir():
+            # Verify it's actually a messages export in the subdirectory
+            json_dir = messages_subdir / "json"
+            metadata_file = messages_subdir / "metadata.json"
+            if (
+                json_dir.exists() and (json_dir / "chat_history.json").exists()
+            ) or metadata_file.exists():
+                actual_input_dir = str(messages_subdir)
+                logger.info(
+                    "Detected consolidated export structure, using: %s",
+                    actual_input_dir,
+                )
             else:
                 actual_input_dir = input_dir
+        else:
+            actual_input_dir = input_dir
 
-            # Create messages subdirectory under output
-            if output_dir:
-                processor_output = str(Path(output_dir) / "messages")
-            else:
-                processor_output = kwargs.get("output", "final_snapmsgs/messages")
-
-            # Call processing logic directly
-            process_logic(
-                input_dir=actual_input_dir,
-                output_dir=processor_output,
-                workers=kwargs.get("workers"),
-                dedup_manifest=dedup_manifest,
-            )
-            return True
-
-        except Exception as e:
-            logger.error("Error in SnapchatMessagesProcessor: %s", e)
-            return False
+        # Call processing logic directly
+        process_logic(
+            input_dir=actual_input_dir,
+            output_dir=output_dir,
+            workers=kwargs.get("workers"),
+            dedup_manifest=dedup_manifest,
+        )
+        return True
 
 
 def _build_description(message: dict, export_username: str) -> str:
@@ -386,7 +372,7 @@ def _build_metadata_requests(
         # Check if this is a merged message
         is_merged = "messages" in message and isinstance(message["messages"], list)
 
-        # Build datetime tags (handles both legacy date-only and standard formats)
+        # Build datetime tags from canonical ISO 8601 timestamp
         date_str = message.get("canonical_timestamp") or (
             message.get("primary_created") if is_merged else message.get("created")
         )
@@ -499,16 +485,7 @@ def _update_snapchat_timestamps(file_path: Path, message: dict) -> bool:
     if not date_str:
         return False
 
-    # All messages should have full timestamp format: YYYY-MM-DD HH:MM:SS UTC
-    # Fallback to date-only parsing for backwards compatibility with old metadata
-    if len(date_str) == 10 and date_str.count(":") == 0:
-        # Legacy date-only format: YYYY-MM-DD
-        timestamp_format = "%Y-%m-%d"
-    else:
-        # Standard timestamp format: YYYY-MM-DD HH:MM:SS UTC
-        timestamp_format = "%Y-%m-%d %H:%M:%S"
-
-    return update_file_timestamps(file_path, date_str, timestamp_format)
+    return update_file_timestamps(file_path, date_str)
 
 
 def _create_file_worker(args_tuple):
@@ -540,8 +517,8 @@ def _create_file_worker(args_tuple):
 
     try:
         # Determine file type
-        is_video = get_media_type(media_path) == "video"
-        is_image = get_media_type(media_path) == "image"
+        is_video = get_media_type(media_path) == MediaType.VIDEO
+        is_image = get_media_type(media_path) == MediaType.IMAGE
 
         # Get file extension for filename generation
         file_ext = media_path.suffix.lower()
@@ -829,7 +806,8 @@ def _process_snapchat_working_directory(
     filename_index = build_filename_index(metadata)
     logger.info("Found %d messages with media IDs", len(media_index))
     logger.info(
-        "Indexed %d media items by filename (including unmatched_media)", len(filename_index)
+        "Indexed %d media items by filename (including unmatched_media)",
+        len(filename_index),
     )
 
     # Build list of source files from metadata.
@@ -944,12 +922,11 @@ def _process_snapchat_working_directory(
         "snap",
         export_username,
         service="msgs",
-        timestamp_format="%Y-%m-%d %H:%M:%S UTC",
     )
     output_filenames = []  # List of output filenames in same order as matched_files
 
     for media_file, message in matched_files:
-        is_video = get_media_type(media_file) == "video"
+        is_video = get_media_type(media_file) == MediaType.VIDEO
 
         # Get file extension for filename generation
         file_ext = media_file.suffix.lower()

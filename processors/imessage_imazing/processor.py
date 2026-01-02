@@ -123,6 +123,11 @@ class ImazingProcessor(ProcessorBase):
             username_prefix="imessage",
         )
 
+    @classmethod
+    def get_output_subdirectory(cls) -> str:
+        # iMazing uses "messages" as output subdirectory (service is None)
+        return "messages"
+
     @staticmethod
     def supports_consolidation() -> bool:
         return False
@@ -214,10 +219,10 @@ class ImazingProcessor(ProcessorBase):
         logger.warning("Directory not preprocessed, skipping catalog: %s", input_path)
 
     @classmethod
-    def process(
+    def _process_impl(
         cls,
         input_dir: str,
-        output_dir: Optional[str] = None,
+        output_dir: str,
         dedup_manifest: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> bool:
@@ -484,7 +489,7 @@ def _process_file_worker(args_tuple):
 
         # Update timestamps
         timestamp_str = _extract_message_timestamp(message)
-        update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
+        update_file_timestamps(output_path, timestamp_str)
 
         return (
             True,
@@ -509,7 +514,7 @@ def _process_file_worker(args_tuple):
 
 def process_logic(
     input_dir: str,
-    output_dir: Optional[str] = None,
+    output_dir: str,
     workers: Optional[int] = None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ) -> bool:
@@ -517,23 +522,20 @@ def process_logic(
 
     Expects input_dir to be preprocessed (via memoria.py preprocessing phase
     or by calling ImazingProcessor.preprocess() directly).
-    """
-    # Check for required tools
-    if not ImazingProcessor.check_dependencies():
-        return False
 
+    Args:
+        input_dir: Path to preprocessed input directory.
+        output_dir: Final output directory path (includes subdirectory).
+        workers: Number of parallel workers.
+        dedup_manifest: Optional deduplication manifest.
+
+    Returns:
+        True if processing succeeded, False otherwise.
+    """
     log.processor_start("iMazing iMessage Processor")
 
     input_path = Path(input_dir)
-
-    # Determine output directory
-    if output_dir:
-        output_path = Path(output_dir)
-    else:
-        output_path = Path("final_imessage_imazing")
-
-    # Create output subdirectory for messages
-    messages_output_dir = output_path / "messages"
+    messages_output_dir = Path(output_dir)
     messages_output_dir.mkdir(parents=True, exist_ok=True)
 
     # Require preprocessed input
@@ -554,7 +556,7 @@ def process_logic(
     return _process_working_directory(
         working_dir=input_path,
         messages_output_dir=messages_output_dir,
-        output_path=output_path,
+        output_path=messages_output_dir.parent,
         workers=workers,
         dedup_manifest=dedup_manifest,
     )
@@ -607,7 +609,6 @@ def _process_working_directory(
     filename_gen = FilenameGenerator(
         "imessage",
         export_username,
-        timestamp_format="%Y-%m-%d %H:%M:%S UTC",
     )
     missing_source_path = 0
     missing_path_examples: list[str] = []

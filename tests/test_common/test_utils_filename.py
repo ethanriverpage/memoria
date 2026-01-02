@@ -38,9 +38,10 @@ class TestFilenameGenerator:
         with pytest.raises(InvariantViolation, match="unparseable timestamp"):
             gen.generate("not-a-date", ".jpg")
 
-    def test_custom_timestamp_format(self):
-        gen = FilenameGenerator("imessage", "m3mbp", timestamp_format="%Y/%m/%d")
-        result = gen.generate("2024/01/15", ".jpg")
+    def test_canonical_timestamp_format(self):
+        """FilenameGenerator now expects canonical ISO 8601 format."""
+        gen = FilenameGenerator("imessage", "m3mbp")
+        result = gen.generate("2024-01-15T10:30:00Z", ".jpg")
         assert result == "imessage-m3mbp-20240115.jpg"
 
     def test_uniqueness_adds_sequence_number(self):

@@ -287,7 +287,7 @@ class TestTimestampEdgeCases:
         test_file.write_text("content")
 
         # Should not raise with invalid timestamp
-        update_file_timestamps(test_file, "not a timestamp", "%Y-%m-%d")
+        update_file_timestamps(test_file, "not a timestamp")
         assert test_file.exists()
 
     def test_update_timestamps_none_timestamp(self, tmp_path: Path) -> None:
@@ -296,7 +296,7 @@ class TestTimestampEdgeCases:
         test_file.write_text("content")
 
         # Should not raise
-        update_file_timestamps(test_file, None, "%Y-%m-%d")
+        update_file_timestamps(test_file, None)
         assert test_file.exists()
 
     def test_update_timestamps_missing_file(self, tmp_path: Path) -> None:
@@ -305,7 +305,7 @@ class TestTimestampEdgeCases:
 
         # Should not raise, might log warning
         try:
-            update_file_timestamps(missing, "2021-01-01", "%Y-%m-%d")
+            update_file_timestamps(missing, "2021-01-01T00:00:00Z")
         except FileNotFoundError:
             pass  # Acceptable to raise
 

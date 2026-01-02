@@ -18,10 +18,11 @@ import re
 
 from common.detection import DetectionResult
 from common.files.scanner import iter_files
+from common.files.types import get_media_type, MediaType
 from common.output.logging import get_processor_logger
 from common.output.summary import print_preprocessing_stats
 from common.preprocess.context_mergers import merge_snapchat_context
-from processors.preprocess_base import PreprocessorBase, CopyTask
+from processors.preprocess_base import CopyTask, HashResult, PreprocessorBase
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -237,13 +238,6 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
             return match.group(1)
         return None
 
-    def get_media_type(self, filename: str) -> str:
-        """Determine if file is image or video based on extension - use common utility"""
-        from common.files.types import get_media_type as common_get_media_type
-
-        result = common_get_media_type(filename)
-        return result if result else "unknown"
-
     def classify_conversation(
         self, conversation_id: str, messages: List[Dict]
     ) -> Tuple[str, Optional[str]]:
@@ -441,14 +435,18 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
                 if message.get("Media Type") in ["MEDIA", "IMAGE", "VIDEO"]:
                     self.stats["media_messages"] += 1
 
-                # Build message context
+                # Build message context with normalized timestamp
+                from common.text.parse import normalize_timestamp
+
+                created_raw = message.get("Created", "")
+                created_normalized = normalize_timestamp(created_raw) or created_raw
                 msg_context = {
                     "conversation_id": conversation_id,
                     "conversation_type": conversation_type,
                     "conversation_title": conversation_title,
                     "sender": message.get("From", ""),
                     "media_type": message.get("Media Type", ""),
-                    "created": message.get("Created", ""),
+                    "created": created_normalized,
                     "content": message.get("Content", ""),
                     "is_sender": message.get("IsSender", False),
                     "media_id": message.get("Media IDs", ""),
@@ -540,7 +538,7 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
                                 [
                                     mf
                                     for mf in media_files
-                                    if self.get_media_type(mf) == "video"
+                                    if get_media_type(mf) == MediaType.VIDEO
                                 ]
                             )
                             overlay_count = len(overlays_at_timestamp)
@@ -708,10 +706,13 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
         conversation_title: Optional[str],
     ) -> None:
         """Record an ambiguous overlay matching case with source_path for materialization."""
+        from common.text.parse import normalize_timestamp
+
         date_str = message.get("Created", "")
+        date_normalized = normalize_timestamp(date_str) or date_str
 
         ambiguous_case = {
-            "timestamp": date_str,
+            "timestamp": date_normalized,
             "message_metadata": {
                 "conversation_id": conversation_id,
                 "conversation_type": conversation_type,
@@ -719,7 +720,7 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
                 "sender": message.get("From", ""),
                 "content": message.get("Content", ""),
                 "is_sender": message.get("IsSender", False),
-                "created": message.get("Created", ""),
+                "created": date_normalized,
             },
             "media_files": [],
             "overlays": [],
@@ -730,8 +731,8 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
         video_count = 0
         for media_file in media_files:
             file_info = file_catalog.get(media_file, {})
-            media_type = self.get_media_type(media_file)
-            if media_type == "video":
+            media_type = get_media_type(media_file)
+            if media_type == MediaType.VIDEO:
                 video_count += 1
                 ambiguous_case["media_files"].append(
                     {
@@ -739,7 +740,7 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
                         "source_path": file_info.get("original_path"),
                         "media_id": file_info.get("media_id"),
                         "uuid": file_info.get("uuid"),
-                        "type": media_type,
+                        "type": media_type.value if media_type else None,
                         "extension": Path(media_file).suffix,
                     }
                 )

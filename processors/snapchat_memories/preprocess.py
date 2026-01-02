@@ -19,7 +19,7 @@ from common.files.scanner import iter_files
 from common.files.types import get_media_type
 from common.output.logging import get_processor_logger
 from common.output.summary import print_preprocessing_stats
-from processors.preprocess_base import PreprocessorBase, CopyTask
+from processors.preprocess_base import CopyTask, HashResult, PreprocessorBase
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -296,9 +296,13 @@ class SnapchatMemoriesPreprocessor(PreprocessorBase):
             source_path = file_catalog[media_filename]
             matched_media.add(media_filename)
 
-            # Build context with memory data
+            # Build context with memory data, normalizing timestamp
+            from common.text.parse import normalize_timestamp
+
+            date_raw = memory.get("date")
+            date_normalized = normalize_timestamp(date_raw) if date_raw else date_raw
             context: Dict[str, Any] = {
-                "date": memory.get("date"),
+                "date": date_normalized,
                 "media_type": memory.get("media_type"),
             }
 

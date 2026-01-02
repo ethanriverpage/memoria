@@ -34,7 +34,7 @@ from common.failures import FailureTracker
 from common.files.filter import BannedFilesFilter
 from common.files.naming import FilenameGenerator
 from common.files.timestamps import update_file_timestamps
-from common.files.types import get_media_type
+from common.files.types import get_media_type, MediaType
 from common.media.overlay import (
     create_image_with_overlay,
     create_video_with_overlay,
@@ -265,61 +265,34 @@ class SnapchatMemoriesProcessor(ProcessorBase):
         logger.warning("Directory not preprocessed, skipping catalog: %s", input_path)
 
     @classmethod
-    def process(
+    def _process_impl(
         cls,
         input_dir: str,
-        output_dir: Optional[str] = None,
+        output_dir: str,
         dedup_manifest: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> bool:
-        """Process Snapchat Memories from preprocessed metadata.
+        """Process Snapchat Memories from preprocessed metadata."""
+        input_path = Path(input_dir)
 
-        Args:
-            input_dir: Path to preprocessed directory with metadata.json
-            output_dir: Optional base output directory
-            dedup_manifest: Optional deduplication manifest
-            **kwargs: Additional arguments (workers)
+        # Verify input is preprocessed format
+        media_files = cls.check_preprocessed_source_path(
+            input_path, media_files_key="media_files"
+        )
 
-        Returns:
-            True if processing succeeded, False otherwise
-        """
-        # Check for required dependencies
-        if not cls.check_dependencies():
+        if media_files is None:
+            logger.error(
+                "Input is not preprocessed. Run preprocessing first: %s",
+                input_path,
+            )
             return False
 
-        try:
-            input_path = Path(input_dir)
-
-            # Create memories subdirectory under output
-            if output_dir:
-                processor_output = Path(output_dir) / "memories"
-            else:
-                processor_output = Path(
-                    kwargs.get("output", "final_snapmemories/memories")
-                )
-
-            # Verify input is preprocessed format
-            media_files = cls.check_preprocessed_source_path(
-                input_path, media_files_key="media_files"
-            )
-
-            if media_files is None:
-                logger.error(
-                    "Input is not preprocessed. Run preprocessing first: %s",
-                    input_path,
-                )
-                return False
-
-            return _process_preprocessed(
-                input_path=input_path,
-                output_dir=processor_output,
-                workers=kwargs.get("workers"),
-                dedup_manifest=dedup_manifest,
-            )
-
-        except Exception as e:
-            logger.error("Error in SnapchatMemoriesProcessor: %s", e)
-            return False
+        return _process_preprocessed(
+            input_path=input_path,
+            output_dir=Path(output_dir),
+            workers=kwargs.get("workers"),
+            dedup_manifest=dedup_manifest,
+        )
 
 
 # ============================================================================
@@ -416,8 +389,7 @@ def _update_memory_timestamps(file_path: str, media_data: dict) -> bool:
     if not date_str:
         return False
 
-    # Snapchat Memories uses format: "2021-01-04 23:08:30 UTC"
-    return update_file_timestamps(file_path, date_str, "%Y-%m-%d %H:%M:%S")
+    return update_file_timestamps(file_path, date_str)
 
 
 def _create_memory_file(args_tuple):
@@ -463,8 +435,8 @@ def _create_memory_file(args_tuple):
         )
 
     # Determine if this is a video or image
-    is_video = get_media_type(media_path) == "video"
-    is_image = get_media_type(media_path) == "image"
+    is_video = get_media_type(media_path) == MediaType.VIDEO
+    is_image = get_media_type(media_path) == MediaType.IMAGE
 
     # Process based on file type and whether overlay exists
     if overlay_source_path:
@@ -700,7 +672,6 @@ def _process_preprocessed(
         "snap",
         export_username,
         service="memories",
-        timestamp_format="%Y-%m-%d %H:%M:%S UTC",
     )
 
     processing_tasks = []

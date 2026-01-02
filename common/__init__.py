@@ -34,7 +34,6 @@ from .files.types import (
     LIVE_PHOTO_IMAGE_EXTENSIONS,
     LIVE_PHOTO_VIDEO_EXTENSIONS,
     get_media_type,
-    is_supported_media,
 )
 
 # Filename utilities
@@ -65,15 +64,12 @@ from .detection import detect_from_dirname
 # ============================================================================
 # Logging and output (from output subpackage)
 # ============================================================================
-from .output.logging import setup_logging, get_logger, get_processor_logger
+from .output.logging import setup_logging, get_processor_logger
 from .output.progress import (
     progress_bar,
     futures_progress,
     PHASE_PREPROCESS,
     PHASE_PROCESS,
-    PHASE_EXIF,
-    PHASE_CATALOG,
-    PHASE_DEDUP,
 )
 from .output.summary import print_processing_summary, print_preprocessing_stats
 
@@ -105,7 +101,6 @@ __all__ = [
     "LIVE_PHOTO_VIDEO_EXTENSIONS",
     # Media type detection
     "get_media_type",
-    "is_supported_media",
     # Filename utilities
     "sanitize_filename",
     "FilenameGenerator",
@@ -123,16 +118,12 @@ __all__ = [
     "print_ffmpeg_error",
     # Logging
     "setup_logging",
-    "get_logger",
     "get_processor_logger",
     # Progress
     "progress_bar",
     "futures_progress",
     "PHASE_PREPROCESS",
     "PHASE_PROCESS",
-    "PHASE_EXIF",
-    "PHASE_CATALOG",
-    "PHASE_DEDUP",
     # Processing
     "temp_processing_directory",
     "process_batches_parallel",

@@ -85,7 +85,6 @@ from common import (
     VIDEO_EXTENSIONS,
     ALL_MEDIA_EXTENSIONS,
     get_media_type,
-    is_supported_media,
     
     # Configuration
     default_worker_count,
@@ -94,7 +93,7 @@ from common import (
     
     # Logging
     setup_logging,
-    get_logger,
+    get_processor_logger,
     
     # Progress
     progress_bar,

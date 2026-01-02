@@ -210,47 +210,21 @@ class InstagramMessagesProcessor(ProcessorBase):
         logger.warning("Directory not preprocessed, skipping catalog: %s", input_path)
 
     @classmethod
-    def process(
+    def _process_impl(
         cls,
         input_dir: str,
-        output_dir: Optional[str] = None,
+        output_dir: str,
         dedup_manifest: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> bool:
-        """Process Instagram Messages export
-
-        Args:
-            input_dir: Path to input directory
-            output_dir: Optional base output directory
-            dedup_manifest: Optional deduplication manifest
-            **kwargs: Additional arguments (workers, temp_dir)
-
-        Returns:
-            True if processing succeeded, False otherwise
-        """
-        # Check for required dependencies
-        if not cls.check_dependencies():
-            return False
-
-        try:
-            # Choose subdirectory under provided base output
-            if output_dir:
-                processor_output = str(Path(output_dir) / "messages")
-            else:
-                processor_output = kwargs.get("output", "final_instamsgs")
-
-            # Call processing logic directly
-            process_logic(
-                input_dir=input_dir,
-                output_dir=processor_output,
-                workers=kwargs.get("workers"),
-                dedup_manifest=dedup_manifest,
-            )
-            return True
-
-        except Exception as e:
-            logger.error("Error in InstagramMessagesProcessor: %s", e)
-            return False
+        """Process Instagram Messages export."""
+        process_logic(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            workers=kwargs.get("workers"),
+            dedup_manifest=dedup_manifest,
+        )
+        return True
 
 
 # ============================================================================
@@ -484,7 +458,6 @@ def _process_working_directory(
                             original_filename,
                         ),
                         timestamp_str=message.get("timestamp"),
-                        timestamp_format="%Y-%m-%d %H:%M:%S",
                     )
                 )
 

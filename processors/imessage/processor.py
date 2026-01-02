@@ -116,6 +116,11 @@ class IMessageProcessor(ProcessorBase):
             username_prefix="imessage",
         )
 
+    @classmethod
+    def get_output_subdirectory(cls) -> str:
+        # iMessage uses "messages" as output subdirectory (service is None)
+        return "messages"
+
     @staticmethod
     def supports_consolidation() -> bool:
         """Enable cross-export consolidation for iMessage.
@@ -213,8 +218,9 @@ class IMessageProcessor(ProcessorBase):
 
         logger.warning("Directory not preprocessed, skipping catalog: %s", input_path)
 
-    @staticmethod
+    @classmethod
     def process_consolidated(
+        cls,
         input_dirs: List[str],
         output_dir: Optional[str] = None,
         dedup_manifest: Optional[Dict[str, Any]] = None,
@@ -235,18 +241,26 @@ class IMessageProcessor(ProcessorBase):
         Returns:
             True if processing succeeded, False otherwise
         """
-        # Create messages subdirectory under output
-        if output_dir:
-            processor_output = str(Path(output_dir) / "messages")
-        else:
-            processor_output = kwargs.get("output", "final_imessage/messages")
+        if not cls.check_dependencies():
+            return False
 
-        return process_logic(
-            input_dirs=input_dirs,
-            output_dir=processor_output,
-            workers=kwargs.get("workers"),
-            dedup_manifest=dedup_manifest,
-        )
+        try:
+            # Calculate output directory using the subdirectory helper
+            if output_dir:
+                processor_output = str(Path(output_dir) / cls.get_output_subdirectory())
+            else:
+                processor_output = kwargs.pop("output", None) or cls.get_default_output()
+
+            return process_logic(
+                input_dirs=input_dirs,
+                output_dir=processor_output,
+                workers=kwargs.get("workers"),
+                dedup_manifest=dedup_manifest,
+            )
+
+        except Exception as e:
+            logger.error("Error in %s: %s", cls.get_name(), e)
+            return False
 
     @classmethod
     def process(
@@ -258,20 +272,30 @@ class IMessageProcessor(ProcessorBase):
     ) -> bool:
         """Process a single iMessage export.
 
-        Delegates to process_consolidated with a single-element list,
-        ensuring the same code path handles both modes.
-
-        Args:
-            input_dir: Path to input directory
-            output_dir: Optional base output directory
-            dedup_manifest: Optional deduplication manifest
-            **kwargs: Additional arguments (workers, temp_dir)
-
-        Returns:
-            True if processing succeeded, False otherwise
+        Overrides the base template to delegate to process_consolidated
+        with a single-element list, ensuring the same code path handles
+        both single and multi-export modes.
         """
-        return IMessageProcessor.process_consolidated(
+        return cls.process_consolidated(
             [input_dir], output_dir, dedup_manifest=dedup_manifest, **kwargs
+        )
+
+    @classmethod
+    def _process_impl(
+        cls,
+        input_dir: str,
+        output_dir: str,
+        dedup_manifest: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> bool:
+        """Implement processing for single export (via process_consolidated)."""
+        # This method satisfies the abstract requirement but is not called
+        # directly since process() overrides the base template.
+        return process_logic(
+            input_dirs=[input_dir],
+            output_dir=output_dir,
+            workers=kwargs.get("workers"),
+            dedup_manifest=dedup_manifest,
         )
 
 
@@ -577,7 +601,7 @@ def _process_file_worker(args_tuple):
 
         # Update timestamps
         timestamp_str = _extract_message_timestamp(message)
-        update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
+        update_file_timestamps(output_path, timestamp_str)
 
         return (
             True,
@@ -731,7 +755,6 @@ def _process_working_directory(
     filename_gen = FilenameGenerator(
         "imessage",
         export_username,
-        timestamp_format="%Y-%m-%d %H:%M:%S UTC",
     )
 
     # Build live photo pairing maps from metadata

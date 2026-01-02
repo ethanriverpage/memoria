@@ -29,6 +29,7 @@ from common.dedup.description import (
 from common.dedup.database import HashDatabase, HashDatabaseProtocol
 from common.dedup.hashing import compute_content_hash, hash_similarity
 from common.output.progress import PHASE_DEDUP, progress_bar
+from common.metadata.schema import get_entry_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -851,8 +852,8 @@ class DeduplicationService:
         Returns:
             datetime object or None.
         """
-        # Try direct timestamp field
-        ts = file_entry.get("timestamp")
+        # Try direct timestamp field using centralized helper
+        ts = get_entry_timestamp(file_entry)
         if isinstance(ts, datetime):
             return ts
         if isinstance(ts, str):
@@ -861,9 +862,9 @@ class DeduplicationService:
             except (ValueError, AttributeError):
                 pass
 
-        # Try metadata
+        # Try nested metadata dict (catalog entries may have metadata subdict)
         metadata = file_entry.get("metadata", {})
-        ts = metadata.get("capture_timestamp") or metadata.get("timestamp")
+        ts = get_entry_timestamp(metadata)
         if isinstance(ts, datetime):
             return ts
         if isinstance(ts, str):
@@ -1210,7 +1211,6 @@ def get_live_photo_base_for_hash(
     heic_hash: str,
     filename_prefix: str,
     export_username: str,
-    timestamp_format: str = "%Y-%m-%d %H:%M:%S",
 ) -> Optional[str]:
     """Get the output base filename for a Live Photo HEIC by its content hash.
 
@@ -1227,11 +1227,12 @@ def get_live_photo_base_for_hash(
         heic_hash: Content hash (xxHash64) of the paired HEIC image.
         filename_prefix: Prefix for generated filename (e.g., "imessage").
         export_username: Username/device identifier for filename generation.
-        timestamp_format: Format string for parsing timestamps (without " UTC").
 
     Returns:
         Base filename (without extension) if HEIC found in manifest, None otherwise.
     """
+    from common.text.parse import parse_timestamp_flexible
+
     duplicates = manifest.get("duplicates", {})
 
     # Look up the HEIC hash in the duplicates
@@ -1249,37 +1250,20 @@ def get_live_photo_base_for_hash(
         # Try to get timestamp from best_quality context or primary
         primary = group.get("primary", {})
         context = best_quality.get("context", primary.get("context", {}))
-        timestamp_str = context.get("timestamp") or context.get("created")
+        timestamp_str = get_entry_timestamp(context)
 
     if not timestamp_str:
         return None
 
-    # Parse the timestamp and generate the base filename
-    # The filename format matches what FilenameGenerator produces
-    try:
-        # Handle various timestamp formats
-        ts_clean = timestamp_str.replace(" UTC", "").replace("Z", "")
-        ts_clean = ts_clean.replace("+00:00", "").replace("T", " ")
-
-        # Try parsing with different formats
-        dt = None
-        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]:
-            try:
-                dt = datetime.strptime(ts_clean[: len("2000-01-01 00:00:00")], fmt)
-                break
-            except ValueError:
-                continue
-
-        if dt is None:
-            return None
-
-        # Generate base filename matching FilenameGenerator format
-        # Format: {prefix}-{username}-{YYYYMMDD}-{HHMMSS}
-        base = f"{filename_prefix}-{export_username}-{dt.strftime('%Y%m%d')}-{dt.strftime('%H%M%S')}"
-        return base
-
-    except Exception:
+    # Parse the canonical timestamp and generate the base filename
+    dt = parse_timestamp_flexible(timestamp_str)
+    if dt is None:
         return None
+
+    # Generate base filename matching FilenameGenerator format
+    # Format: {prefix}-{username}-{YYYYMMDD}
+    base = f"{filename_prefix}-{export_username}-{dt.strftime('%Y%m%d')}"
+    return base
 
 
 def filter_primary_files(

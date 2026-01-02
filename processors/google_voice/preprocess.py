@@ -22,7 +22,7 @@ from common.files.scanner import iter_files
 from common.files.types import ALL_MEDIA_EXTENSIONS
 from common.output.logging import get_processor_logger
 from common.output.summary import print_preprocessing_stats
-from processors.preprocess_base import CopyTask, PreprocessorBase
+from processors.preprocess_base import CopyTask, HashResult, PreprocessorBase
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -360,10 +360,12 @@ class GoogleVoicePreprocessor(PreprocessorBase):
 
     def parse_timestamp(self, timestamp_str: str) -> Optional[str]:
         """
-        Convert timestamp string to ISO format
+        Convert timestamp string to canonical ISO 8601 format.
         Input format: "2016-05-18T11:00:23.648-04:00"
-        Output format: "2016-05-18 11:00:23"
+        Output format: "2016-05-18T11:00:23Z"
         """
+        from common.text.parse import CANONICAL_TIMESTAMP_FORMAT
+
         try:
             # Parse ISO 8601 format
             # Handle timezone offset
@@ -384,7 +386,7 @@ class GoogleVoicePreprocessor(PreprocessorBase):
                         dt_part = timestamp_str
 
                 dt = datetime.fromisoformat(dt_part.replace("Z", "+00:00"))
-                return dt.strftime("%Y-%m-%d %H:%M:%S")
+                return dt.strftime(CANONICAL_TIMESTAMP_FORMAT)
         except (ValueError, AttributeError) as e:
             self.log_message(
                 "TIMESTAMP_PARSE_ERROR",

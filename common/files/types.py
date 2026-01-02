@@ -5,7 +5,16 @@ This is the single source of truth for supported file extensions across all proc
 """
 
 import os
+from enum import Enum
 from typing import Optional
+
+
+class MediaType(Enum):
+    """Enumeration of supported media types."""
+
+    IMAGE = "image"
+    VIDEO = "video"
+    AUDIO = "audio"
 
 # ============================================================================
 # Media Type Detection - Single Source of Truth for Extensions
@@ -47,25 +56,21 @@ LIVE_PHOTO_VIDEO_EXTENSIONS = {".mov"}
 EXIF_BEARING_EXTENSIONS = {".jpg", ".jpeg", ".heic", ".heif", ".tif", ".tiff"}
 
 
-def get_media_type(file_path) -> Optional[str]:
-    """Return "image", "video", or None based on file extension."""
+def get_media_type(file_path) -> Optional[MediaType]:
+    """Return MediaType.IMAGE, MediaType.VIDEO, MediaType.AUDIO, or None based on extension."""
     ext = os.path.splitext(str(file_path))[1].lower()
 
     if ext in IMAGE_EXTENSIONS:
-        return "image"
+        return MediaType.IMAGE
     elif ext in VIDEO_EXTENSIONS:
-        return "video"
+        return MediaType.VIDEO
+    elif ext in AUDIO_EXTENSIONS:
+        return MediaType.AUDIO
     else:
         return None
-
-
-def is_supported_media(file_path) -> bool:
-    """Check if file extension is a supported media type."""
-    ext = os.path.splitext(str(file_path))[1].lower()
-    return ext in ALL_MEDIA_EXTENSIONS
 
 
 def get_gps_format(file_path) -> str:
     """Return "absolute" for images (with hemisphere refs), "signed" for videos."""
     media_type = get_media_type(file_path)
-    return "absolute" if media_type == "image" else "signed"
+    return "absolute" if media_type == MediaType.IMAGE else "signed"

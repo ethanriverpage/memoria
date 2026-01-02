@@ -10,12 +10,14 @@ from typing import Any, Dict, Iterator
 from common.metadata.schema import (
     ContentType,
     MetadataValidationError,
+    PreprocessedMetadata,
     get_content_type,
+    get_entry_timestamp,
 )
 
 
 def extract_all_media_entries(
-    metadata: Dict[str, Any],
+    metadata: PreprocessedMetadata,
 ) -> Iterator[Dict[str, Any]]:
     """Extract all media entries from any metadata structure.
 
@@ -31,7 +33,7 @@ def extract_all_media_entries(
     the underlying structure.
 
     Args:
-        metadata: Parsed metadata.json dict
+        metadata: Parsed metadata.json as PreprocessedMetadata TypedDict.
 
     Yields:
         Media entry dicts with at minimum: filename, source_path
@@ -79,7 +81,7 @@ def extract_all_media_entries(
                         "filename": filename,
                         "source_path": source_paths.get(filename, ""),
                         "content_hash": file_hashes.get(filename),
-                        "timestamp": msg.get("timestamp") or msg.get("created"),
+                        "timestamp": get_entry_timestamp(msg),
                         "sender": msg.get("sender"),
                         "conversation": conv_title,
                     }

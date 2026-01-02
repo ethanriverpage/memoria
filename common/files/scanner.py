@@ -61,7 +61,9 @@ def iter_subdirs(
         banned_filter = BannedFilesFilter()
 
     try:
-        entries = list(directory.iterdir())
+        # Use os.scandir() for efficiency - DirEntry.is_dir() uses cached info
+        with os.scandir(directory) as scan_iter:
+            entries = list(scan_iter)
     except PermissionError as e:
         logger.warning("Permission denied scanning %s: %s", directory, e)
         return
@@ -70,7 +72,7 @@ def iter_subdirs(
         return
 
     if sorted_:
-        entries.sort(key=lambda p: p.name)
+        entries.sort(key=lambda e: e.name)
 
     for entry in entries:
         if not entry.is_dir():
@@ -80,15 +82,17 @@ def iter_subdirs(
         if skip_hidden and entry.name.startswith((".", "_")):
             continue
 
+        entry_path = Path(entry.path)
+
         # Skip banned directories
-        if banned_filter.is_banned(entry):
+        if banned_filter.is_banned(entry_path):
             continue
 
         # Apply custom filter
-        if filter_fn is not None and not filter_fn(entry):
+        if filter_fn is not None and not filter_fn(entry_path):
             continue
 
-        yield entry
+        yield entry_path
 
 
 def iter_files(
@@ -124,7 +128,9 @@ def iter_files(
         banned_filter = BannedFilesFilter()
 
     try:
-        entries = list(directory.iterdir())
+        # Use os.scandir() for efficiency - DirEntry.is_file() uses cached info
+        with os.scandir(directory) as scan_iter:
+            entries = list(scan_iter)
     except PermissionError as e:
         logger.warning("Permission denied scanning %s: %s", directory, e)
         return
@@ -133,7 +139,7 @@ def iter_files(
         return
 
     if sorted_:
-        entries.sort(key=lambda p: p.name)
+        entries.sort(key=lambda e: e.name)
 
     for entry in entries:
         if not entry.is_file():
@@ -145,17 +151,19 @@ def iter_files(
         if skip_hidden and filename.startswith((".", "_")):
             continue
 
+        entry_path = Path(entry.path)
+
         # Skip banned files
-        if banned_filter.is_banned(entry):
+        if banned_filter.is_banned(entry_path):
             continue
 
         # Check extension if specified
         if extensions is not None:
-            ext = entry.suffix.lower()
+            ext = entry_path.suffix.lower()
             if ext not in extensions:
                 continue
 
-        yield entry
+        yield entry_path
 
 
 def iter_media_files(
@@ -228,21 +236,23 @@ def iter_media_files(
                     ):
                         yield filepath
         else:
-            # Non-recursive: only scan immediate children
-            for filepath in directory.iterdir():
-                if not filepath.is_file():
-                    continue
+            # Non-recursive: use os.scandir() for efficiency
+            with os.scandir(directory) as scan_iter:
+                for entry in scan_iter:
+                    if not entry.is_file():
+                        continue
 
-                if _should_include_file(
-                    filepath,
-                    filepath.name,
-                    extensions,
-                    banned_filter,
-                    skip_hidden,
-                    skip_overlays,
-                    skip_thumbnails,
-                ):
-                    yield filepath
+                    filepath = Path(entry.path)
+                    if _should_include_file(
+                        filepath,
+                        entry.name,
+                        extensions,
+                        banned_filter,
+                        skip_hidden,
+                        skip_overlays,
+                        skip_thumbnails,
+                    ):
+                        yield filepath
     except PermissionError as e:
         logger.warning("Permission denied scanning %s: %s", directory, e)
     except OSError as e:
@@ -365,3 +375,127 @@ def collect_media_files(
             )
 
     return media_files
+
+
+def iter_all_files(
+    directory: Path,
+    ignore_patterns: Optional[list[str]] = None,
+    skip_hidden: bool = True,
+    recursive: bool = True,
+) -> Iterator[Path]:
+    """
+    Iterate over all files in a directory with glob-based ignore patterns.
+
+    Unlike iter_media_files, this scans all files regardless of extension.
+    Supports glob-style patterns for ignoring files and directories.
+
+    Pattern syntax:
+    - "dirname" - ignore directories with this exact name
+    - "dirname/**" - same as above (trailing ** is stripped)
+    - "**/dirname/**" - same as above (leading/trailing ** is stripped)
+    - "*pattern*" - fnmatch wildcard matching on directory/file names
+
+    Args:
+        directory: Root directory to scan
+        ignore_patterns: List of glob patterns for files/directories to ignore
+        skip_hidden: Skip files/dirs starting with . (default: True)
+        recursive: Walk subdirectories (default: True)
+
+    Yields:
+        Path objects for each matching file (sorted)
+
+    Example:
+        >>> from common.files.scanner import iter_all_files
+        >>> for f in iter_all_files(Path("/output"), ignore_patterns=["issues/**"]):
+        ...     print(f)
+    """
+    import fnmatch
+
+    if ignore_patterns is None:
+        ignore_patterns = []
+
+    # Normalize patterns by stripping **/ prefix and /** suffix
+    normalized_patterns = []
+    for pattern in ignore_patterns:
+        normalized = pattern.replace("**/", "").replace("/**", "")
+        if normalized:
+            normalized_patterns.append(normalized)
+
+    def should_ignore_dir(relative_path: Path) -> bool:
+        """Check if a directory path should be ignored."""
+        # Check each component of the path
+        for part in relative_path.parts:
+            for pattern in normalized_patterns:
+                if fnmatch.fnmatch(part, pattern):
+                    return True
+        return False
+
+    def should_ignore_file(relative_path: Path) -> bool:
+        """Check if a file path should be ignored."""
+        # Check directory components
+        if relative_path.parent != Path("."):
+            if should_ignore_dir(relative_path.parent):
+                return True
+        # Check filename
+        for pattern in normalized_patterns:
+            if fnmatch.fnmatch(relative_path.name, pattern):
+                return True
+        return False
+
+    files = []
+
+    try:
+        if recursive:
+            for root, dirs, filenames in os.walk(directory):
+                root_path = Path(root)
+
+                # Filter out ignored and hidden directories in-place
+                if root_path != directory:
+                    relative_root = root_path.relative_to(directory)
+                    if should_ignore_dir(relative_root):
+                        dirs[:] = []
+                        continue
+
+                # Prune hidden and ignored directories
+                dirs[:] = [
+                    d
+                    for d in dirs
+                    if not (skip_hidden and d.startswith("."))
+                    and not any(fnmatch.fnmatch(d, p) for p in normalized_patterns)
+                ]
+
+                for filename in filenames:
+                    # Skip hidden files
+                    if skip_hidden and filename.startswith("."):
+                        continue
+
+                    filepath = root_path / filename
+                    relative_file = filepath.relative_to(directory)
+
+                    if not should_ignore_file(relative_file):
+                        files.append(filepath)
+        else:
+            # Non-recursive: use os.scandir() for efficiency
+            with os.scandir(directory) as scan_iter:
+                for entry in scan_iter:
+                    if not entry.is_file():
+                        continue
+
+                    filename = entry.name
+
+                    # Skip hidden files
+                    if skip_hidden and filename.startswith("."):
+                        continue
+
+                    # Check ignore patterns on filename
+                    if any(fnmatch.fnmatch(filename, p) for p in normalized_patterns):
+                        continue
+
+                    files.append(Path(entry.path))
+
+    except PermissionError as e:
+        logger.warning("Permission denied scanning %s: %s", directory, e)
+    except OSError as e:
+        logger.warning("Error scanning %s: %s", directory, e)
+
+    return iter(sorted(files))

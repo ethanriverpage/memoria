@@ -312,15 +312,67 @@ class PreprocessedMetadata(TypedDict, total=False):
 
 
 # =============================================================================
+# Timestamp Extraction Helpers
+# =============================================================================
+
+# Timestamp field priority order for extraction.
+# Different processors use different field names for the same concept:
+# - timestamp: Discord, Instagram, Google Chat, Google Voice, Instaloader
+# - capture_timestamp: Google Photos (preferred photo timestamp from EXIF)
+# - date: Snapchat Memories
+# - created: Snapchat Messages, iMessage
+# - primary_created: Merged message contexts (iMessage, Snapchat cross-message dedup)
+#
+# This priority list ensures consistent timestamp extraction across all processors.
+_TIMESTAMP_FIELDS = (
+    "canonical_timestamp",  # Normalized by processor (highest priority)
+    "timestamp",  # Standard field (Discord, Instagram, etc.)
+    "capture_timestamp",  # Google Photos
+    "date",  # Snapchat Memories
+    "primary_created",  # Merged message contexts
+    "created",  # Snapchat Messages, iMessage
+)
+
+
+def get_entry_timestamp(entry: Dict[str, Any]) -> str | None:
+    """Extract timestamp from a metadata entry using standard field priority.
+
+    This function centralizes timestamp extraction logic to handle the various
+    field names used by different processors. Use this instead of manually
+    checking multiple field names.
+
+    Args:
+        entry: A media file entry, message entry, or post entry dict.
+
+    Returns:
+        The timestamp string if found, None otherwise.
+
+    Example:
+        >>> entry = {"filename": "photo.jpg", "capture_timestamp": "2023-01-15T10:30:00Z"}
+        >>> get_entry_timestamp(entry)
+        '2023-01-15T10:30:00Z'
+
+        >>> msg = {"sender": "Alice", "created": "2023-01-15 10:30:00 UTC"}
+        >>> get_entry_timestamp(msg)
+        '2023-01-15 10:30:00 UTC'
+    """
+    for field in _TIMESTAMP_FIELDS:
+        value = entry.get(field)
+        if value:
+            return value
+    return None
+
+
+# =============================================================================
 # Validation Functions
 # =============================================================================
 
 
-def get_content_type(metadata: Dict[str, Any]) -> ContentType:
+def get_content_type(metadata: "PreprocessedMetadata") -> ContentType:
     """Determine content type from metadata.
 
     Args:
-        metadata: Parsed metadata.json dict
+        metadata: Parsed metadata.json as PreprocessedMetadata TypedDict.
 
     Returns:
         ContentType enum value
@@ -340,7 +392,7 @@ def get_content_type(metadata: Dict[str, Any]) -> ContentType:
 
 
 def validate_metadata(
-    metadata: Dict[str, Any], require_source_paths: bool = True
+    metadata: "PreprocessedMetadata", require_source_paths: bool = True
 ) -> None:
     """Validate metadata.json structure.
 
@@ -351,7 +403,7 @@ def validate_metadata(
     4. All media entries have source_path (if require_source_paths=True)
 
     Args:
-        metadata: Parsed metadata.json dict
+        metadata: Parsed metadata.json as PreprocessedMetadata TypedDict.
         require_source_paths: Whether to validate source_path in media entries
 
     Raises:

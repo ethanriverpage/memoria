@@ -19,6 +19,8 @@ import os
 import threading
 import multiprocessing
 import uuid
+from time import perf_counter
+import re
 from pathlib import Path
 from importlib import import_module
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -56,6 +58,90 @@ from common.processing import (  # noqa: E402
 )
 from common.upload.immich import verify_auth, upload as immich_upload  # noqa: E402
 from common.upload.targets import build_upload_targets  # noqa: E402
+
+
+_EXPORT_NAME_PATTERN = re.compile(
+    r"^[a-z0-9]+[-_][a-z0-9_]+-\d{8}(?:[-_].+)?$", re.IGNORECASE
+)
+
+
+def _short_dir_path(path: Path) -> str:
+    """Shorten a directory path for logs while keeping export context."""
+    parts = list(path.parts)
+
+    # Prefer anchoring on an export directory name if present.
+    export_idx = None
+    for i, part in enumerate(parts):
+        if _EXPORT_NAME_PATTERN.match(part):
+            export_idx = i
+            break
+
+    # If this isn't under an export dir (e.g., processed output paths), keep a
+    # small tail so logs still show enough context to be useful.
+    if export_idx is None:
+        if len(parts) <= 3:
+            return str(path)
+        return ".../" + "/".join(parts[-3:])
+
+    tail = parts[export_idx + 1 :]
+    if not tail:
+        return parts[export_idx]
+
+    # Keep the end of the path so users can differentiate nested dirs.
+    if len(tail) <= 2:
+        return f"{parts[export_idx]}/" + "/".join(tail)
+
+    return f"{parts[export_idx]}/.../" + "/".join(tail[-2:])
+
+
+def _log_processor_start(
+    *,
+    export_dir: Path,
+    processor_name: str,
+    idx: int | None,
+    total: int | None,
+    input_dir: Path,
+    working_dir: Path | None,
+    output_dir: str | None,
+) -> None:
+    line = "=" * 78
+    header = (
+        f"PROCESSOR START [{idx}/{total}] {processor_name}"
+        if idx is not None and total is not None
+        else f"PROCESSOR START {processor_name}"
+    )
+
+    logger.info("")
+    logger.info(line)
+    logger.info(header)
+    logger.info("Export: %s", export_dir.name)
+    logger.info("Input:  %s", _short_dir_path(input_dir))
+    if working_dir is not None and working_dir != input_dir:
+        logger.info("Work:   %s", _short_dir_path(working_dir))
+    if output_dir:
+        logger.info("Output: %s", _short_dir_path(Path(output_dir)))
+    logger.info(line)
+
+
+def _log_processor_end(
+    *,
+    processor_name: str,
+    idx: int | None,
+    total: int | None,
+    status: str,
+    elapsed_s: float,
+) -> None:
+    line = "=" * 78
+    header = (
+        f"PROCESSOR END   [{idx}/{total}] {processor_name} | {status} | {elapsed_s:.1f}s"
+        if idx is not None and total is not None
+        else f"PROCESSOR END   {processor_name} | {status} | {elapsed_s:.1f}s"
+    )
+
+    logger.info(line)
+    logger.info(header)
+    logger.info(line)
+    logger.info("")
 
 
 def upload_worker_thread(
@@ -201,10 +287,11 @@ def load_all_processors(registry: ProcessorRegistry, quiet: bool = False) -> Non
 def _build_catalog_worker(
     export_dir_str: str,
     workers: int,
-    log_file: Optional[str] = None,
-    db_path: Optional[str] = None,
-    run_id: Optional[str] = None,
+    log_file: Optional[str],
+    db_path: str,
+    run_id: str,
     preprocessed_dirs_json: Optional[str] = None,
+    processor_filter: Optional[str] = None,
 ) -> tuple[str, int]:
     """Build catalogs for a single export directory (multiprocessing worker).
 
@@ -212,18 +299,17 @@ def _build_catalog_worker(
     catalog building. It re-creates the ProcessorRegistry in the worker process
     since registry instances cannot be pickled across process boundaries.
 
-    When db_path and run_id are provided, entries are written directly to the
-    database for memory-efficient streaming. Otherwise, entries are collected
-    or iterated only for counting (no in-memory accumulation).
+    Entries are written directly to the database for memory-efficient streaming.
 
     Args:
         export_dir_str: Path to the export directory as a string.
         workers: Number of worker threads for hashing within this process.
-        log_file: Optional path to log file for worker output.
-        db_path: Optional path to SQLite database for streaming writes.
-        run_id: Optional unique identifier for this processing run.
+        log_file: Path to log file for worker output, or None.
+        db_path: Path to SQLite database for streaming writes.
+        run_id: Unique identifier for this processing run.
         preprocessed_dirs_json: Optional JSON string mapping
             "export_dir|processor_name" -> "working_dir" for preprocessed exports.
+        processor_filter: Optional processor name to filter to (case-insensitive).
 
     Returns:
         Tuple of (export_dir_name, file_count).
@@ -256,16 +342,22 @@ def _build_catalog_worker(
 
     file_count = 0
 
-    # Initialize database connection if streaming mode
-    db = None
-    if db_path and run_id:
-        from common.dedup.database import HashDatabase
+    # Initialize database connection for streaming writes
+    from common.dedup.database import HashDatabase
 
-        db = HashDatabase(Path(db_path))
+    db = HashDatabase(Path(db_path))
 
     # Detect matching processors that support dedup
     matching_processors = registry.detect_all(export_dir)
     dedup_processors = [p for p in matching_processors if p.supports_dedup()]
+
+    # Filter to specified processor if --processor is used
+    if processor_filter:
+        dedup_processors = [
+            p
+            for p in dedup_processors
+            if p.get_name().lower() == processor_filter.lower()
+        ]
 
     for processor in dedup_processors:
         try:
@@ -275,29 +367,23 @@ def _build_catalog_worker(
             key = f"{export_dir_str}|{processor_name}"
             catalog_dir = preprocessed_dirs.get(key, export_dir_str)
 
-            if db and run_id:
-                # Streaming mode: iterate generator and write entries to database
-                # This never accumulates all entries in memory
-                batch = []
-                for entry in processor.build_catalog(catalog_dir, workers=workers):
-                    # Ensure _processor is set
-                    if "_processor" not in entry:
-                        entry["_processor"] = processor_name
-                    batch.append(entry)
-                    file_count += 1
+            # Stream entries directly to database (never accumulates all in memory)
+            batch = []
+            for entry in processor.build_catalog(catalog_dir, workers=workers):
+                # Ensure _processor is set
+                if "_processor" not in entry:
+                    entry["_processor"] = processor_name
+                batch.append(entry)
+                file_count += 1
 
-                    # Write in batches of 100 for efficiency
-                    if len(batch) >= 100:
-                        db.write_catalog_entries_batch(run_id, export_dir.name, batch)
-                        batch = []
-
-                # Write remaining entries
-                if batch:
+                # Write in batches of 100 for efficiency
+                if len(batch) >= 100:
                     db.write_catalog_entries_batch(run_id, export_dir.name, batch)
-            else:
-                # Legacy mode: just count files from generator
-                for _ in processor.build_catalog(catalog_dir, workers=workers):
-                    file_count += 1
+                    batch = []
+
+            # Write remaining entries
+            if batch:
+                db.write_catalog_entries_batch(run_id, export_dir.name, batch)
 
         except Exception as e:
             logging.warning(
@@ -378,6 +464,11 @@ def run_phased_dedup_processing(
     )
     logger.info("Perceptual threshold: %s", config.perceptual_threshold)
 
+    # Get processor filter if specified via --processor flag
+    processor_filter = getattr(args, "processor", None)
+    if processor_filter:
+        logger.info("Processor filter: %s", processor_filter)
+
     # Initialize database
     db = HashDatabase(config.database_path)
 
@@ -393,6 +484,14 @@ def run_phased_dedup_processing(
         # Detect matching processors that support dedup
         matching_processors = registry.detect_all(export_dir)
         dedup_processors = [p for p in matching_processors if p.supports_dedup()]
+
+        # Filter to specified processor if --processor is used
+        if processor_filter:
+            dedup_processors = [
+                p
+                for p in dedup_processors
+                if p.get_name().lower() == processor_filter.lower()
+            ]
 
         for processor in dedup_processors:
             processor_name = processor.get_name()
@@ -449,7 +548,9 @@ def run_phased_dedup_processing(
 
     catalog_results = []  # List of (export_name, file_count, status) for summary table
     total_files = 0
-    use_parallel_catalog = parse_bool_env(os.environ.get("PARALLEL_CATALOG"), default=True)
+    use_parallel_catalog = parse_bool_env(
+        os.environ.get("PARALLEL_CATALOG"), default=True
+    )
 
     # Convert preprocessed_dirs to JSON-serializable format for workers
     # Key format: "export_dir|processor_name" -> "working_dir"
@@ -486,6 +587,7 @@ def run_phased_dedup_processing(
                     str(config.database_path),  # Pass DB path for streaming
                     run_id,  # Pass run_id for streaming
                     preprocessed_dirs_json,  # Pass preprocessed dirs for catalog
+                    processor_filter,  # Pass processor filter
                 ): export_dir
                 for export_dir in dirs_to_process
             }
@@ -522,6 +624,14 @@ def run_phased_dedup_processing(
             # Detect matching processors that support dedup
             matching_processors = registry.detect_all(export_dir)
             dedup_processors = [p for p in matching_processors if p.supports_dedup()]
+
+            # Filter to specified processor if --processor is used
+            if processor_filter:
+                dedup_processors = [
+                    p
+                    for p in dedup_processors
+                    if p.get_name().lower() == processor_filter.lower()
+                ]
 
             if not dedup_processors:
                 catalog_results.append((export_dir.name, 0, "No processors"))
@@ -612,27 +722,46 @@ def run_phased_dedup_processing(
 
         matching_processors = registry.detect_all(export_dir)
 
-        for processor in matching_processors:
+        # Filter to specified processor if --processor is used
+        if processor_filter:
+            matching_processors = [
+                p
+                for p in matching_processors
+                if p.get_name().lower() == processor_filter.lower()
+            ]
+
+        for idx, processor in enumerate(matching_processors, 1):
             processor_name = processor.get_name()
-            logger.info("  Running: %s", processor_name)
-            try:
-                # Look up preprocessed directory, fall back to original
-                working_dir = preprocessed_dirs.get(
-                    (export_dir, processor_name),
-                    export_dir,
+            # Look up preprocessed directory, fall back to original
+            working_dir = preprocessed_dirs.get(
+                (export_dir, processor_name),
+                export_dir,
+            )
+
+            # Determine output directory using Platform/User structure
+            # Note: Uses original export_dir for username extraction
+            if args.output:
+                output_dir = build_processor_output_path(
+                    processor.get_output_info(),
+                    str(export_dir),
+                    args.output,
                 )
+            else:
+                output_dir = None
 
-                # Determine output directory using Platform/User structure
-                # Note: Uses original export_dir for username extraction
-                if args.output:
-                    output_dir = build_processor_output_path(
-                        processor.get_output_info(),
-                        str(export_dir),
-                        args.output,
-                    )
-                else:
-                    output_dir = None
+            _log_processor_start(
+                export_dir=export_dir,
+                processor_name=processor_name,
+                idx=idx,
+                total=len(matching_processors),
+                input_dir=export_dir,
+                working_dir=working_dir,
+                output_dir=output_dir,
+            )
 
+            started = perf_counter()
+            status = "ERROR"
+            try:
                 kwargs = {
                     "workers": args.workers,
                     "temp_dir": temp_dir,
@@ -644,6 +773,7 @@ def run_phased_dedup_processing(
 
                 if success:
                     success_count += 1
+                    status = "SUCCESS"
                     results.append(
                         (f"{export_dir.name}/{processor.get_name()}", "SUCCESS")
                     )
@@ -667,6 +797,7 @@ def run_phased_dedup_processing(
                             )
                 else:
                     failed_count += 1
+                    status = "FAILED"
                     results.append(
                         (f"{export_dir.name}/{processor.get_name()}", "FAILED")
                     )
@@ -674,7 +805,16 @@ def run_phased_dedup_processing(
             except Exception as e:
                 logger.error("    ERROR: %s", e)
                 failed_count += 1
+                status = "ERROR"
                 results.append((f"{export_dir.name}/{processor.get_name()}", "ERROR"))
+            finally:
+                _log_processor_end(
+                    processor_name=processor_name,
+                    idx=idx,
+                    total=len(matching_processors),
+                    status=status,
+                    elapsed_s=perf_counter() - started,
+                )
 
     phase_header("DEDUP PROCESSING COMPLETE")
     logger.info("Results: %d succeeded, %d failed", success_count, failed_count)
@@ -934,10 +1074,29 @@ def process_single_export(
     upload_tasks = []  # Collect upload tasks if queuing
 
     for idx, processor in enumerate(matching_processors, 1):
-        logger.info(
-            "[%d/%d] Running: %s", idx, len(matching_processors), processor.get_name()
+        processor_name = processor.get_name()
+        # Determine output directory using Platform/User structure
+        if args.output:
+            output_dir = build_processor_output_path(
+                processor.get_output_info(),
+                str(input_path),
+                args.output,
+            )
+        else:
+            output_dir = None
+
+        _log_processor_start(
+            export_dir=input_path,
+            processor_name=processor_name,
+            idx=idx,
+            total=len(matching_processors),
+            input_dir=input_path,
+            working_dir=None,
+            output_dir=output_dir,
         )
 
+        started = perf_counter()
+        status = "ERROR"
         try:
             # Prepare kwargs for processor
             kwargs = {}
@@ -947,25 +1106,13 @@ def process_single_export(
             # Pass temp_dir to processors
             kwargs["temp_dir"] = temp_dir
 
-            # Determine output directory using Platform/User structure
-            if args.output:
-                output_dir = build_processor_output_path(
-                    processor.get_output_info(),
-                    str(input_path),
-                    args.output,
-                )
-            else:
-                output_dir = None
-
             # Run processor
             success = processor.process(str(input_path), output_dir, **kwargs)
 
             if success:
                 success_count += 1
                 status = "SUCCESS"
-                logger.info(
-                    "%s: %s completed successfully", status, processor.get_name()
-                )
+                logger.info("%s: %s completed successfully", status, processor_name)
 
                 # Compute effective output directory for uploads
                 # This is the Platform/User path plus service subdirectory
@@ -1033,7 +1180,7 @@ def process_single_export(
             else:
                 failed_count += 1
                 status = "FAILED"
-                logger.error("%s: %s failed", status, processor.get_name())
+                logger.error("%s: %s failed", status, processor_name)
 
             results.append((processor.get_name(), status))
 
@@ -1045,8 +1192,16 @@ def process_single_export(
         except Exception as e:
             failed_count += 1
             status = f"ERROR: {e}"
-            logger.error("%s failed with exception: %s", processor.get_name(), e)
+            logger.error("%s failed with exception: %s", processor_name, e)
             results.append((processor.get_name(), "ERROR"))
+        finally:
+            _log_processor_end(
+                processor_name=processor_name,
+                idx=idx,
+                total=len(matching_processors),
+                status=status,
+                elapsed_s=perf_counter() - started,
+            )
 
     # Summary
     separator = "=" * 70
@@ -1078,6 +1233,8 @@ def process_single_export(
 def _collect_upload_files(path: Path, ignore_patterns: list[str]) -> list[Path]:
     """Collect all files that will be uploaded from a directory.
 
+    Uses common/files/scanner.iter_all_files for consistent file scanning.
+
     Args:
         path: Path to scan for files
         ignore_patterns: List of glob patterns to ignore
@@ -1085,63 +1242,15 @@ def _collect_upload_files(path: Path, ignore_patterns: list[str]) -> list[Path]:
     Returns:
         List of file paths that will be uploaded
     """
-    import fnmatch
-
-    files_to_upload = []
+    from common.files.scanner import iter_all_files
 
     if not path.exists():
-        return files_to_upload
+        return []
 
     if path.is_file():
-        files_to_upload.append(path)
-        return files_to_upload
+        return [path]
 
-    # Walk directory recursively
-    for root, _dirs, files in os.walk(path):
-        root_path = Path(root)
-
-        # Check if this directory should be ignored
-        relative_root = root_path.relative_to(path)
-        skip_dir = False
-        for pattern in ignore_patterns:
-            # Check if any part of the path matches the ignore pattern
-            for part_idx in range(len(relative_root.parts) + 1):
-                test_path = (
-                    str(Path(*relative_root.parts[:part_idx])) if part_idx > 0 else ""
-                )
-                if fnmatch.fnmatch(
-                    test_path, pattern.replace("**/", "").replace("/**", "")
-                ):
-                    skip_dir = True
-                    break
-            if skip_dir:
-                break
-
-        if skip_dir:
-            continue
-
-        for file in files:
-            file_path = root_path / file
-
-            # Skip hidden files by default
-            if file.startswith("."):
-                continue
-
-            # Check if file should be ignored based on patterns
-            relative_file = file_path.relative_to(path)
-            should_ignore = False
-
-            for pattern in ignore_patterns:
-                if fnmatch.fnmatch(
-                    str(relative_file), pattern.replace("**/", "").replace("/**", "")
-                ):
-                    should_ignore = True
-                    break
-
-            if not should_ignore:
-                files_to_upload.append(file_path)
-
-    return sorted(files_to_upload)
+    return list(iter_all_files(path, ignore_patterns=ignore_patterns, skip_hidden=True))
 
 
 def _scan_platform_username_service_structure(
@@ -1296,8 +1405,7 @@ def upload_only_mode(
     immich_concurrency: int,
     immich_skip_hash: bool,
 ) -> int:
-    """Handle upload-only mode: upload existing processed files to Immich.
-    """
+    """Handle upload-only mode: upload existing processed files to Immich."""
     from datetime import datetime
 
     logger.info("Upload-only mode")

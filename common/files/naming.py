@@ -45,6 +45,8 @@ class FilenameGenerator:
     Filenames follow the Platform/User/Service order used across outputs:
       - Single-service: {platform}-{username}-{date}
       - Multi-service:  {platform}-{username}-{service}-{date}
+
+    All timestamps are in canonical ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ).
     """
 
     def __init__(
@@ -52,14 +54,12 @@ class FilenameGenerator:
         platform: str,
         username: str,
         service: Optional[str] = None,
-        timestamp_format: str = "%Y-%m-%d %H:%M:%S",
         sequence_start: int = 2,
     ):
         # Sanitize components for safe filenames (lowercase, no special chars)
         self.platform = sanitize_filename(platform)
         self.username = sanitize_filename(username)
         self.service = sanitize_filename(service) if service else None
-        self.timestamp_format = timestamp_format
         self.sequence_start = sequence_start
         self.used_filenames: Set[str] = set()
 
@@ -81,7 +81,7 @@ class FilenameGenerator:
         return self._ensure_unique(base, extension)
 
     def _parse_date(self, timestamp_str: Optional[str]) -> str:
-        """Parse timestamp to YYYYMMDD format.
+        """Parse canonical ISO 8601 timestamp to YYYYMMDD format.
 
         Raises:
             InvariantViolation: If timestamp is missing or unparseable.
@@ -93,7 +93,7 @@ class FilenameGenerator:
                 f"FilenameGenerator.generate() called with missing timestamp "
                 f"(platform={self.platform}, username={self.username})"
             )
-        dt = parse_timestamp_flexible(timestamp_str, self.timestamp_format)
+        dt = parse_timestamp_flexible(timestamp_str)
         if dt:
             return dt.strftime("%Y%m%d")
         raise InvariantViolation(

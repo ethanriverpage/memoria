@@ -28,6 +28,7 @@ from common.media.exiftool import (
 from common.output.logging import get_processor_logger
 from common.output.paths import OutputInfo
 from common.output.summary import print_processing_summary
+from common.output.progress import PHASE_PROCESS, progress_bar
 from common.processing import process_batches_parallel
 from processors.base import MediaCopyTask, ProcessorBase
 from processors.google_photos.preprocess import GooglePhotosPreprocessor
@@ -172,45 +173,21 @@ class GooglePhotosProcessor(ProcessorBase):
         logger.warning("Directory not preprocessed, skipping catalog: %s", input_path)
 
     @classmethod
-    def process(
+    def _process_impl(
         cls,
         input_dir: str,
-        output_dir: Optional[str] = None,
+        output_dir: str,
         dedup_manifest: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> bool:
         """Process Google Photos export."""
-        # Check for required dependencies
-        if not cls.check_dependencies():
-            return False
-
-        try:
-            # Choose content-type subdirectory under provided base output
-            if output_dir:
-                processor_output = str(Path(output_dir) / "photos")
-            else:
-                processor_output = kwargs.get("output", "final_googlephotos/photos")
-
-            # Call processing logic directly
-            process_logic(
-                input_dir=input_dir,
-                output_dir=processor_output,
-                workers=kwargs.get("workers"),
-                dedup_manifest=dedup_manifest,
-            )
-            return True
-
-        except Exception as e:
-            log.logger.error("Error in GooglePhotosProcessor: %s", e)
-            return False
-
-
-def _clean_iso_timestamp(timestamp_str: str) -> str:
-    """Remove timezone suffix from ISO 8601 timestamp for parsing."""
-    if not timestamp_str:
-        return ""
-    # Remove Z or timezone offset for parsing
-    return timestamp_str.replace("Z", "").replace("+00:00", "")
+        process_logic(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            workers=kwargs.get("workers"),
+            dedup_manifest=dedup_manifest,
+        )
+        return True
 
 
 def get_live_photo_group_key(media_data):
@@ -414,7 +391,12 @@ def _process_working_directory(
     # Map: live_photo_group_key -> list of (media_data, file_ext)
     live_photo_groups = {}
 
-    for media_data in media_files:
+    for media_data in progress_bar(
+        media_files,
+        PHASE_PROCESS,
+        "Grouping live photos",
+        total=len(media_files),
+    ):
         media_file = media_data.get("filename")
         if not media_file:
             continue
@@ -430,7 +412,6 @@ def _process_working_directory(
         "google",
         export_username,
         service="photos",
-        timestamp_format="%Y-%m-%dT%H:%M:%S",
     )
     live_photo_bases = {}  # Map: live_photo_key -> base filename (without extension)
 
@@ -438,7 +419,12 @@ def _process_working_directory(
     missing_source_path = 0
     missing_examples: list[str] = []
 
-    for media_data in media_files:
+    for media_data in progress_bar(
+        media_files,
+        PHASE_PROCESS,
+        "Preparing tasks",
+        total=len(media_files),
+    ):
         media_file = media_data.get("filename")
 
         if not media_file:
@@ -455,9 +441,8 @@ def _process_working_directory(
         else:
             # Generate filename using FilenameGenerator (mechanism handles uniqueness)
             timestamp_str = media_data.get("capture_timestamp")
-            timestamp_clean = _clean_iso_timestamp(timestamp_str)
             canonical_ts = get_canonical_timestamp(
-                dedup_manifest, media_data.get("content_hash"), timestamp_clean
+                dedup_manifest, media_data.get("content_hash"), timestamp_str
             )
             media_data["canonical_timestamp"] = canonical_ts
             output_filename = filename_gen.generate(canonical_ts, file_ext)
@@ -510,7 +495,6 @@ def _process_working_directory(
                     original_filename,
                 ),
                 timestamp_str=media_data.get("capture_timestamp"),
-                timestamp_format="%Y-%m-%dT%H:%M:%S",
             )
         )
 

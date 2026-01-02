@@ -12,12 +12,10 @@ from common.dedup.config import (
     DedupConfig,
     get_dedup_config,
     is_dedup_enabled,
-    reset_config,
 )
 from common.dedup.database import HashDatabase, HashDatabaseProtocol
 from common.dedup.hashing import (
     compute_content_hash,
-    compute_image_hash,
     compute_image_hash_with_dims,
     compute_video_hash_with_dims,
     compute_perceptual_hash_with_dims,
@@ -25,16 +23,10 @@ from common.dedup.hashing import (
     get_image_dimensions,
     get_video_dimensions,
     hash_similarity,
-    is_perceptual_hash_available,
     # Live Photo utilities
     is_live_photo_pair,
     find_live_photo_video,
-    # Constants
-    PERCEPTION_AVAILABLE,
-    HEIC_AVAILABLE,
-    DEFAULT_HASH_SIZE,
 )
-from common.dedup.catalog import catalog_media_files
 from common.dedup.description import (
     # Constants
     PLATFORM_GOOGLE,
@@ -52,11 +44,7 @@ from common.dedup.description import (
     SERVICE_REELS,
     # Processor mapping
     PROCESSOR_TO_PLATFORM_SERVICE,
-    CONSOLIDATING_PROCESSORS,
     get_platform_service,
-    is_consolidating_processor,
-    # Source comparison helpers
-    format_relative_source_path,
     # Data structures
     SourceEntry,
     # Core building functions
@@ -66,7 +54,6 @@ from common.dedup.description import (
     build_image_description,
     # Helper functions
     create_source_entry,
-    truncate_text,
     format_timestamp,
     format_primary_source,
     format_secondary_source,
@@ -89,13 +76,11 @@ __all__ = [
     "DedupConfig",
     "get_dedup_config",
     "is_dedup_enabled",
-    "reset_config",
     # Database
     "HashDatabase",
     "HashDatabaseProtocol",
     # Hashing
     "compute_content_hash",
-    "compute_image_hash",
     "compute_image_hash_with_dims",
     "compute_video_hash_with_dims",
     "compute_perceptual_hash_with_dims",
@@ -103,14 +88,8 @@ __all__ = [
     "get_image_dimensions",
     "get_video_dimensions",
     "hash_similarity",
-    "is_perceptual_hash_available",
     "is_live_photo_pair",
     "find_live_photo_video",
-    "PERCEPTION_AVAILABLE",
-    "HEIC_AVAILABLE",
-    "DEFAULT_HASH_SIZE",
-    # Catalog
-    "catalog_media_files",
     # Description - Constants
     "PLATFORM_GOOGLE",
     "PLATFORM_INSTAGRAM",
@@ -127,11 +106,7 @@ __all__ = [
     "SERVICE_REELS",
     # Description - Processor mapping
     "PROCESSOR_TO_PLATFORM_SERVICE",
-    "CONSOLIDATING_PROCESSORS",
     "get_platform_service",
-    "is_consolidating_processor",
-    # Description - Source comparison helpers
-    "format_relative_source_path",
     # Description - Data structures
     "SourceEntry",
     # Description - Core building functions
@@ -141,7 +116,6 @@ __all__ = [
     "build_image_description",
     # Description - Helper functions
     "create_source_entry",
-    "truncate_text",
     "format_timestamp",
     "format_primary_source",
     "format_secondary_source",

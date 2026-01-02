@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from common.files.filter import BannedFilesFilter
-from common.files.types import get_media_type, get_gps_format
+from common.files.types import get_media_type, get_gps_format, MediaType
 from common.files.utils import short_path
 from common.output.progress import PHASE_EXIF, chunked_progress
 from common.validation.invariants import InvariantViolation, validate_gps
@@ -641,9 +641,9 @@ def batch_write_metadata_requests(
 
                         media_type = get_media_type(request.file_path)
 
-                        if media_type == "image":
+                        if media_type == MediaType.IMAGE:
                             tags_to_write = request.description.image_tags
-                        elif media_type == "video":
+                        elif media_type == MediaType.VIDEO:
                             tags_to_write = request.description.video_tags
                         else:
                             tags_to_write = []

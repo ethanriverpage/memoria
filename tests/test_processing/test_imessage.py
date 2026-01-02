@@ -229,7 +229,6 @@ class TestIMessageLivePhotoPairing:
         filename_gen = FilenameGenerator(
             "imessage",
             "testuser",
-            timestamp_format="%Y-%m-%d %H:%M:%S UTC",
         )
 
         # Simulate metadata from preprocessing:
@@ -322,7 +321,6 @@ class TestIMessageLivePhotoPairing:
         filename_gen = FilenameGenerator(
             "imessage",
             "testuser",
-            timestamp_format="%Y-%m-%d %H:%M:%S UTC",
         )
 
         # Same timestamp for all three files:
@@ -432,7 +430,6 @@ class TestIMessageLivePhotoPairing:
         filename_gen = FilenameGenerator(
             "imessage",
             "testuser",
-            timestamp_format="%Y-%m-%d %H:%M:%S UTC",
         )
 
         # Video claims to be live photo but references non-existent pair key
@@ -1029,7 +1026,7 @@ class TestIMessageCrossExportLivePhotoPairing:
         )
 
         assert base is not None, "Should find base from manifest"
-        assert "imessage-testuser-20230526-120000" == base
+        assert base == "imessage-testuser-20230526"
 
     def test_cross_export_fallback_without_manifest_entry(self, tmp_path):
         """MOV should fall back to independent name when HEIC hash not in manifest."""
@@ -1097,7 +1094,7 @@ class TestIMessageCrossExportLivePhotoPairing:
                 )
 
         assert matched_base is not None, "Should find base via cross-export fallback"
-        assert matched_base == "imessage-testuser-20230526-120000"
+        assert matched_base == "imessage-testuser-20230526"
 
         output_filename = f"{matched_base}.mov"
-        assert output_filename == "imessage-testuser-20230526-120000.mov"
+        assert output_filename == "imessage-testuser-20230526.mov"

@@ -13,20 +13,19 @@ logger = logging.getLogger(__name__)
 def update_file_timestamps(
     file_path,
     timestamp_str: Optional[str],
-    timestamp_format: str = "%Y-%m-%d %H:%M:%S",
 ) -> bool:
     """Set file atime/mtime to match the given timestamp string.
 
-    Supports ISO-8601 timestamps (including timezone offsets like +00:00, Z suffix,
-    and T separator) as well as legacy formats via the timestamp_format parameter.
+    All preprocessors store timestamps in canonical ISO 8601 format
+    (YYYY-MM-DDTHH:MM:SSZ), parsed automatically by parse_timestamp_flexible.
     """
     try:
         # Handle None or empty timestamp
         if not timestamp_str:
             return False
 
-        # Use flexible parsing that handles ISO-8601 and legacy formats
-        date_obj = parse_timestamp_flexible(timestamp_str, timestamp_format)
+        # Parse canonical ISO-8601 format
+        date_obj = parse_timestamp_flexible(timestamp_str)
         if date_obj is None:
             logger.warning(
                 f"Failed to update timestamps for {file_path}: "

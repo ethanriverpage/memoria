@@ -14,8 +14,6 @@ This package provides:
 from common.files.utils import (
     copy_file,
     batch_correct_extensions,
-    get_mime_type,
-    MIME_TO_EXTENSION,
     short_path,
     get_export_name,
 )
@@ -36,7 +34,6 @@ from common.files.types import (
     LIVE_PHOTO_VIDEO_EXTENSIONS,
     EXIF_BEARING_EXTENSIONS,
     get_media_type,
-    is_supported_media,
     get_gps_format,
 )
 from common.files.timestamps import update_file_timestamps
@@ -46,8 +43,6 @@ __all__ = [
     # File utilities
     "copy_file",
     "batch_correct_extensions",
-    "get_mime_type",
-    "MIME_TO_EXTENSION",
     "short_path",
     "get_export_name",
     # Scanner
@@ -67,7 +62,6 @@ __all__ = [
     "LIVE_PHOTO_VIDEO_EXTENSIONS",
     "EXIF_BEARING_EXTENSIONS",
     "get_media_type",
-    "is_supported_media",
     "get_gps_format",
     # Timestamps
     "update_file_timestamps",

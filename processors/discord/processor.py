@@ -94,6 +94,11 @@ class DiscordProcessor(ProcessorBase):
             username_prefix="discord",
         )
 
+    @classmethod
+    def get_output_subdirectory(cls) -> str:
+        # Discord uses "messages" as output subdirectory (service is None)
+        return "messages"
+
     @staticmethod
     def supports_dedup() -> bool:
         return True
@@ -185,37 +190,21 @@ class DiscordProcessor(ProcessorBase):
             )
 
     @classmethod
-    def process(
+    def _process_impl(
         cls,
         input_dir: str,
-        output_dir: Optional[str] = None,
+        output_dir: str,
         dedup_manifest: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> bool:
         """Process Discord export."""
-        # Check for required dependencies
-        if not cls.check_dependencies():
-            return False
-
-        try:
-            # Create messages subdirectory under output
-            if output_dir:
-                processor_output = str(Path(output_dir) / "messages")
-            else:
-                processor_output = kwargs.get("output", "final_discord/messages")
-
-            # Call processing logic
-            process_logic(
-                input_dir=input_dir,
-                output_dir=processor_output,
-                workers=kwargs.get("workers"),
-                dedup_manifest=dedup_manifest,
-            )
-            return True
-
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.exception(f"Error in DiscordProcessor: {e}")
-            return False
+        process_logic(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            workers=kwargs.get("workers"),
+            dedup_manifest=dedup_manifest,
+        )
+        return True
 
 
 def _build_description(message_info: dict, export_username: str) -> str:
@@ -347,12 +336,12 @@ def _process_file_worker(args_tuple):
         # Copy file to output
         copy_file(media_path, output_path)
 
-        # Update filesystem timestamps - Discord uses "YYYY-MM-DD HH:MM:SS UTC" format
+        # Update filesystem timestamps
         timestamp_str = message_info["message"].get(
             "canonical_timestamp"
         ) or message_info["message"].get("timestamp", "")
         if timestamp_str:
-            update_file_timestamps(output_path, timestamp_str, "%Y-%m-%d %H:%M:%S")
+            update_file_timestamps(output_path, timestamp_str)
 
         return (
             True,
@@ -521,9 +510,7 @@ def _process_working_directory(
     log.logger.info("Matching files to metadata...")
     matched_files = []
     orphaned_media_files = []
-    filename_gen = FilenameGenerator(
-        "discord", export_username, timestamp_format="%Y-%m-%d %H:%M:%S"
-    )
+    filename_gen = FilenameGenerator("discord", export_username)
 
     for media_file in media_files:
         if media_file.name in filename_index:

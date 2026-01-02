@@ -136,3 +136,33 @@ def chunked_progress(
         for chunk in chunks:
             yield chunk
             progress.advance(task)
+
+
+def streaming_progress(
+    iterable: Iterable[T],
+    phase: str,
+    action: str,
+    total: Optional[int] = None,
+) -> Generator[T, None, None]:
+    """Wrap an iterable with a progress bar without materializing it.
+
+    Unlike progress_bar(), this function does not convert the iterable to a list
+    when total is unknown. This is important for large directory scans where we
+    want a single-pass iterator.
+
+    Args:
+        iterable: The iterable to wrap
+        phase: Phase name (use PHASE_* constants)
+        action: Action description (e.g., "Scanning orphaned media")
+        total: Total count if known. If None, the progress bar is indeterminate.
+
+    Yields:
+        Items from the iterable with progress updates
+    """
+    description = f"[{phase}] {action}"
+
+    with _create_progress() as progress:
+        task = progress.add_task(description, total=total)
+        for item in iterable:
+            yield item
+            progress.advance(task)

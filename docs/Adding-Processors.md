@@ -175,7 +175,7 @@ class MyPlatformPreprocessor(PreprocessorBase):
 - **Hash caching**: File hashes are cached in SQLite for faster repeated processing
 - **Thread-safe logging**: Use `log_message()` for thread-safe log entries
 - **Failure tracking**: Built-in `FailureTracker` for reporting missing/bad files without crashing
-- **Issue recording**: Use `set_unmatched_media()` and `set_ambiguous_cases()` to record issues for processor materialization
+- **Issue recording**: Use `add_unmatched_media()` and `set_ambiguous_cases()` to record issues for processor materialization
 - **Standardized metadata**: `save_metadata()` builds/validates the schema and writes `metadata.json`
 
 See `processors/discord/preprocess.py` or `processors/instagram_messages/preprocess.py` for complete examples.

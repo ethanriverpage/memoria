@@ -8,7 +8,17 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    cast,
+)
 
 if TYPE_CHECKING:
     from common.failures import FailureTracker
@@ -23,11 +33,10 @@ from common.config.dependencies import (
     print_pillow_error,
 )
 from common.files.utils import short_path
-from common.metadata.schema import validate_metadata
+from common.metadata.schema import PreprocessedMetadata, validate_metadata
 from common.output.paths import OutputInfo
 from common.output.progress import PHASE_PROCESS
 from common.processing import (
-    process_batches_parallel as _process_batches_parallel,
     process_items_parallel as _process_items_parallel,
 )
 from common.validation.invariants import (
@@ -48,13 +57,23 @@ class MediaCopyTask:
 
     The worker returns (success, output_path, file_info_tuple) where file_info_tuple
     is (output_path, *info_rest). The exact contents of info_rest are processor-specific.
+
+    Attributes:
+        source_path: Absolute path to the source file.
+        dest_path: Target path for the copied file.
+        info_rest: Processor-specific metadata tuple. This is intentionally typed as
+            Tuple[Any, ...] because each processor passes different data structures:
+            - Messaging processors: (message_dict, conversation_name, username, hash, filename)
+            - Media processors: (post_dict, username, media_type, hash, filename)
+            The first element is always a TypedDict (MessageEntry, PostEntry, etc.)
+            but the generic tuple type allows processors flexibility in their workflows.
+        timestamp_str: Optional timestamp string for filesystem timestamp correction.
     """
 
     source_path: str
     dest_path: str
     info_rest: Tuple[Any, ...]
     timestamp_str: Optional[str] = None
-    timestamp_format: Optional[str] = None
 
 
 @dataclass
@@ -182,7 +201,30 @@ class ProcessorBase(ABC):
         pass
 
     @classmethod
-    @abstractmethod
+    def get_output_subdirectory(cls) -> str:
+        """Return the output subdirectory name under the base output directory.
+
+        Defaults to the service from get_output_info(), or the platform name
+        in lowercase if no service is defined.
+
+        Override in subclasses if a different subdirectory is needed.
+        """
+        output_info = cls.get_output_info()
+        return output_info.service or output_info.platform.lower()
+
+    @classmethod
+    def get_default_output(cls) -> str:
+        """Return the default output path when no output_dir is provided.
+
+        Used by the process() template when kwargs["output"] is not specified.
+        Format: final_{platform}/{subdirectory}
+        """
+        output_info = cls.get_output_info()
+        platform = output_info.platform.lower().replace(" ", "_")
+        subdir = cls.get_output_subdirectory()
+        return f"final_{platform}/{subdir}"
+
+    @classmethod
     def process(
         cls,
         input_dir: str,
@@ -190,7 +232,72 @@ class ProcessorBase(ABC):
         dedup_manifest: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> bool:
-        """Process the input directory."""
+        """Process the input directory.
+
+        Template method that handles dependency checking, output directory
+        calculation, and error handling. Subclasses implement _process_impl()
+        for their specific processing logic.
+
+        Subclasses that need completely custom processing behavior (e.g.,
+        iMessage's process_consolidated delegation) can override this method.
+
+        Args:
+            input_dir: Path to input directory.
+            output_dir: Optional base output directory. If provided, the
+                processor's subdirectory is appended.
+            dedup_manifest: Optional deduplication manifest.
+            **kwargs: Additional arguments passed to _process_impl().
+
+        Returns:
+            True if processing succeeded, False otherwise.
+        """
+        if not cls.check_dependencies():
+            return False
+
+        try:
+            # Calculate processor output directory
+            if output_dir:
+                processor_output = str(Path(output_dir) / cls.get_output_subdirectory())
+            else:
+                processor_output = (
+                    kwargs.pop("output", None) or cls.get_default_output()
+                )
+
+            return cls._process_impl(
+                input_dir=input_dir,
+                output_dir=processor_output,
+                dedup_manifest=dedup_manifest,
+                **kwargs,
+            )
+
+        except Exception as e:
+            logger.error("Error in %s: %s", cls.get_name(), e)
+            return False
+
+    @classmethod
+    @abstractmethod
+    def _process_impl(
+        cls,
+        input_dir: str,
+        output_dir: str,
+        dedup_manifest: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> bool:
+        """Implement processor-specific processing logic.
+
+        Called by process() after dependency checking and output directory
+        calculation. The output_dir parameter is already the final path
+        including the processor's subdirectory.
+
+        Args:
+            input_dir: Path to input directory.
+            output_dir: Final output directory path (includes subdirectory).
+            dedup_manifest: Optional deduplication manifest.
+            **kwargs: Additional arguments (workers, etc.).
+
+        Returns:
+            True if processing succeeded, False otherwise.
+        """
         pass
 
     @staticmethod
@@ -467,34 +574,13 @@ class ProcessorBase(ABC):
         )
 
     @classmethod
-    def process_batches_parallel(
-        cls,
-        tasks: List[Any],
-        worker_fn: Callable[[List[Any]], List[Any]],
-        num_workers: int,
-        *,
-        batch_size: int = 100,
-        phase: str = PHASE_PROCESS,
-        description: str = "Processing",
-    ) -> List[Any]:
-        """Process tasks in batches with shared multiprocessing + progress handling."""
-        return _process_batches_parallel(
-            tasks=tasks,
-            worker_fn=worker_fn,
-            num_workers=num_workers,
-            batch_size=batch_size,
-            phase=phase,
-            description=description,
-        )
-
-    @classmethod
     def load_metadata(
         cls,
         metadata_path: Path,
         validate: bool = False,
         require_source_paths: bool = True,
         processor_name: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> PreprocessedMetadata:
         """Load and optionally validate metadata.json.
 
         Args:
@@ -503,14 +589,15 @@ class ProcessorBase(ABC):
             require_source_paths: If validating, whether source_paths are required.
 
         Returns:
-            Parsed metadata dictionary.
+            Parsed metadata as PreprocessedMetadata TypedDict. Type checkers can
+            use this to validate field access (e.g., metadata["export_info"]).
 
         Raises:
             MetadataValidationError: If validation is enabled and fails.
             InvariantViolation: If export username is unknown.
         """
         with open(metadata_path, "r", encoding="utf-8") as f:
-            metadata = json.load(f)
+            metadata = cast(PreprocessedMetadata, json.load(f))
 
         if validate:
             validate_metadata(metadata, require_source_paths=require_source_paths)
@@ -619,31 +706,6 @@ class ProcessorBase(ABC):
             return False
 
         return True
-
-    @staticmethod
-    def validate_working_directory(
-        working_dir: Path,
-    ) -> Optional[Path]:
-        """Validate working directory has required structure.
-
-        Checks for existence of metadata.json. Preprocessed directories
-        contain only metadata.json (with source_path entries); no media/
-        directory is expected.
-
-        Args:
-            working_dir: Path to working directory to validate.
-
-        Returns:
-            Path to metadata.json if valid, or None if invalid.
-        """
-        working_dir = Path(working_dir)
-        metadata_path = working_dir / "metadata.json"
-
-        if not metadata_path.exists():
-            logger.error("Metadata file not found: %s", metadata_path)
-            return None
-
-        return metadata_path
 
     @staticmethod
     def materialize_ambiguous_cases(
@@ -1103,30 +1165,6 @@ class ProcessorBase(ABC):
         return filename_index
 
     @staticmethod
-    def build_flat_filename_index(
-        items: List[Dict[str, Any]],
-        filename_key: str = "media_filename",
-    ) -> Dict[str, Dict[str, Any]]:
-        """Build index mapping media filename to item metadata.
-
-        Simple version for flat list structures without conversation nesting
-        (e.g., snapchat_memories).
-
-        Args:
-            items: List of item dictionaries.
-            filename_key: Key containing the media filename.
-
-        Returns:
-            Dict mapping filename -> item dict
-        """
-        filename_index: Dict[str, Dict[str, Any]] = {}
-        for item in items:
-            filename = item.get(filename_key)
-            if filename:
-                filename_index[filename] = item
-        return filename_index
-
-    @staticmethod
     def collect_processing_results(
         results: List[Tuple],
         info_extractor: Optional[Callable[[Tuple], Optional[Tuple]]] = None,
@@ -1190,29 +1228,6 @@ class ProcessorBase(ABC):
 
         return collected
 
-    @staticmethod
-    def collect_batch_processing_results(
-        batch_results: List[List[Tuple]],
-        info_extractor: Optional[Callable[[Tuple], Optional[Tuple]]] = None,
-    ) -> "ProcessingResults":
-        """Collect processing results from batched/nested result lists.
-
-        Flattens nested batch results and collects into unified structure.
-        Used when processing is done in batches that each return a list of results.
-
-        Args:
-            batch_results: List of result batches, where each batch is a list
-                of result tuples.
-            info_extractor: Optional callable for custom info extraction.
-                See collect_processing_results for details.
-
-        Returns:
-            ProcessingResults containing counts and collected file data.
-        """
-        # Flatten batch results and delegate to standard collector
-        flattened = [result for batch in batch_results for result in batch]
-        return ProcessorBase.collect_processing_results(flattened, info_extractor)
-
     # =========================================================================
     # Shared worker functions (multiprocessing-safe)
     # =========================================================================
@@ -1248,7 +1263,7 @@ class ProcessorBase(ABC):
             try:
                 copy_file(src, dst)
                 file_info.append((dst, *task.info_rest))
-                timestamp_meta.append((task.timestamp_str, task.timestamp_format))
+                timestamp_meta.append(task.timestamp_str)
             except Exception as e:  # noqa: BLE001
                 logger.error("Failed to copy %s: %s", short_path(src), e)
                 results.append((False, None, None))
@@ -1259,12 +1274,9 @@ class ProcessorBase(ABC):
         # Phase 2: Update timestamps and compile results
         for idx, info in enumerate(file_info):
             output_path = info[0]
-            timestamp_str, timestamp_format = timestamp_meta[idx]
+            timestamp_str = timestamp_meta[idx]
             if timestamp_str:
-                if timestamp_format:
-                    update_file_timestamps(output_path, timestamp_str, timestamp_format)
-                else:
-                    update_file_timestamps(output_path, timestamp_str)
+                update_file_timestamps(output_path, timestamp_str)
             results.append((True, output_path, info))
 
         return results

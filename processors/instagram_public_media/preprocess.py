@@ -21,7 +21,7 @@ from common.output.progress import PHASE_PREPROCESS
 from common.output.summary import print_preprocessing_stats
 from common.processing import process_parallel_threaded
 from common.text.normalize import normalize_text
-from processors.preprocess_base import CopyTask, PreprocessorBase
+from processors.preprocess_base import CopyTask, HashResult, PreprocessorBase
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -175,12 +175,14 @@ class InstagramPreprocessor(PreprocessorBase):
 
     def parse_timestamp(self, timestamp_str: str) -> Optional[str]:
         """
-        Convert timestamp string to ISO format
+        Convert timestamp string to canonical ISO 8601 format.
         Input formats:
           - New (2025+): "Oct 02, 2022 5:58 pm"
           - Legacy (2022): "Oct 02, 2022, 5:58 PM" (extra comma after year)
-        Output format: "2022-10-02 17:58:00"
+        Output format: "2022-10-02T17:58:00Z"
         """
+        from common.text.parse import CANONICAL_TIMESTAMP_FORMAT
+
         # Try both timestamp formats (new format first, then legacy with comma)
         formats = [
             "%b %d, %Y %I:%M %p",  # New format: "Oct 02, 2022 5:58 pm"
@@ -190,7 +192,7 @@ class InstagramPreprocessor(PreprocessorBase):
         for fmt in formats:
             try:
                 dt = datetime.strptime(timestamp_str, fmt)
-                return dt.strftime("%Y-%m-%d %H:%M:%S")
+                return dt.strftime(CANONICAL_TIMESTAMP_FORMAT)
             except ValueError:
                 continue
 

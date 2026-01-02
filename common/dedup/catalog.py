@@ -20,6 +20,7 @@ from common.dedup.hashing import (
 from common.output.progress import PHASE_CATALOG, futures_progress
 from common.files.filter import BannedFilesFilter
 from common.files.utils import short_path, get_export_name
+from common.metadata.schema import get_entry_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +263,7 @@ def _build_catalog_entry_from_metadata(
         "perceptual_hash": perceptual_hash,
         "file_size": file_size,
         "dimensions": dimensions,
-        "timestamp": entry.get("capture_timestamp") or entry.get("timestamp"),
+        "timestamp": get_entry_timestamp(entry),
         "metadata": metadata,
         "_processor": processor_name,
     }

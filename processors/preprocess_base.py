@@ -20,13 +20,12 @@ import logging
 import os
 import re
 from abc import ABC, abstractmethod
-from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable, Dict, Generator, List, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 import json
 
@@ -353,33 +352,6 @@ class PreprocessorBase(ABC):
         # Activate guard after initialization to prevent direct _context_merger assignment
         self._context_merger_guard_active = True
 
-    @classmethod
-    @contextmanager
-    def temp_output_dir(
-        cls, base_dir: Union[str, Path], prefix: str
-    ) -> Generator[Path, None, None]:
-        """Create a temporary preprocessing output directory (with cleanup).
-
-        This standardizes the temp directory lifecycle across processors.
-        Directories are created under `base_dir` with a unique suffix and are
-        automatically cleaned up on context exit unless temp cleanup is disabled.
-
-        Cleanup behavior is controlled by `DISABLE_PREPROCESSING_CLEANUP` via
-        `common.config.runtime.should_cleanup_preprocessing()`.
-
-        Args:
-            base_dir: Base directory under which to create the temp directory.
-            prefix: Prefix for the temp directory name (e.g., "gvoice", "instaloader").
-
-        Yields:
-            Path to the created temporary directory.
-        """
-        # Import here to avoid circular import chains in some execution paths.
-        from common.processing import temp_processing_directory
-
-        with temp_processing_directory(str(base_dir), prefix=prefix) as temp_dir:
-            yield temp_dir
-
     def set_context_merger(
         self, merger: Optional[Callable[[Dict, Dict], None]]
     ) -> None:
@@ -409,22 +381,6 @@ class PreprocessorBase(ABC):
         """
         return {h: entry["context"] for h, entry in self._hash_registry.items()}
 
-    def get_merged_context_for_file(
-        self, dest_filename: str
-    ) -> Optional[Dict[str, Any]]:
-        """Get merged context for a specific destination filename.
-
-        Args:
-            dest_filename: The destination filename to look up.
-
-        Returns:
-            Merged context dict for the file, or None if not found.
-        """
-        for entry in self._hash_registry.values():
-            if entry.get("filename") == dest_filename:
-                return entry.get("context")
-        return None
-
     def get_contexts_list_for_file(self, dest_filename: str) -> List[Dict[str, Any]]:
         """Get list of all original contexts that were merged for a destination file.
 
@@ -439,7 +395,13 @@ class PreprocessorBase(ABC):
             returns that. Otherwise returns a single-element list with the context,
             or empty list if not found.
         """
-        merged_context = self.get_merged_context_for_file(dest_filename)
+        # Find merged context by filename
+        merged_context: Optional[Dict[str, Any]] = None
+        for entry in self._hash_registry.values():
+            if entry.get("filename") == dest_filename:
+                merged_context = entry.get("context")
+                break
+
         if merged_context is None:
             return []
 
@@ -525,45 +487,9 @@ class PreprocessorBase(ABC):
                 self._detection_result = detected
         return self._detection_result
 
-    def get_detection_result(self) -> Optional[DetectionResult]:
-        """Get the cached detection result, or None if not yet computed.
-
-        Unlike ensure_detection_result(), this does not trigger detection.
-        Use this to check if detection has already been performed.
-
-        Returns:
-            Cached DetectionResult or None
-        """
-        return self._detection_result
-
     # =========================================================================
-    # Export Layout Resolution + Validation Helpers
+    # Validation Helpers
     # =========================================================================
-
-    def resolve_first_existing_dir(self, candidates: List[Path], *, label: str) -> Path:
-        """Resolve the first existing directory from a list of candidates.
-
-        Useful for supporting multiple export layouts (e.g., raw vs Takeout).
-
-        Args:
-            candidates: List of directory paths to check, in priority order.
-            label: Human-readable label for error messages (e.g., "Google Photos").
-
-        Returns:
-            First existing directory Path.
-
-        Raises:
-            FileNotFoundError: If no candidate directory exists.
-        """
-        for candidate in candidates:
-            if candidate.exists() and candidate.is_dir():
-                logger.debug("Resolved %s directory: %s", label, candidate)
-                return candidate
-
-        checked_paths = ", ".join(str(c) for c in candidates)
-        raise FileNotFoundError(
-            f"{label} directory not found. Checked: {checked_paths}"
-        )
 
     def require_exists(self, path: Path, *, label: str) -> bool:
         """Require that a path exists (file or directory).
@@ -706,17 +632,6 @@ class PreprocessorBase(ABC):
 
         except OSError as e:
             logger.warning("Failed to save log file: %s", e)
-
-    def compute_file_hash(self, file_path: Path) -> str:
-        """Compute xxHash64 of file for deduplication.
-
-        Args:
-            file_path: Path to file to hash
-
-        Returns:
-            Hexadecimal hash digest
-        """
-        return compute_content_hash(file_path)
 
     def _get_unique_filename(self, filename: str) -> str:
         """Get a unique filename, handling collisions.
@@ -1260,16 +1175,6 @@ class PreprocessorBase(ABC):
         except Exception as e:
             logger.error("Failed to save metadata: %s", e)
             raise RuntimeError(f"Failed to save metadata: {e}") from e
-
-    def set_unmatched_media(self, unmatched: List[Dict[str, Any]]) -> None:
-        """Set the unmatched media list for inclusion in metadata.json.
-
-        Use this instead of directly modifying _unmatched_media.
-
-        Args:
-            unmatched: List of unmatched media entries.
-        """
-        self._unmatched_media = unmatched
 
     def set_ambiguous_cases(self, cases: List[Dict[str, Any]]) -> None:
         """Set the ambiguous cases list for inclusion in metadata.json.

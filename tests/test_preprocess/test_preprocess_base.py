@@ -3,7 +3,6 @@
 
 Tests cover:
 - PreprocessorBase initialization and validation
-- temp_output_dir context manager
 - hash_with_dedup batch operations
 - File hashing and deduplication
 - Context merging during deduplication
@@ -519,78 +518,6 @@ class TestSaveLog:
         preprocessor.save_log()
 
         assert not preprocessor.log_file.exists()
-
-
-class TestTempOutputDir:
-    """Tests for temp_output_dir context manager."""
-
-    def test_creates_temp_directory(self, tmp_path: Path) -> None:
-        """Should create temporary directory."""
-        base_dir = tmp_path / "base"
-
-        with ConcretePreprocessor.temp_output_dir(base_dir, "test") as temp_dir:
-            assert temp_dir.exists()
-            assert temp_dir.is_dir()
-
-    def test_cleanup_on_exit(self, tmp_path: Path) -> None:
-        """Should clean up directory on exit (when cleanup enabled)."""
-        base_dir = tmp_path / "base"
-
-        with patch.dict(os.environ, {"DISABLE_PREPROCESSING_CLEANUP": ""}):
-            with ConcretePreprocessor.temp_output_dir(base_dir, "test") as temp_dir:
-                _temp_path = temp_dir  # noqa: F841 - Captured for potential debugging
-
-        # May or may not be cleaned up depending on environment
-        # Just verify context manager completes without error
-
-
-class TestContextMerging:
-    """Tests for context merging functionality."""
-
-    def test_get_merged_context_for_file(self, tmp_path: Path) -> None:
-        """Should retrieve merged context by filename."""
-        export_dir = tmp_path / "export"
-        output_dir = tmp_path / "output"
-        export_dir.mkdir()
-        output_dir.mkdir()
-
-        file1 = export_dir / "photo.jpg"
-        file1.write_bytes(b"content")
-
-        preprocessor = ConcretePreprocessor(
-            export_path=export_dir,
-            output_dir=output_dir,
-            workers=1,
-        )
-
-        tasks = [
-            CopyTask(
-                source_path=file1,
-                dest_filename="photo.jpg",
-                context={"key": "value"},
-            ),
-        ]
-
-        with patch.dict(os.environ, {"DISABLE_HASH_CACHE": "true"}):
-            preprocessor.hash_with_dedup(tasks, show_progress=False)
-
-        context = preprocessor.get_merged_context_for_file("photo.jpg")
-        assert context is not None
-        assert context["key"] == "value"
-
-    def test_get_merged_context_for_missing_file(self, tmp_path: Path) -> None:
-        """Should return None for unknown filename."""
-        export_dir = tmp_path / "export"
-        output_dir = tmp_path / "output"
-        export_dir.mkdir()
-
-        preprocessor = ConcretePreprocessor(
-            export_path=export_dir,
-            output_dir=output_dir,
-        )
-
-        context = preprocessor.get_merged_context_for_file("nonexistent.jpg")
-        assert context is None
 
 
 class TestCopyTask:

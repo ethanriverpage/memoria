@@ -28,7 +28,7 @@ from common.output.progress import PHASE_PREPROCESS
 from common.output.summary import print_preprocessing_stats
 from common.processing import process_parallel_threaded
 from common.text.normalize import normalize_text
-from processors.preprocess_base import CopyTask, PreprocessorBase
+from processors.preprocess_base import CopyTask, HashResult, PreprocessorBase
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -155,9 +155,9 @@ class InstaloaderPreprocessor(PreprocessorBase):
 
     def parse_timestamp_from_filename(self, filename: str) -> Optional[str]:
         """
-        Parse timestamp from filename
+        Parse timestamp from filename to canonical ISO 8601 format.
         Input format: "2016-08-13_00-57-19_UTC"
-        Output format: "2016-08-13 00:57:19"
+        Output format: "2016-08-13T00:57:19Z"
         """
         try:
             # Match pattern YYYY-MM-DD_HH-MM-SS_UTC
@@ -165,7 +165,7 @@ class InstaloaderPreprocessor(PreprocessorBase):
             match = re.search(pattern, filename)
             if match:
                 year, month, day, hour, minute, second = match.groups()
-                return f"{year}-{month}-{day} {hour}:{minute}:{second}"
+                return f"{year}-{month}-{day}T{hour}:{minute}:{second}Z"
             return None
         except Exception as e:
             self.log_message(
@@ -354,13 +354,15 @@ class InstaloaderPreprocessor(PreprocessorBase):
                 caption_text = caption_edges[0].get("node", {}).get("text", "")
                 metadata["caption"] = normalize_text(caption_text)
 
-            # Extract timestamp
+            # Extract timestamp and convert to canonical ISO 8601 format
+            from common.text.parse import CANONICAL_TIMESTAMP_FORMAT
+
             timestamp_raw = node.get("taken_at_timestamp")
             if timestamp_raw:
                 metadata["timestamp_raw"] = timestamp_raw
-                # Convert Unix timestamp to ISO format
+                # Convert Unix timestamp to canonical ISO 8601 format
                 dt = datetime.fromtimestamp(timestamp_raw)
-                metadata["timestamp"] = dt.strftime("%Y-%m-%d %H:%M:%S")
+                metadata["timestamp"] = dt.strftime(CANONICAL_TIMESTAMP_FORMAT)
 
             # Extract media type
             typename = node.get("__typename", "")

@@ -5,7 +5,7 @@ Tests for PreprocessorBase template enforcement, cached detection, and helpers.
 Tests cover:
 - Template enforcement via __init_subclass__ (abstract methods, _context_merger guard)
 - Cached username detection (ensure_detection_result, build_export_info)
-- Validation helpers (resolve_first_existing_dir, require_exists, etc.)
+- Validation helpers (require_exists, require_any_files, require_any_dirs)
 - Stats helpers (bump_stat, summarize_dedup_results)
 """
 
@@ -255,17 +255,6 @@ class TestCachedUsernameDetection:
         assert preprocessor.detect_count == 1
         assert result1 is result2 is result3
 
-    def test_get_detection_result_returns_none_before_detection(self, preprocessor):
-        """get_detection_result should return None before detection."""
-        assert preprocessor.get_detection_result() is None
-
-    def test_get_detection_result_returns_cached_after_detection(self, preprocessor):
-        """get_detection_result should return cached result after detection."""
-        preprocessor.ensure_detection_result()
-        result = preprocessor.get_detection_result()
-        assert result is not None
-        assert result.username == "testuser"
-
     def test_build_export_info_uses_cached_result(self, preprocessor):
         """build_export_info should use cached detection result."""
         # Ensure detection is called
@@ -289,8 +278,6 @@ class TestCachedUsernameDetection:
 
         # Detection should have been called once
         assert preprocessor.detect_count == 1
-        # Result should be cached
-        assert preprocessor.get_detection_result() is not None
 
     def test_directory_username_overrides_content_detection(self, tmp_path):
         """Directory-derived username should be canonical when extractable."""
@@ -326,27 +313,6 @@ class TestCachedUsernameDetection:
 
 class TestValidationHelpers:
     """Tests for validation helper methods."""
-
-    def test_resolve_first_existing_dir_returns_first_match(
-        self, preprocessor, tmp_path
-    ):
-        """Should return first existing directory from candidates."""
-        dir1 = tmp_path / "dir1"
-        dir2 = tmp_path / "dir2"
-        dir2.mkdir()  # Only dir2 exists
-
-        result = preprocessor.resolve_first_existing_dir([dir1, dir2], label="Test")
-        assert result == dir2
-
-    def test_resolve_first_existing_dir_raises_when_none_exist(
-        self, preprocessor, tmp_path
-    ):
-        """Should raise FileNotFoundError if no candidates exist."""
-        dir1 = tmp_path / "nonexistent1"
-        dir2 = tmp_path / "nonexistent2"
-
-        with pytest.raises(FileNotFoundError, match="Test directory not found"):
-            preprocessor.resolve_first_existing_dir([dir1, dir2], label="Test")
 
     def test_require_exists_returns_true_when_exists(self, preprocessor, tmp_path):
         """Should return True when path exists."""
@@ -521,13 +487,6 @@ class TestSaveMetadata:
             metadata = json.load(f)
 
         assert metadata["export_info"]["custom_field"] == "custom_value"
-
-    def test_set_unmatched_media(self, preprocessor):
-        """set_unmatched_media should set the unmatched media list."""
-        unmatched = [{"filename": "orphan.jpg"}]
-        preprocessor.set_unmatched_media(unmatched)
-
-        assert preprocessor._unmatched_media == unmatched
 
 
 # =============================================================================

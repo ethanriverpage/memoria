@@ -26,12 +26,13 @@ from common.files.types import (
     VIDEO_EXTENSIONS,
     AUDIO_EXTENSIONS,
     ALL_EXTENSIONS as ALL_MEDIA_EXTENSIONS,
+    get_media_type,
 )
 from common.output.logging import get_processor_logger
 from common.output.progress import PHASE_PREPROCESS, progress_bar
 from common.output.summary import print_preprocessing_stats
 from common.preprocess.context_mergers import merge_imessage_context
-from processors.preprocess_base import CopyTask, PreprocessorBase
+from processors.preprocess_base import CopyTask, HashResult, PreprocessorBase
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -69,9 +70,11 @@ def parse_imazing_filename(filename: str) -> Optional[Dict]:
     except ValueError:
         return None
 
+    from common.text.parse import CANONICAL_TIMESTAMP_FORMAT
+
     return {
         "timestamp": dt,
-        "timestamp_str": dt.strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "timestamp_str": dt.strftime(CANONICAL_TIMESTAMP_FORMAT),
         "conversation": conversation.strip(),
         "original_filename": original_filename,
     }
@@ -89,25 +92,6 @@ def is_group_chat(conversation_name: str) -> bool:
         True if this appears to be a group chat
     """
     return " & " in conversation_name
-
-
-def get_media_type(file_path: Path) -> Optional[str]:
-    """Get media type from file extension.
-
-    Args:
-        file_path: Path to the file
-
-    Returns:
-        "IMAGE", "VIDEO", "AUDIO", or None if not a media file
-    """
-    ext = file_path.suffix.lower()
-    if ext in IMAGE_EXTENSIONS:
-        return "IMAGE"
-    elif ext in VIDEO_EXTENSIONS:
-        return "VIDEO"
-    elif ext in AUDIO_EXTENSIONS:
-        return "AUDIO"
-    return None
 
 
 class ImazingPreprocessor(PreprocessorBase):
@@ -431,6 +415,7 @@ class ImazingPreprocessor(PreprocessorBase):
                 content = ""
 
             # Build context for merging
+            media_type = get_media_type(file_path)
             context = {
                 "source_export": self.export_path.name,
                 "conversation_id": conversation_name,
@@ -440,7 +425,7 @@ class ImazingPreprocessor(PreprocessorBase):
                 "created": parsed["timestamp_str"],
                 "content": content,
                 "is_sender": is_sender,
-                "media_type": get_media_type(file_path),
+                "media_type": media_type.value if media_type else None,
             }
 
             copy_tasks.append(

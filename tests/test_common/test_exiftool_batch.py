@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
+from common.files.types import MediaType
 from common.media.exiftool import (
     BatchReadResult,
     BatchWriteOutcome,
@@ -60,7 +61,7 @@ class TestDescriptionWriting:
 
         with (
             patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
-            patch("common.media.exiftool.get_media_type", return_value="image"),
+            patch("common.media.exiftool.get_media_type", return_value=MediaType.IMAGE),
         ):
             batch_write_metadata_requests(
                 [request],
@@ -109,7 +110,7 @@ class TestDescriptionWriting:
 
         with (
             patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
-            patch("common.media.exiftool.get_media_type", return_value="image"),
+            patch("common.media.exiftool.get_media_type", return_value=MediaType.IMAGE),
         ):
             batch_write_metadata_requests(
                 [request],
@@ -149,7 +150,7 @@ class TestDescriptionWriting:
 
         with (
             patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
-            patch("common.media.exiftool.get_media_type", return_value="video"),
+            patch("common.media.exiftool.get_media_type", return_value=MediaType.VIDEO),
         ):
             batch_write_metadata_requests(
                 [request],
@@ -197,7 +198,7 @@ class TestDedupOverride:
 
         with (
             patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
-            patch("common.media.exiftool.get_media_type", return_value="image"),
+            patch("common.media.exiftool.get_media_type", return_value=MediaType.IMAGE),
             patch(
                 "common.media.exiftool._get_description_for_file",
                 return_value=merged_description,
@@ -242,7 +243,7 @@ class TestDedupOverride:
 
         with (
             patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
-            patch("common.media.exiftool.get_media_type", return_value="image"),
+            patch("common.media.exiftool.get_media_type", return_value=MediaType.IMAGE),
         ):
             batch_write_metadata_requests(
                 [request],
@@ -293,7 +294,7 @@ class TestDatetimeAndGPS:
 
         with (
             patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
-            patch("common.media.exiftool.get_media_type", return_value="image"),
+            patch("common.media.exiftool.get_media_type", return_value=MediaType.IMAGE),
         ):
             batch_write_metadata_requests(
                 [request],
@@ -343,7 +344,7 @@ class TestDatetimeAndGPS:
 
         with (
             patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
-            patch("common.media.exiftool.get_media_type", return_value="image"),
+            patch("common.media.exiftool.get_media_type", return_value=MediaType.IMAGE),
         ):
             batch_write_metadata_requests(
                 [request],
@@ -383,7 +384,7 @@ class TestDatetimeAndGPS:
 
         with (
             patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
-            patch("common.media.exiftool.get_media_type", return_value="image"),
+            patch("common.media.exiftool.get_media_type", return_value=MediaType.IMAGE),
             patch("common.media.exiftool.get_gps_format", return_value="signed"),
         ):
             batch_write_metadata_requests(
@@ -492,7 +493,7 @@ class TestOriginalFilename:
 
         with (
             patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
-            patch("common.media.exiftool.get_media_type", return_value="image"),
+            patch("common.media.exiftool.get_media_type", return_value=MediaType.IMAGE),
         ):
             batch_write_metadata_requests(
                 [request],
@@ -523,7 +524,7 @@ class TestOriginalFilename:
         existing_metadata_map = {str(test_file): {}}
         with (
             patch("common.media.exiftool.subprocess.run") as mock_run,
-            patch("common.media.exiftool.get_media_type", return_value="image"),
+            patch("common.media.exiftool.get_media_type", return_value=MediaType.IMAGE),
         ):
             outcome = batch_write_metadata_requests(
                 [request],
@@ -561,7 +562,7 @@ class TestOriginalFilename:
 
         with (
             patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
-            patch("common.media.exiftool.get_media_type", return_value="image"),
+            patch("common.media.exiftool.get_media_type", return_value=MediaType.IMAGE),
         ):
             batch_write_metadata_requests(
                 [request],
@@ -618,7 +619,7 @@ class TestOriginalFilename:
 
         with (
             patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
-            patch("common.media.exiftool.get_media_type", return_value="video"),
+            patch("common.media.exiftool.get_media_type", return_value=MediaType.VIDEO),
         ):
             batch_write_metadata_requests(
                 [request],

@@ -25,14 +25,14 @@ from common.media.probe import (
     get_video_metadata_with_failure,
 )
 from common.dedup import compute_content_hash
-from common.files.types import get_media_type
+from common.files.types import get_media_type, MediaType
 from common.output.logging import get_processor_logger
-from common.output.progress import PHASE_PREPROCESS, progress_bar
+from common.output.progress import PHASE_PREPROCESS, progress_bar, streaming_progress
 from common.output.summary import print_preprocessing_stats
 from common.preprocess.context_mergers import merge_imessage_context
 from common.processing import process_parallel_threaded
 from processors.imessage.vcard_parser import VCardParser
-from processors.preprocess_base import CopyTask, PreprocessorBase
+from processors.preprocess_base import CopyTask, HashResult, PreprocessorBase
 
 # Video extensions that may be iCloud placeholder attachments
 _ISOBMFF_EXTENSIONS = {".mov", ".mp4", ".m4v"}
@@ -67,17 +67,19 @@ def convert_apple_timestamp(apple_timestamp: int) -> Optional[datetime]:
 
 
 def format_timestamp(dt: Optional[datetime]) -> Optional[str]:
-    """Format datetime as 'YYYY-MM-DD HH:MM:SS UTC' to match Snapchat format.
+    """Format datetime as canonical ISO 8601 format.
 
     Args:
         dt: datetime object
 
     Returns:
-        Formatted string or None
+        Formatted string in 'YYYY-MM-DDTHH:MM:SSZ' format, or None
     """
+    from common.text.parse import CANONICAL_TIMESTAMP_FORMAT
+
     if not dt:
         return None
-    return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    return dt.strftime(CANONICAL_TIMESTAMP_FORMAT)
 
 
 def decode_attributed_body(blob: bytes) -> Tuple[Optional[str], dict]:
@@ -894,7 +896,9 @@ class IMessagePreprocessor(PreprocessorBase):
 
             # Determine media type
             mime_type = primary_context.get("mime_type") or ""
-            media_type = "IMAGE" if "image" in mime_type else "VIDEO"
+            media_type = (
+                MediaType.IMAGE.value if "image" in mime_type else MediaType.VIDEO.value
+            )
 
             # Collect live_photo_pair_keys from all merged contexts (sorted unique)
             all_pair_keys: set[str] = set()
@@ -1030,15 +1034,26 @@ class IMessagePreprocessor(PreprocessorBase):
             if not attachments_dir:
                 continue
 
+            logger.info("Scanning for orphaned media files in: %s", attachments_dir)
+            scanned_count = 0
+
             # Scan for all media files using shared scanner
-            for file_path in iter_media_files(
+            media_iter = iter_media_files(
                 attachments_dir,
                 banned_filter=self.banned_filter,
                 skip_hidden=True,
                 skip_overlays=False,  # iMessage doesn't have overlay concept
                 skip_thumbnails=False,  # iMessage doesn't have thumbnail files
                 recursive=True,
+            )
+            for file_path in streaming_progress(
+                media_iter,
+                PHASE_PREPROCESS,
+                "Scanning orphaned media",
+                total=None,
             ):
+                scanned_count += 1
+
                 # Check if this file was processed from the database
                 resolved_path = file_path.resolve()
                 if resolved_path not in processed_paths:
@@ -1062,6 +1077,13 @@ class IMessagePreprocessor(PreprocessorBase):
                             "original_location": str(file_path),
                         },
                     )
+
+            logger.info(
+                "Orphan scan complete for %s: scanned %d files, found %d orphaned",
+                attachments_dir,
+                scanned_count,
+                orphaned_count,
+            )
 
         if orphaned_count > 0:
             logger.info("Found %d orphaned media files", orphaned_count)
