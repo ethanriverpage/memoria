@@ -8,7 +8,7 @@ This guide covers processing Snapchat exports including Memories and Messages.
 2. [Preparing Your Snapchat Export](#preparing-your-snapchat-export)
 3. [Snapchat Memories](#snapchat-memories)
 4. [Snapchat Messages](#snapchat-messages)
-5. [Orphaned Media](#orphaned-media)
+5. [Unmatched and Orphaned Media](#unmatched-and-orphaned-media)
 6. [Ambiguous Overlay Matching](#ambiguous-overlay-matching)
 7. [Overlay Embedding](#overlay-embedding)
 8. [Processing Your Export](#processing-your-export)
@@ -267,11 +267,11 @@ This rich metadata makes it easy to search for and identify photos based on who 
 
 **Ambiguous overlay matching**: See the [Ambiguous Overlay Matching](#ambiguous-overlay-matching) section below for details on the `issues/needs_matching/` directory.
 
-**Orphaned media**: See the [Orphaned Media](#orphaned-media) section below for details on the `orphaned_media/` and `issues/` directories.
+**Unmatched / orphaned failures**: See the [Unmatched and Orphaned Media](#unmatched-and-orphaned-media) section below for how Memoria handles media/metadata mismatches.
 
-## Orphaned Media
+## Unmatched and Orphaned Media
 
-**The Problem**: Snapchat's export sometimes contains media files in `chat_media/` that have no corresponding entry in `chat_history.json`, or vice versa - metadata references that point to missing files. This mismatch occurs when:
+**The Problem**: Snapchat's export sometimes contains media files in `chat_media/` that have no corresponding entry in `chat_history.json`, or vice versa (metadata references that point to missing files). This mismatch occurs when:
 
 - Files were deleted from Snapchat after being sent but before export
 - Media files use UUID/hash naming that couldn't be matched by timestamp
@@ -280,38 +280,29 @@ This rich metadata makes it easy to search for and identify photos based on who 
 
 ### How Memoria Handles This
 
-**Orphaned Media Files** (files without metadata):
+Memoria distinguishes these related concepts:
 
-- Processed and organized into `orphaned_media/` directory in the output
-- Timestamped using file modification time (best guess)
-- If exactly 1 overlay matches the timestamp, it's automatically applied
-- Still searchable and viewable, just without conversation context
-
-**Orphaned Metadata** (missing files):
-
-- References to non-existent files are tracked in the failure report
-- Saved as JSON entries in `issues/failed-matching/metadata/`
-- Helps identify what content may be missing from your export
+- **Unmatched media**: media is still processable (it has a `source_path` and a derived timestamp) but is missing full conversation context. Memoria still produces an output file, but with a minimal description (no sender/conversation attribution).
+- **Orphaned media**: media exists on disk but has no matching metadata entry. This is a matching failure and is tracked via `issues/failed-matching/media/`.
+- **Orphaned metadata**: metadata references a missing file. This is tracked via `issues/failed-matching/metadata/`.
 
 ### Output Structure
 
 ```
 Snapchat Messages/
 └── username/
-    ├── conversation_1/
-    ├── orphaned_media/           # Media files without matching messages
-    │   ├── photo_unknown_001.jpg
-    │   └── video_unknown_002.mp4
-    └── issues/
+    └── messages/
+        ├── ...processed files...
+        └── issues/
         ├── failure-report.json   # Comprehensive failure tracking
         └── failed-matching/
             ├── media/            # Copy of orphaned media files
             └── metadata/         # References to missing files
 ```
 
-The `failure-report.json` includes detailed statistics and context for each orphaned file, helping you understand what couldn't be matched and why.
+The `failure-report.json` includes detailed statistics and context for each orphaned media file and orphaned metadata entry, helping you understand what couldn't be matched and why.
 
-**Note**: Orphaned files are still fully accessible and can be manually organized based on their timestamps or content.
+**Note**: Unmatched media is still processed (but with incomplete context). Orphaned matching failures are recorded under `issues/` for review.
 
 ## Ambiguous Overlay Matching
 
@@ -498,8 +489,6 @@ The processing is fully automatic - just point Memoria at your export directory.
             │   └── ...
             ├── conversation_2/
             │   └── ...
-            ├── orphaned_media/       # Media not matched to any conversation
-            │   └── ...
             └── issues/               # All issue artifacts
                 ├── failure-report.json
                 ├── failed-matching/
@@ -565,7 +554,7 @@ For details on overlay embedding performance, see the [Overlay Embedding](#overl
 5. **Messages Preprocessing**: For message exports, Memoria automatically:
    - Matches media files to conversations based on Media IDs, UUIDs, or timestamps
    - Handles duplicate media (same file shared in multiple conversations)
-   - Creates an `orphaned_media/` folder for files that couldn't be matched
+   - Records **unmatched media** (processable but missing conversation context) and still emits output files with minimal context
    - Creates an `issues/needs_matching/` folder for ambiguous overlay-to-video matching cases
    - Generates a preprocessing log with details about any matching issues
 
@@ -597,11 +586,10 @@ Memoria automatically falls back to copying the original video file if overlay e
 
 ### Messages: Media files not matching to conversations
 
-If you see files in the `orphaned_media/` or `issues/` folders:
+If you see many files without conversation attribution, you’re typically looking at **unmatched media** (processable, but missing conversation context).
 
-- **`orphaned_media/`**: Media files successfully processed but without conversation context
-- **`issues/failed-matching/media/`**: Additional copy of orphaned files for review
-- **`issues/failure-report.json`**: Detailed report explaining why files couldn't be matched
+- **`issues/failed-matching/media/`**: Orphaned media (matching failure: media exists on disk but no metadata match)
+- **`issues/failure-report.json`**: Detailed report explaining why items couldn't be matched
 
 Check the failure report for specific reasons:
 
@@ -609,7 +597,7 @@ Check the failure report for specific reasons:
 - Media IDs in `chat_history.json` don't match actual filenames  
 - Export glitches or incomplete data
 
-See the [Orphaned Media](#orphaned-media) section for detailed information.
+See the [Unmatched and Orphaned Media](#unmatched-and-orphaned-media) section for detailed information.
 
 ### Messages: Ambiguous overlay matching
 

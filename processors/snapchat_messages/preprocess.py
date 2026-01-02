@@ -612,7 +612,7 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
                         },
                     )
 
-        # Collect orphaned media files (not matched to any message)
+        # Collect media files not matched to any message:
         # Per Failure-Handling.md:
         # - If has timestamp -> unmatched_media (processable with file-derived timestamp)
         # - If no timestamp -> orphaned_media via FailureTracker (invalid)
@@ -663,7 +663,7 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
                         overlay_source_path = overlay_info.get("original_path")
                         matched_overlays.add(overlay_file)
 
-                orphaned_context = {
+                unmatched_context = {
                     "messages": [
                         {
                             "conversation_id": None,
@@ -680,14 +680,14 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
                     "overlay_file": overlay_file,
                     "overlay_source_path": overlay_source_path,
                     "primary_created": created_date,
-                    "is_orphaned": True,
+                    "is_unmatched": True,
                 }
 
                 copy_tasks.append(
                     CopyTask(
                         source_path=source_path,
                         dest_filename=filename,
-                        context=orphaned_context,
+                        context=unmatched_context,
                     )
                 )
 
@@ -812,7 +812,7 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
         """Return the service identifier for Snapchat Messages."""
         return "messages"
 
-    def build_metadata_from_results(self, chat_history: Dict) -> Dict:
+    def build_metadata_from_results(self, _chat_history: Dict) -> Dict:
         """Build metadata from hash_with_dedup results."""
         # Get merged contexts from base class
         merged_contexts = self.get_merged_contexts()
@@ -823,7 +823,7 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
 
         # Group entries by conversation
         conversation_entries: Dict[str, List[Dict]] = {}
-        orphaned_count = 0
+        unmatched_count = 0
 
         for content_hash, context in merged_contexts.items():
             registry_entry = self._hash_registry.get(content_hash, {})
@@ -832,13 +832,15 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
 
             messages = context.get("messages", [])
             overlay_file = context.get("overlay_file")
-            is_orphaned = context.get("is_orphaned", False)
+            is_unmatched = context.get("is_unmatched", False)
 
             # Check if this is a duplicate (multiple messages)
             is_duplicate = len(messages) > 1
 
-            if is_orphaned or (messages and messages[0].get("conversation_id") is None):
-                # Orphaned media: record as schema-compliant unmatched_media entry.
+            if is_unmatched or (
+                messages and messages[0].get("conversation_id") is None
+            ):
+                # Unmatched media: record as schema-compliant unmatched_media entry.
                 #
                 # NOTE:
                 # - `unmatched_media` entries are NOT message entries.
@@ -856,11 +858,11 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
                             overlay_file=overlay_file,
                             overlay_source_path=context.get("overlay_source_path"),
                         )
-                        orphaned_count += 1
-                except Exception:
+                        unmatched_count += 1
+                except Exception as e:  # pylint: disable=broad-exception-caught
                     # If something goes wrong here, let save_metadata validation surface it
                     # with a clear error rather than crashing mid-preprocess.
-                    pass
+                    logger.debug("Failed to add unmatched media entry: %s", e)
             elif is_duplicate:
                 # Duplicate media across conversations - create merged entry
                 conv_id = messages[0].get("conversation_id")
@@ -942,7 +944,7 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
         duplicates = total_messages - total_unique
         self.stats["duplicate_files"] = duplicates if duplicates > 0 else 0
         self.stats["deduplicated_files"] = duplicates if duplicates > 0 else 0
-        self.stats["orphaned_media"] = orphaned_count
+        self.stats["unmatched_media"] = unmatched_count
 
         return metadata
 
@@ -976,7 +978,7 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
             "Conversations": self.stats["conversations"],
             "Messages": self.stats["messages"],
             "Media messages": self.stats["media_messages"],
-            "Orphaned media": self.stats.get("orphaned_media", 0),
+            "Unmatched media": self.stats.get("unmatched_media", 0),
             "Duplicates": self.stats.get("duplicate_files", 0),
             "Banned skipped": self.stats["banned_files"],
         }

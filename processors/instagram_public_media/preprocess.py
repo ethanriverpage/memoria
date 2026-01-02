@@ -82,7 +82,8 @@ class InstagramPreprocessor(PreprocessorBase):
                 "total_media_files": 0,
                 "media_copied": 0,
                 "duplicate_files": 0,
-                "orphaned_files": 0,
+                # Media present on disk but not referenced by any metadata entry.
+                "orphaned_media_files": 0,
                 "missing_files": 0,
                 "banned_files_skipped": 0,
                 "by_type": {},
@@ -534,9 +535,9 @@ class InstagramPreprocessor(PreprocessorBase):
             if "media_paths" in post:
                 del post["media_paths"]
 
-        # Report orphaned files (in filesystem but not referenced in HTML)
+        # Report orphaned media files (media on disk but not referenced in HTML metadata)
         orphaned = set(file_catalog.keys()) - matched_files
-        self.stats["orphaned_files"] = len(orphaned)
+        self.stats["orphaned_media_files"] = len(orphaned)
         for filename in orphaned:
             source_path = file_catalog[filename]
             self.failure_tracker.add_orphaned_media(
@@ -548,14 +549,16 @@ class InstagramPreprocessor(PreprocessorBase):
             )
         for filename in orphaned:
             self.log_message(
-                "ORPHANED_FILE",
-                f"File in filesystem not referenced in any HTML: {filename}",
+                "ORPHANED_MEDIA",
+                f"Media file on disk not referenced in any HTML metadata: {filename}",
             )
 
         logger.info("   Copied %d unique files", self.stats["media_copied"])
         logger.info("   Deduplicated %d duplicate files", self.stats["duplicate_files"])
         logger.info("   Missing files: %d", self.stats["missing_files"])
-        logger.info("   Orphaned files: %d", self.stats["orphaned_files"])
+        logger.info(
+            "   Orphaned media files: %d", self.stats["orphaned_media_files"]
+        )
 
     def _process_single_html_file(
         self, html_tuple: Tuple[str, str]
@@ -657,7 +660,7 @@ class InstagramPreprocessor(PreprocessorBase):
             "Files copied": self.stats["media_copied"],
             "Banned skipped": self.stats["banned_files_skipped"],
             "Missing files": self.stats["missing_files"],
-            "Orphaned files": self.stats["orphaned_files"],
+            "Orphaned media files": self.stats["orphaned_media_files"],
         }
         # Add media type breakdown
         for media_type, type_stats in self.stats["by_type"].items():

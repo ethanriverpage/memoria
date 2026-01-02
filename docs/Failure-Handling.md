@@ -274,8 +274,8 @@ Two distinct cases appear in logs:
 ### Entry Points
 
 - **FailureTracker** (`common/failures/tracker.py`):
-  - `add_orphaned_media()` - track unmatched media files for `issues/failed-matching/`
-  - `add_orphaned_metadata()` - track unmatched metadata entries
+  - `add_orphaned_media()` - track orphaned media files for `issues/failed-matching/`
+  - `add_orphaned_metadata()` - track orphaned metadata entries
   - `add_processing_failure()` - track failed outputs for `issues/failed-processing/`
   - `add_export_failure()` - track export-level failures (e.g., no media files)
   - `handle_failures(output_dir)` - copy orphaned media, move failed outputs, write report

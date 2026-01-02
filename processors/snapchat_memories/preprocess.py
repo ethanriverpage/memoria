@@ -6,7 +6,7 @@ Preprocesses Snapchat Memories exports with hash-only deduplication:
 - Hashes media files and builds source_path references (no file copying)
 - Stores overlay associations from metadata (explicit, unlike Messages)
 - Creates metadata.json with standardized structure and source_path entries
-- Tracks orphaned files (media without metadata, metadata without media)
+- Tracks orphaned media and orphaned metadata (matching failures)
 """
 
 import json

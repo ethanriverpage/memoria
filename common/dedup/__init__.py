@@ -61,7 +61,7 @@ from common.dedup.description import (
     SourceEntry,
     # Core building functions
     build_source_line,
-    build_message_context,
+    format_message_line,
     build_description,
     build_image_description,
     # Helper functions
@@ -136,7 +136,7 @@ __all__ = [
     "SourceEntry",
     # Description - Core building functions
     "build_source_line",
-    "build_message_context",
+    "format_message_line",
     "build_description",
     "build_image_description",
     # Description - Helper functions

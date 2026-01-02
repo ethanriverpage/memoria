@@ -26,7 +26,7 @@ from common.dedup.description import (
     SourceEntry,
     # Core building functions
     build_source_line,
-    build_message_context,
+    format_message_line,
     build_description,
     build_image_description,
     # Helper functions
@@ -524,8 +524,8 @@ class TestBuildImageDescription:
         assert "Source: Google/user/photos" in result
         assert '  - me in "Family Album": "Vacation photo"' in result
 
-    def test_same_source_context_folding(self):
-        """Test same-source secondaries are folded into context lines."""
+    def test_same_source_detail_folding(self):
+        """Test same-source secondaries are folded into message detail lines."""
         primary = SourceEntry(
             processor=PLATFORM_INSTAGRAM,
             username="johndoe",
@@ -627,8 +627,8 @@ class TestBuildImageDescription:
         # Should NOT show ./mac as a separate source
         assert "+./mac" not in result
 
-    def test_same_context_skipped(self):
-        """Test duplicate contexts are skipped."""
+    def test_same_message_details_skipped(self):
+        """Test duplicate message details are skipped."""
         primary = SourceEntry(
             processor=PLATFORM_GOOGLE,
             username="user",
@@ -686,12 +686,44 @@ class TestBuildImageDescription:
 
         # Primary source
         assert "Source: Google/user/photos" in result
-        # Same-source context should be folded
+        # Same-source message details should be folded (just +details, no path)
         assert '+in "Album A"' in result
         # Different service uses relative path
         assert "+././chat:" in result
         # Different platform uses full path
         assert "+Instagram/insta_user/messages:" in result
+
+    def test_identical_rendered_lines_deduplicated(self):
+        """Test that identical rendered different-source lines appear only once.
+
+        When multiple different-source entries collapse to the same rendered
+        line (e.g., due to missing context or truncation), only one should
+        be emitted.
+        """
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+        )
+        # Two Instagram entries with no message details - should render identically
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="insta_user",
+                service=SERVICE_POSTS,
+                # No sender, conversation, or content
+            ),
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="insta_user",
+                service=SERVICE_POSTS,
+                # Also no context - would render identical line
+            ),
+        ]
+        result = build_image_description(primary, secondary)
+
+        # The +Instagram/insta_user/posts line should appear exactly once
+        assert result.count("+Instagram/insta_user/posts") == 1
 
 
 class TestCreateSourceEntry:
@@ -801,52 +833,52 @@ class TestBuildSourceLine:
         assert result == "Source: Instagram/johndoe/stories"
 
 
-class TestBuildMessageContext:
-    """Tests for build_message_context function."""
+class TestFormatMessageLine:
+    """Tests for format_message_line function (formats lines for description)."""
 
-    def test_full_context(self):
-        """Test message context with sender, conversation, and content."""
+    def test_full_message_details(self):
+        """Test message line with sender, conversation, and content."""
         entry = SourceEntry(
             processor=PLATFORM_IMESSAGE,
             sender="John Doe",
             conversation="Family Group",
             content="Check out this photo!",
         )
-        result = build_message_context(entry)
+        result = format_message_line(entry)
         assert result == '  - John Doe in "Family Group": "Check out this photo!"'
 
     def test_sender_only(self):
-        """Test message context with sender only."""
+        """Test message line with sender only."""
         entry = SourceEntry(
             processor=PLATFORM_IMESSAGE,
             sender="John Doe",
         )
-        result = build_message_context(entry)
+        result = format_message_line(entry)
         assert result == "  - John Doe"
 
     def test_conversation_only(self):
-        """Test message context with conversation only."""
+        """Test message line with conversation only."""
         entry = SourceEntry(
             processor=PLATFORM_DISCORD,
             conversation="#photos in Gaming Server",
         )
-        result = build_message_context(entry)
+        result = format_message_line(entry)
         assert result == '  - in "#photos in Gaming Server"'
 
     def test_content_only(self):
-        """Test message context with content only (no sender or conversation)."""
+        """Test message line with content only (no sender or conversation)."""
         entry = SourceEntry(
             processor=PLATFORM_GOOGLE,
             content="A caption for this photo",
         )
-        result = build_message_context(entry)
+        result = format_message_line(entry)
         # Should NOT have a colon before content when there's no sender/conversation
         assert result == '  - "A caption for this photo"'
 
-    def test_empty_context(self):
-        """Test empty context returns empty string."""
+    def test_empty_message_details(self):
+        """Test empty message details returns empty string."""
         entry = SourceEntry(processor=PLATFORM_GOOGLE)
-        result = build_message_context(entry)
+        result = format_message_line(entry)
         assert result == ""
 
     def test_content_truncation(self):
@@ -857,7 +889,7 @@ class TestBuildMessageContext:
             conversation="Family",
             content="A" * 200,
         )
-        result = build_message_context(entry, max_content=50)
+        result = format_message_line(entry, max_content=50)
         assert len(result) < 200
 
 

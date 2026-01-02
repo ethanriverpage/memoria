@@ -73,7 +73,8 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
                 "total_messages_with_media": 0,
                 "total_media_files": 0,
                 "media_copied": 0,
-                "orphaned_files": 0,
+                # Media present on disk but not referenced by any message metadata.
+                "orphaned_media_files": 0,
                 "missing_files": 0,
                 "banned_files_skipped": 0,
                 "unique_files": 0,
@@ -671,13 +672,13 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
                 if "media_paths" in message:
                     del message["media_paths"]
 
-        # Report orphaned files (in filesystem but not referenced in HTML)
+        # Report orphaned media files (media on disk but not referenced in HTML metadata)
         orphaned = set(file_catalog.keys()) - self._referenced_files
-        self.stats["orphaned_files"] = len(orphaned)
+        self.stats["orphaned_media_files"] = len(orphaned)
         for filename in orphaned:
             self.log_message(
-                "ORPHANED_FILE",
-                f"File in filesystem not referenced in any HTML: {filename}",
+                "ORPHANED_MEDIA",
+                f"Media file on disk not referenced in any HTML metadata: {filename}",
             )
 
             # Track orphaned media
@@ -694,7 +695,9 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
         log.logger.info("   Unique files copied: %d", self.stats["unique_files"])
         log.logger.info("   Duplicates skipped: %d", self.stats["duplicate_files"])
         log.logger.info("   Missing files: %d", self.stats["missing_files"])
-        log.logger.info("   Orphaned files: %d", self.stats["orphaned_files"])
+        log.logger.info(
+            "   Orphaned media files: %d", self.stats["orphaned_media_files"]
+        )
 
     def get_content_key(self) -> str:
         """Return the content key for Instagram Messages metadata."""
@@ -718,7 +721,7 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
             "Media files found": self.stats["total_media_files"],
             "Files copied": self.stats["media_copied"],
             "Missing files": self.stats["missing_files"],
-            "Orphaned files": self.stats["orphaned_files"],
+            "Orphaned media files": self.stats["orphaned_media_files"],
             "Unique files": self.stats["unique_files"],
             "Duplicates avoided": self.stats["duplicate_files"],
             "Banned skipped": self.stats["banned_files_skipped"],

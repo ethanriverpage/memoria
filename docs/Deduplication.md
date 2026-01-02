@@ -519,7 +519,7 @@ Source: Google/ethanriverpage/photos
 +./jane.doe/photos: (2024-01-15)
 ```
 
-**Same source, multiple conversation contexts** - add context lines:
+**Same source, multiple conversation contexts** - add message detail lines:
 
 ```text
 Source: Instagram/johndoe/messages
@@ -535,9 +535,9 @@ Source: iMessage/iph13p
 +me in "Work Chat": "For the presentation" (2024-01-18)
 ```
 
-iMessage performs cross-device consolidation, so different device "usernames" (iph13p, mac) are treated as a single logical source. Secondary contexts use `+context` without repeating the source path.
+iMessage performs cross-device consolidation, so different device "usernames" (iph13p, mac) are treated as a single logical source. Secondary entries use `+details` without repeating the source path.
 
-**True duplicates** (same source, same context) - no secondary line:
+**True duplicates** (same source, same message details) - no secondary line:
 
 ```text
 Source: Google/ethanriverpage/photos

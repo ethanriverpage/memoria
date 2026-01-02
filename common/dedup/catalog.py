@@ -100,6 +100,10 @@ def catalog_from_preprocessed(
     export_name = get_export_name(input_path)
     logger.info(f"Cataloging {len(media_entries)} files from metadata: {export_name}")
 
+    # Extract export-level username to inject into per-entry metadata when missing
+    export_info = metadata.get("export_info", {})
+    export_username = export_info.get("export_username") or ""
+
     config = get_dedup_config()
     use_perceptual = config.use_perceptual
     db_path = config.database_path
@@ -158,6 +162,7 @@ def catalog_from_preprocessed(
             perceptual_hash=perceptual_hash,
             dimensions=dimensions,
             metadata_extractor=metadata_extractor,
+            export_username=export_username,
         )
         yield catalog_entry
 
@@ -179,6 +184,7 @@ def catalog_from_preprocessed(
                     use_perceptual,
                     db_path,
                     metadata_extractor,
+                    export_username,
                 ): (entry, source_path)
                 for entry, source_path in entries_needing_hashes
             }
@@ -220,6 +226,7 @@ def _build_catalog_entry_from_metadata(
     perceptual_hash: Optional[str],
     dimensions: Optional[Tuple[int, int]],
     metadata_extractor: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+    export_username: str = "",
 ) -> Dict[str, Any]:
     """Build a catalog entry from preprocessed metadata."""
     # Extract metadata using custom extractor or use entry's metadata fields
@@ -231,6 +238,16 @@ def _build_catalog_entry_from_metadata(
         for key in ["albums", "sender", "conversation", "timestamp", "content", "gps"]:
             if key in entry:
                 metadata[key] = entry[key]
+
+    # Inject export-level username if not already provided by the extractor
+    # This ensures secondary sources have usernames for relative-path formatting
+    if export_username:
+        metadata.setdefault("username", export_username)
+
+    # Normalize caption to content: downstream expects "content" for display,
+    # but some processors (Instagram, Instaloader) emit "caption" instead
+    if not metadata.get("content") and entry.get("caption"):
+        metadata["content"] = entry["caption"]
 
     # Get file size
     try:
@@ -259,6 +276,7 @@ def _compute_missing_hashes(
     use_perceptual: bool,
     db_path: Optional[Path],
     metadata_extractor: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+    export_username: str = "",
 ) -> Optional[Tuple[Dict[str, Any], Optional[Dict[str, Any]]]]:
     """Compute missing hashes for an entry from preprocessed metadata."""
     try:
@@ -305,6 +323,7 @@ def _compute_missing_hashes(
             perceptual_hash=perceptual_hash,
             dimensions=dimensions,
             metadata_extractor=metadata_extractor,
+            export_username=export_username,
         )
 
         return catalog_entry, cache_entry

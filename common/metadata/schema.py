@@ -258,8 +258,8 @@ class PostEntry(TypedDict, total=False):
 class UnmatchedMediaEntry(TypedDict, total=False):
     """Media file processable but lacking full context.
 
-    Distinct from FailureTracker.orphaned_media (which cannot be processed
-    and gets copied to issues/failed-matching/).
+    Distinct from FailureTracker orphaned media (a matching failure recorded via
+    FailureTracker and copied to issues/failed-matching/).
 
     Unmatched media WILL be processed but with limited metadata.
     Common scenarios:

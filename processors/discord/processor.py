@@ -73,7 +73,7 @@ class DiscordProcessor(ProcessorBase):
 
             return False
 
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             log.detection_failed("Discord", e)
             return False
 
@@ -213,7 +213,7 @@ class DiscordProcessor(ProcessorBase):
             )
             return True
 
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             logger.exception(f"Error in DiscordProcessor: {e}")
             return False
 
@@ -363,7 +363,7 @@ def _process_file_worker(args_tuple):
             original_filename,
         )
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Error processing %s: %s", media_path.name, e)
         return (
             False,
@@ -520,7 +520,7 @@ def _process_working_directory(
     # Match files to metadata and generate output filenames
     log.logger.info("Matching files to metadata...")
     matched_files = []
-    unmatched_files = []
+    orphaned_media_files = []
     filename_gen = FilenameGenerator(
         "discord", export_username, timestamp_format="%Y-%m-%d %H:%M:%S"
     )
@@ -546,9 +546,9 @@ def _process_working_directory(
                 (media_file, message_info, output_filename, content_hash)
             )
         else:
-            unmatched_files.append(media_file)
+            orphaned_media_files.append(media_file)
 
-    log.matched_files(len(matched_files), len(unmatched_files))
+    log.matched_files(len(matched_files), len(orphaned_media_files))
 
     # Process matched files
     log.logger.info("Processing %d files to %s/", len(matched_files), output_dir)
@@ -620,16 +620,19 @@ def _process_working_directory(
         metadata_for_file=metadata_for_file,
     )
 
-    # Handle unmatched files via FailureTracker
-    if unmatched_files:
-        log.logger.info("Processing %d unmatched files...", len(unmatched_files))
-        for media_file in unmatched_files:
+    # Handle orphaned media files via FailureTracker (matching failure)
+    if orphaned_media_files:
+        log.logger.info(
+            "Tracking %d orphaned media files via FailureTracker...",
+            len(orphaned_media_files),
+        )
+        for media_file in orphaned_media_files:
             failure_tracker.add_orphaned_media(
                 media_path=Path(media_file),
                 reason="No matching metadata found",
             )
 
-    # Handle failures - copy orphaned files and generate report
+    # Handle failures - copy orphaned media files and generate report
     failure_tracker.handle_failures(output_dir)
 
     # Save dedup references for skipped secondary files
@@ -649,13 +652,13 @@ def _process_working_directory(
         output_dir=str(output_dir),
         extra_stats={
             "EXIF structures rebuilt": exif_rebuilt_count,
-            "Unmatched": len(unmatched_files),
+            "Orphaned media": len(orphaned_media_files),
         },
     )
 
-    if unmatched_files:
+    if orphaned_media_files:
         log.logger.info(
-            "Unmatched files were tracked via FailureTracker (see issues/failure-report.json)."
+            "Orphaned media files were tracked via FailureTracker (see issues/failure-report.json)."
         )
 
     return True

@@ -1011,7 +1011,7 @@ class ProcessorBase(ABC):
 
         Generic utility for building filename indexes from metadata.json.
         Handles both dict and list conversation formats, singular and plural
-        media fields, and optional orphaned media entries.
+        media fields, and optional unmatched media entries.
 
         Args:
             metadata: Parsed metadata.json content.

@@ -116,7 +116,7 @@ So when dedup later renders, `sec_context.get("username")` is empty → the `/us
 
 #### 2) `+Instagram/posts: (2016-08-05)` is repeated twice (redundant)
 
-`build_image_description()` only deduplicates **same-source context lines**, not duplicated “different-source entries” that resolve to identical rendered lines.
+`build_image_description()` only deduplicates **same-source message detail lines**, not duplicated "different-source entries" that resolve to identical rendered lines.
 
 The function splits secondaries into `same_source_entries` and `different_source_entries`, but then unconditionally emits a line per `different_source_entries` element:
 

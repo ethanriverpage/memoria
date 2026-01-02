@@ -249,12 +249,12 @@ def format_relative_source_path(
         secondary: Secondary source entry.
 
     Returns:
-        - "" if same source (should be folded into context lines)
+        - "" if same source (should be folded into message detail lines)
         - "././service" if same platform/user, different service
         - "./user/service" if same platform, different user
         - "Platform/user/service" if different platform
     """
-    # Same source - should be folded into context lines
+    # Same source - should be folded into message detail lines
     if _same_source(primary, secondary):
         return ""
 
@@ -284,20 +284,23 @@ def format_relative_source_path(
         return "/".join(parts)
 
 
-def _format_context_line(
+def _format_message_line(
     entry: SourceEntry,
     is_secondary: bool = False,
     max_content: int = 100,
 ) -> str:
-    """Format a context line for message/conversation info.
+    """Format a message detail line for inclusion in the description.
+
+    Builds a line showing sender, conversation, and content for embedding
+    in the ImageDescription field.
 
     Args:
-        entry: Source entry with context info.
+        entry: Source entry with message details.
         is_secondary: If True, prefix with '+' instead of '  - '.
         max_content: Maximum characters for content.
 
     Returns:
-        Formatted context line, or empty string if no context.
+        Formatted message detail line, or empty string if no message info.
     """
     if not entry.conversation and not entry.sender and not entry.content:
         return ""
@@ -392,8 +395,12 @@ def build_source_line(entry: SourceEntry) -> str:
     return parts[0]
 
 
-def build_message_context(entry: SourceEntry, max_content: int = 100) -> str:
-    """Build the message context line.
+def format_message_line(entry: SourceEntry, max_content: int = 100) -> str:
+    """Build a message detail line for inclusion in the description.
+
+    Creates the line showing sender, conversation, and content that gets
+    embedded in the ImageDescription field (part of the description, not
+    raw context metadata).
 
     Format:   - {sender} in "{conversation}": "{content}"
 
@@ -407,7 +414,7 @@ def build_message_context(entry: SourceEntry, max_content: int = 100) -> str:
         max_content: Maximum characters for content (will be truncated).
 
     Returns:
-        Formatted message context line, or empty string if no context.
+        Formatted message detail line, or empty string if no message info.
     """
     if not entry.conversation and not entry.sender and not entry.content:
         return ""
@@ -481,11 +488,11 @@ def build_description(entry: SourceEntry, max_content: int = 100) -> str:
     """
     lines = [build_source_line(entry)]
 
-    # Add message context if we have conversation/sender/content info
+    # Add message detail line if we have conversation/sender/content info
     if entry.conversation or entry.sender or entry.content:
-        context_line = build_message_context(entry, max_content)
-        if context_line:
-            lines.append(context_line)
+        message_line = format_message_line(entry, max_content)
+        if message_line:
+            lines.append(message_line)
 
     return "&#xa;".join(lines)
 
@@ -533,42 +540,42 @@ def format_secondary_source(entry: SourceEntry, max_chars: int = 250) -> str:
         source_prefix += f"/{entry.service}"
     source_prefix += ":"
 
-    # Build context using unified message format
-    context_parts = []
+    # Build message detail parts
+    detail_parts = []
 
     # Sender and conversation in unified format
     if entry.sender and entry.conversation:
-        context_parts.append(f'{entry.sender} in "{entry.conversation}"')
+        detail_parts.append(f'{entry.sender} in "{entry.conversation}"')
     elif entry.sender:
-        context_parts.append(entry.sender)
+        detail_parts.append(entry.sender)
     elif entry.conversation:
-        context_parts.append(f'in "{entry.conversation}"')
+        detail_parts.append(f'in "{entry.conversation}"')
 
     # Add truncated content in quotes
     if entry.content:
         content = entry.content.replace("\n", " ")
         truncated_content = truncate_text(content, msg_truncate)
-        context_parts.append(f'"{truncated_content}"')
+        detail_parts.append(f'"{truncated_content}"')
 
     # Add timestamp
     date_str = format_timestamp(entry.timestamp)
     if date_str:
-        context_parts.append(f"({date_str})")
+        detail_parts.append(f"({date_str})")
 
     # Combine with proper separators
-    if context_parts:
+    if detail_parts:
         # Join sender/conv and content with ": " if both exist
         if (
-            len(context_parts) >= 2
+            len(detail_parts) >= 2
             and entry.content
             and (entry.sender or entry.conversation)
         ):
             # Format: sender in "conv": "content" (date)
             result = (
-                f"{source_prefix} {context_parts[0]}: {' '.join(context_parts[1:])}"
+                f"{source_prefix} {detail_parts[0]}: {' '.join(detail_parts[1:])}"
             )
         else:
-            result = f"{source_prefix} {' '.join(context_parts)}"
+            result = f"{source_prefix} {' '.join(detail_parts)}"
     else:
         result = source_prefix.rstrip(":")
 
@@ -599,42 +606,42 @@ def _format_secondary_with_relative_path(
     # Build source prefix with relative path
     source_prefix = f"+{relative_path}:"
 
-    # Build context using unified message format
-    context_parts = []
+    # Build message detail parts
+    detail_parts = []
 
     # Sender and conversation in unified format
     if entry.sender and entry.conversation:
-        context_parts.append(f'{entry.sender} in "{entry.conversation}"')
+        detail_parts.append(f'{entry.sender} in "{entry.conversation}"')
     elif entry.sender:
-        context_parts.append(entry.sender)
+        detail_parts.append(entry.sender)
     elif entry.conversation:
-        context_parts.append(f'in "{entry.conversation}"')
+        detail_parts.append(f'in "{entry.conversation}"')
 
     # Add truncated content in quotes
     if entry.content:
         content = entry.content.replace("\n", " ")
         truncated_content = truncate_text(content, msg_truncate)
-        context_parts.append(f'"{truncated_content}"')
+        detail_parts.append(f'"{truncated_content}"')
 
     # Add timestamp
     date_str = format_timestamp(entry.timestamp)
     if date_str:
-        context_parts.append(f"({date_str})")
+        detail_parts.append(f"({date_str})")
 
     # Combine with proper separators
-    if context_parts:
+    if detail_parts:
         # Join sender/conv and content with ": " if both exist
         if (
-            len(context_parts) >= 2
+            len(detail_parts) >= 2
             and entry.content
             and (entry.sender or entry.conversation)
         ):
             # Format: sender in "conv": "content" (date)
             result = (
-                f"{source_prefix} {context_parts[0]}: {' '.join(context_parts[1:])}"
+                f"{source_prefix} {detail_parts[0]}: {' '.join(detail_parts[1:])}"
             )
         else:
-            result = f"{source_prefix} {' '.join(context_parts)}"
+            result = f"{source_prefix} {' '.join(detail_parts)}"
     else:
         result = source_prefix.rstrip(":")
 
@@ -650,10 +657,10 @@ def build_image_description(
     """Build complete ImageDescription from multiple sources.
 
     Uses relative path notation to minimize redundancy:
-    - Same platform/user, different service: +././service: context
-    - Same platform, different user: +./user/service: context
-    - Different platform: +Platform/user/service: context
-    - Same source, different context: +context (no path, just context line)
+    - Same platform/user, different service: +././service: details
+    - Same platform, different user: +./user/service: details
+    - Different platform: +Platform/user/service: details
+    - Same source, different message details: +details (no path, just message line)
 
     Format examples:
         Source: Google/ethanriverpage/photos
@@ -689,16 +696,16 @@ def build_image_description(
     primary_max = min(100, max_per_source)
     lines.append(format_primary_source(primary, primary_max))
 
-    # 2. Add primary context if present
-    primary_context_line = build_message_context(primary)
-    if primary_context_line:
-        lines.append(primary_context_line)
+    # 2. Add primary message detail line if present
+    primary_message_line = format_message_line(primary)
+    if primary_message_line:
+        lines.append(primary_message_line)
 
-    # Track seen contexts to avoid duplicates
-    seen_contexts: set = set()
-    primary_context_key = _get_context_key(primary)
-    if primary_context_key != ("", "", ""):
-        seen_contexts.add(primary_context_key)
+    # Track seen message details to avoid duplicates in description
+    seen_message_keys: set = set()
+    primary_message_key = _get_context_key(primary)
+    if primary_message_key != ("", "", ""):
+        seen_message_keys.add(primary_message_key)
 
     # Calculate remaining budget (account for &#xa; separators between lines)
     current_len = (
@@ -716,23 +723,26 @@ def build_image_description(
         else:
             different_source_entries.append(entry)
 
-    # 4. Add unique contexts from same-source entries as context lines
+    # 4. Add unique message details from same-source entries as additional lines
     for entry in same_source_entries:
         if remaining <= 0:
             break
 
-        if _has_unique_context(entry, seen_contexts):
-            # Add context key to seen set
-            seen_contexts.add(_get_context_key(entry))
+        if _has_unique_context(entry, seen_message_keys):
+            # Add message key to seen set
+            seen_message_keys.add(_get_context_key(entry))
 
-            # Format as +context (secondary context line)
-            context_line = _format_context_line(entry, is_secondary=True)
-            if context_line:
-                if len(context_line) + 5 <= remaining:  # +5 for &#xa; separator
-                    lines.append(context_line)
-                    remaining -= len(context_line) + 5
+            # Format as +details (secondary message detail line)
+            message_line = _format_message_line(entry, is_secondary=True)
+            if message_line:
+                if len(message_line) + 5 <= remaining:  # +5 for &#xa; separator
+                    lines.append(message_line)
+                    remaining -= len(message_line) + 5
 
     # 5. Add different-source entries with relative path notation
+    # Track seen rendered lines to avoid duplicates (post-truncation deduplication)
+    seen_secondary_lines: set = set()
+
     for entry in different_source_entries:
         if remaining <= 0:
             break
@@ -749,6 +759,13 @@ def build_image_description(
             continue
 
         line = _format_secondary_with_relative_path(entry, relative_path, source_budget)
+
+        # Skip if this exact rendered line was already emitted
+        # (handles cases where distinct metadata collapses to identical display)
+        if line in seen_secondary_lines:
+            continue
+
+        seen_secondary_lines.add(line)
         lines.append(line)
         remaining -= len(line) + 5  # +5 for &#xa; separator
 

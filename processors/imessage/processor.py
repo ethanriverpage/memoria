@@ -20,7 +20,7 @@ from common.config.runtime import default_worker_count
 from common.dedup.description import (
     SourceEntry,
     build_source_line,
-    build_message_context,
+    format_message_line,
     PLATFORM_IMESSAGE,
 )
 from common.failures import FailureTracker
@@ -417,7 +417,7 @@ def _build_description(message: dict, export_username: str) -> str:
                 conversation=conv_name,
                 content=content,
             )
-            msg_line = build_message_context(msg_entry)
+            msg_line = format_message_line(msg_entry)
 
             if msg_line and msg_line not in seen_lines:
                 seen_lines.add(msg_line)
@@ -444,7 +444,7 @@ def _build_description(message: dict, export_username: str) -> str:
             conversation=conv_name,
             content=content,
         )
-        msg_line = build_message_context(msg_entry)
+        msg_line = format_message_line(msg_entry)
         if msg_line:
             description_parts.append(msg_line)
 
@@ -520,7 +520,7 @@ def build_filename_index(metadata: dict) -> dict:
 
     Note:
         Only adds orphaned_media entries if they don't already exist in the index.
-        Orphaned files can have the same filename as database entries (e.g., IMG_0001.jpeg),
+        Orphaned media files can have the same filename as database entries (e.g., IMG_0001.jpeg),
         but we prefer the database entry which has valid metadata.
     """
     return ProcessorBase.build_media_filename_index(

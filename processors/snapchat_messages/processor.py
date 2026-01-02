@@ -14,7 +14,7 @@ from common.dedup.description import (
     SourceEntry,
     build_description,
     build_source_line,
-    build_message_context,
+    format_message_line,
     PLATFORM_SNAPCHAT,
     SERVICE_MESSAGES,
 )
@@ -319,7 +319,7 @@ def _build_description(message: dict, export_username: str) -> str:
                     conversation=conv_name,
                     content=content,
                 )
-                msg_line = build_message_context(msg_entry)
+                msg_line = format_message_line(msg_entry)
                 if msg_line:
                     description_parts.append(msg_line)
 
@@ -330,7 +330,7 @@ def _build_description(message: dict, export_username: str) -> str:
         conv_id = message.get("conversation_id")
 
         if conv_id is None or conv_type is None:
-            # Orphaned media - minimal metadata
+            # Unmatched media - minimal metadata (processable but missing full context)
             return build_description(source_entry)
         else:
             # Normal message with unified format
@@ -349,7 +349,7 @@ def _build_description(message: dict, export_username: str) -> str:
                 conversation=conv_name,
                 content=content,
             )
-            msg_line = build_message_context(msg_entry)
+            msg_line = format_message_line(msg_entry)
             if msg_line:
                 description_parts.append(msg_line)
 
@@ -828,7 +828,9 @@ def _process_snapchat_working_directory(
     media_index = build_media_index(metadata)
     filename_index = build_filename_index(metadata)
     logger.info("Found %d messages with media IDs", len(media_index))
-    logger.info("Found %d orphaned media entries by filename", len(filename_index))
+    logger.info(
+        "Indexed %d media items by filename (including unmatched_media)", len(filename_index)
+    )
 
     # Build list of source files from metadata.
     #
@@ -915,7 +917,7 @@ def _process_snapchat_working_directory(
     # Match media files to messages
     logger.info("Matching media files to messages...")
     matched_files = []
-    unmatched_files = []
+    orphaned_media_files = []
 
     for media_file in media_files:
         # Try to extract media_id from filename
@@ -926,15 +928,15 @@ def _process_snapchat_working_directory(
             message = media_index[media_id]
             matched_files.append((media_file, message))
         elif media_file.name in filename_index:
-            # Match by filename (for orphaned media without media_id)
+            # Match by filename (covers conversation entries and unmatched_media entries)
             message = filename_index[media_file.name]
             matched_files.append((media_file, message))
         else:
-            # Could not match - add to unmatched
-            unmatched_files.append(media_file)
+            # Could not match to any metadata entry - orphaned media (matching failure)
+            orphaned_media_files.append(media_file)
 
     logger.info("Matched %d files", len(matched_files))
-    logger.info("Unmatched %d files", len(unmatched_files))
+    logger.info("Orphaned media files: %d", len(orphaned_media_files))
 
     # Pre-generate all output filenames to ensure deterministic naming
     logger.info("Pre-generating output filenames...")
@@ -1102,16 +1104,19 @@ def _process_snapchat_working_directory(
         metadata_for_file=metadata_for_file,
     )
 
-    # Handle unmatched files via FailureTracker
-    if unmatched_files:
-        logger.info("Processing %d unmatched files...", len(unmatched_files))
-        for media_file in unmatched_files:
+    # Handle orphaned media files via FailureTracker (matching failure)
+    if orphaned_media_files:
+        logger.info(
+            "Tracking %d orphaned media files via FailureTracker...",
+            len(orphaned_media_files),
+        )
+        for media_file in orphaned_media_files:
             failure_tracker.add_orphaned_media(
                 media_path=Path(media_file),
                 reason="No matching metadata found",
             )
 
-    # Handle failures - copy orphaned files and generate report
+    # Handle failures - copy orphaned media files and generate report
     failure_tracker.handle_failures(output_dir)
 
     # Save dedup references for skipped secondary files
@@ -1131,13 +1136,13 @@ def _process_snapchat_working_directory(
         output_dir=str(output_dir),
         extra_stats={
             "EXIF structures rebuilt": exif_rebuilt_count,
-            "Unmatched": len(unmatched_files),
+            "Orphaned media": len(orphaned_media_files),
         },
     )
 
-    if unmatched_files:
+    if orphaned_media_files:
         logger.info(
-            "Unmatched files were tracked via FailureTracker (see issues/failure-report.json)."
+            "Orphaned media files were tracked via FailureTracker (see issues/failure-report.json)."
         )
 
     logger.info("Note: Videos with overlays are saved as multi-track MKV files:")

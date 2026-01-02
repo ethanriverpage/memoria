@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from common.dedup.description import (
     SourceEntry,
     build_source_line,
-    build_message_context,
+    format_message_line,
     PLATFORM_IMESSAGE,
 )
 from common.config.runtime import default_worker_count
@@ -346,7 +346,7 @@ def _build_description(message: dict, export_username: str) -> str:
                 conversation=conv_name,
                 content=content,
             )
-            msg_line = build_message_context(msg_entry)
+            msg_line = format_message_line(msg_entry)
 
             if msg_line and msg_line not in seen_lines:
                 seen_lines.add(msg_line)
@@ -373,7 +373,7 @@ def _build_description(message: dict, export_username: str) -> str:
             conversation=conv_name,
             content=content,
         )
-        msg_line = build_message_context(msg_entry)
+        msg_line = format_message_line(msg_entry)
         if msg_line:
             description_parts.append(msg_line)
 

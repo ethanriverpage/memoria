@@ -320,8 +320,8 @@ class TestCrossProcessorDescriptionBuilding:
         assert lines[0].startswith("Source:")
         assert "Google" in lines[0]
 
-        # Remaining lines should be secondary sources or context lines
-        # Secondary sources start with + and may be full paths, relative paths, or context-only
+        # Remaining lines should be secondary sources or message detail lines
+        # Secondary sources start with + and may be full paths, relative paths, or detail-only
         for line in lines[1:]:
             if line.strip():
                 # Should start with either "  - " (primary context) or "+" (secondary)
@@ -368,6 +368,55 @@ class TestCrossProcessorDescriptionBuilding:
 
         # Should return None for secondary files
         assert description is None
+
+    def test_caption_fallback_in_merged_description(self):
+        """Test that caption-only secondary context is displayed in merged description.
+
+        Regression test: Some processors (Instagram, Instaloader) emit "caption"
+        instead of "content" in their metadata. The create_source_entry() helper
+        should fall back from content to caption, ensuring caption text appears
+        in the merged description.
+        """
+        # Create a manifest where secondary has caption but no content
+        manifest = {
+            "duplicates": {
+                "test_hash_caption_fallback": {
+                    "primary": {
+                        "processor": "Google Photos",
+                        "source_path": "/exports/google/photo.jpg",
+                        "content_hash": "test_hash_caption_fallback",
+                        "file_size": 1000000,
+                        "context": {
+                            "username": "user@gmail.com",
+                        },
+                    },
+                    "secondary": [
+                        {
+                            "processor": "Instagram Public Media",
+                            "source_path": "/exports/instagram/post.jpg",
+                            "content_hash": "test_hash_caption_fallback",
+                            "context": {
+                                "username": "insta_user",
+                                # caption instead of content
+                                "caption": "Beach sunset vibes",
+                                # no "content" key
+                            },
+                        },
+                    ],
+                    "merged_metadata": {
+                        "timestamp": "2024-01-15T10:00:00Z",
+                    },
+                },
+            },
+        }
+
+        description = get_merged_description_for_file(
+            manifest, "/exports/google/photo.jpg"
+        )
+
+        assert description is not None
+        # The caption text should appear in the merged description
+        assert "Beach sunset vibes" in description
 
 
 class TestDescriptionBuilderIntegration:

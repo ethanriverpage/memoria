@@ -37,7 +37,7 @@ from common.dedup.description import (
     PLATFORM_SNAPCHAT,
     SERVICE_MESSAGES,
     SourceEntry,
-    build_message_context,
+    format_message_line,
     build_source_line,
 )
 from common.files.utils import copy_file
@@ -588,7 +588,7 @@ def _build_message_description(metadata: Optional[dict], export_username: str) -
         conversation=conversation_name,
         content=content,
     )
-    msg_line = build_message_context(msg_entry)
+    msg_line = format_message_line(msg_entry)
 
     description_parts = [source_line]
     if msg_line:

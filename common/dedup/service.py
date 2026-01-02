@@ -23,6 +23,7 @@ from common.dedup.config import DedupConfig, get_dedup_config
 from common.dedup.description import (
     SourceEntry,
     build_image_description,
+    create_source_entry,
     get_platform_service,
 )
 from common.dedup.database import HashDatabase, HashDatabaseProtocol
@@ -1374,14 +1375,15 @@ def get_merged_description_for_file(
         # The primary's context is stored alongside its processor/source_path in the manifest
         primary_context = primary.get("context", {})
 
-        primary_entry = SourceEntry(
+        # Use create_source_entry for consistent field normalization:
+        # - caption fallback to content
+        # - timestamp parsing (Z handling)
+        # - consistent field mapping
+        primary_entry = create_source_entry(
             processor=primary_platform,
-            username=primary_context.get("username", ""),
-            service=primary_service,
+            metadata=primary_context,
             is_primary=True,
-            sender=primary_context.get("sender", ""),
-            conversation=primary_context.get("conversation", ""),
-            content=primary_context.get("content", ""),
+            service=primary_service,
         )
 
         # Build secondary source entries
@@ -1394,26 +1396,13 @@ def get_merged_description_for_file(
             sec_platform, sec_service = get_platform_service(sec_processor)
             sec_context = sec.get("context", {})
 
-            # Create source entry with platform/service
-            entry = SourceEntry(
+            # Use create_source_entry for consistent field normalization
+            entry = create_source_entry(
                 processor=sec_platform,
-                username=sec_context.get("username", ""),
-                service=sec_service or sec_context.get("service", ""),
+                metadata=sec_context,
                 is_primary=False,
-                sender=sec_context.get("sender", ""),
-                conversation=sec_context.get("conversation", ""),
-                content=sec_context.get("content", ""),
+                service=sec_service or sec_context.get("service", ""),
             )
-
-            # Parse timestamp if present
-            ts = sec_context.get("timestamp")
-            if isinstance(ts, str):
-                try:
-                    entry.timestamp = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                except (ValueError, AttributeError):
-                    pass
-            elif isinstance(ts, datetime):
-                entry.timestamp = ts
 
             secondary_entries.append(entry)
 
@@ -1483,26 +1472,13 @@ def get_secondary_sources_for_hash(
         sec_platform, sec_service = get_platform_service(sec_processor)
         sec_context = sec.get("context", {})
 
-        # Create source entry with platform/service
-        entry = SourceEntry(
+        # Use create_source_entry for consistent field normalization
+        entry = create_source_entry(
             processor=sec_platform,
-            username=sec_context.get("username", ""),
-            service=sec_service or sec_context.get("service", ""),
+            metadata=sec_context,
             is_primary=False,
-            sender=sec_context.get("sender", ""),
-            conversation=sec_context.get("conversation", ""),
-            content=sec_context.get("content", ""),
+            service=sec_service or sec_context.get("service", ""),
         )
-
-        # Parse timestamp if present
-        ts = sec_context.get("timestamp")
-        if isinstance(ts, str):
-            try:
-                entry.timestamp = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            except (ValueError, AttributeError):
-                pass
-        elif isinstance(ts, datetime):
-            entry.timestamp = ts
 
         entries.append(entry)
 

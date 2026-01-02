@@ -700,7 +700,7 @@ class TestIMessageOrphanDetection:
         # Run orphan detection
         orphaned_media = preprocessor._detect_orphaned_media(processed_attachments)
 
-        # Check that the orphan file was detected
+        # Check that the orphaned media file was detected
         orphaned_paths = [entry["filename"] for entry in orphaned_media]
         assert "orphan_not_in_db.jpg" in orphaned_paths
 
