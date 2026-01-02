@@ -19,25 +19,16 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from common.dedup.description import format_secondary_source
-from common.dedup.service import (
-    get_merged_metadata_for_hash,
-    get_secondary_sources_for_hash,
-)
 from common.files.filter import BannedFilesFilter
 from common.files.types import get_media_type, get_gps_format
 from common.files.utils import short_path
-from common.media.exiftool_runner import (
-    exiftool_argfile,
-    run_exiftool_with_argfile,
-    run_exiftool_direct,
-)
 from common.output.progress import PHASE_EXIF, chunked_progress
 from common.validation.invariants import InvariantViolation, validate_gps
 
@@ -582,148 +573,163 @@ def batch_write_metadata_requests(
             continue
 
         try:
-            with exiftool_argfile("exiftool_write") as argfile_path:
-                with open(argfile_path, "w") as argfile:
-                    for request in filtered_chunk:
-                        existing_fields = existing_metadata_map.get(request.file_path, {})
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                prefix=f"exiftool_{os.getpid()}_",
+                suffix=".args",
+                delete=False,
+            ) as argfile:
+                argfile_path = argfile.name
 
-                        merged_meta = _get_merged_metadata_for_request(
-                            dedup_manifest, request.content_hash
-                        )
-
-                        for flag in request.arg_preamble:
-                            argfile.write(f"{flag}\n")
-
-                        datetime_tags = _get_datetime_tags_with_merged(
-                            request.datetime_tags, merged_meta
-                        )
-                        for tag_name, tag_value in datetime_tags:
-                            if not existing_fields.get(tag_name, False):
-                                argfile.write(f"-{tag_name}={tag_value}\n")
-
-                        gps_to_write = _get_gps_with_merged(request.gps, merged_meta)
-                        if gps_to_write and not existing_fields.get("GPSLatitude", False):
-                            lat = gps_to_write.latitude
-                            lon = gps_to_write.longitude
-
-                            gps_format = get_gps_format(request.file_path)
-
-                            if gps_format == "absolute":
-                                argfile.write(f"-GPSLatitude={abs(lat)}\n")
-                                argfile.write(
-                                    f"-GPSLatitudeRef={'N' if lat >= 0 else 'S'}\n"
-                                )
-                                argfile.write(f"-GPSLongitude={abs(lon)}\n")
-                                argfile.write(
-                                    f"-GPSLongitudeRef={'E' if lon >= 0 else 'W'}\n"
-                                )
-                            else:
-                                argfile.write(f"-GPSLatitude={lat}\n")
-                                argfile.write(f"-GPSLongitude={lon}\n")
-
-                            if (
-                                gps_to_write.altitude is not None
-                                and gps_to_write.altitude != 0.0
-                            ):
-                                argfile.write(f"-GPSAltitude={gps_to_write.altitude}\n")
-
-                        if request.original_filename:
-                            ext = Path(request.file_path).suffix.lower()
-                            if ext in XMP_PRESERVED_FILENAME_EXTENSIONS:
-                                argfile.write(
-                                    f"-XMP:PreservedFileName={request.original_filename}\n"
-                                )
-
-                        if request.description:
-                            final_description = _get_description_for_file(
-                                request.description.default_description,
-                                dedup_manifest,
-                                request.content_hash,
-                                request.processor_name,
-                            )
-
-                            media_type = get_media_type(request.file_path)
-
-                            if media_type == "image":
-                                tags_to_write = request.description.image_tags
-                            elif media_type == "video":
-                                tags_to_write = request.description.video_tags
-                            else:
-                                tags_to_write = []
-
-                            for tag in tags_to_write:
-                                argfile.write(f"-{tag}={final_description}\n")
-
-                        argfile.write(f"{request.file_path}\n")
-                        argfile.write("-execute\n")
-
-                result = run_exiftool_with_argfile(argfile_path)
-
-                # Parse per-file errors from stderr for precise failure attribution
-                stderr_text = result.stderr.strip()
-                failed_files = _parse_exiftool_failed_files(stderr_text)
-
-                # Classify each file individually based on whether it appears in errors
                 for request in filtered_chunk:
-                    if request.file_path in failed_files:
-                        # This specific file failed - determine reason code
-                        error_msg = failed_files[request.file_path]
+                    existing_fields = existing_metadata_map.get(request.file_path, {})
 
-                        # Check if this is a large video error eligible for ffmpeg fallback
-                        if _is_large_video_error(error_msg) and _can_attempt_ffmpeg_remux(
-                            request.file_path
-                        ):
-                            # Build metadata for remux from the request
-                            remux_metadata = _build_remux_metadata(
-                                request, dedup_manifest, existing_metadata_map
+                    merged_meta = _get_merged_metadata_for_request(
+                        dedup_manifest, request.content_hash
+                    )
+
+                    for flag in request.arg_preamble:
+                        argfile.write(f"{flag}\n")
+
+                    datetime_tags = _get_datetime_tags_with_merged(
+                        request.datetime_tags, merged_meta
+                    )
+                    for tag_name, tag_value in datetime_tags:
+                        if not existing_fields.get(tag_name, False):
+                            argfile.write(f"-{tag_name}={tag_value}\n")
+
+                    gps_to_write = _get_gps_with_merged(request.gps, merged_meta)
+                    if gps_to_write and not existing_fields.get("GPSLatitude", False):
+                        lat = gps_to_write.latitude
+                        lon = gps_to_write.longitude
+
+                        gps_format = get_gps_format(request.file_path)
+
+                        if gps_format == "absolute":
+                            argfile.write(f"-GPSLatitude={abs(lat)}\n")
+                            argfile.write(
+                                f"-GPSLatitudeRef={'N' if lat >= 0 else 'S'}\n"
                             )
-
-                            logger.info(
-                                f"ExifTool failed for large video, attempting ffmpeg remux: "
-                                f"{short_path(request.file_path)}"
+                            argfile.write(f"-GPSLongitude={abs(lon)}\n")
+                            argfile.write(
+                                f"-GPSLongitudeRef={'E' if lon >= 0 else 'W'}\n"
                             )
+                        else:
+                            argfile.write(f"-GPSLatitude={lat}\n")
+                            argfile.write(f"-GPSLongitude={lon}\n")
 
-                            remux_result = _remux_video_with_metadata(
-                                Path(request.file_path), remux_metadata
-                            )
-
-                            if remux_result.success:
-                                # Remux succeeded - treat as success
-                                outcome.successes.add(request.file_path)
-                                continue
-                            else:
-                                # Remux failed - record the remux failure
-                                outcome.failures.append(
-                                    ExifWriteFailure(
-                                        file_path=request.file_path,
-                                        reason_code=f"video_metadata_remux_failed:{remux_result.reason_code}",
-                                        stderr_excerpt=remux_result.stderr_excerpt,
-                                    )
-                                )
-                                continue
-
-                        # Standard ExifTool failure classification
-                        reason_code = "exiftool_write_failed"
                         if (
-                            "format error" in error_msg.lower()
-                            or "not a valid" in error_msg.lower()
+                            gps_to_write.altitude is not None
+                            and gps_to_write.altitude != 0.0
                         ):
-                            reason_code = "format_error"
-                        elif "moov atom not found" in error_msg.lower():
-                            reason_code = "probe_error"
-                        elif "file not found" in error_msg.lower():
-                            reason_code = "file_missing"
+                            argfile.write(f"-GPSAltitude={gps_to_write.altitude}\n")
 
-                        outcome.failures.append(
-                            ExifWriteFailure(
-                                file_path=request.file_path,
-                                reason_code=reason_code,
-                                stderr_excerpt=error_msg[:500],
+                    if request.original_filename:
+                        ext = Path(request.file_path).suffix.lower()
+                        if ext in XMP_PRESERVED_FILENAME_EXTENSIONS:
+                            argfile.write(
+                                f"-XMP:PreservedFileName={request.original_filename}\n"
                             )
+
+                    if request.description:
+                        final_description = _get_description_for_file(
+                            request.description.default_description,
+                            dedup_manifest,
+                            request.content_hash,
+                            request.processor_name,
                         )
-                    else:
-                        # File not in error list - it succeeded
-                        outcome.successes.add(request.file_path)
+
+                        media_type = get_media_type(request.file_path)
+
+                        if media_type == "image":
+                            tags_to_write = request.description.image_tags
+                        elif media_type == "video":
+                            tags_to_write = request.description.video_tags
+                        else:
+                            tags_to_write = []
+
+                        for tag in tags_to_write:
+                            argfile.write(f"-{tag}={final_description}\n")
+
+                    argfile.write(f"{request.file_path}\n")
+                    argfile.write("-execute\n")
+
+            cmd = ["exiftool", "-@", argfile_path]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+
+            # Parse per-file errors from stderr for precise failure attribution
+            stderr_text = (result.stderr or "").strip()
+            failed_files = _parse_exiftool_failed_files(stderr_text)
+
+            # Classify each file individually based on whether it appears in errors
+            for request in filtered_chunk:
+                if request.file_path in failed_files:
+                    # This specific file failed - determine reason code
+                    error_msg = failed_files[request.file_path]
+
+                    # Check if this is a large video error eligible for ffmpeg fallback
+                    if _is_large_video_error(error_msg) and _can_attempt_ffmpeg_remux(
+                        request.file_path
+                    ):
+                        # Build metadata for remux from the request
+                        remux_metadata = _build_remux_metadata(
+                            request, dedup_manifest, existing_metadata_map
+                        )
+
+                        logger.info(
+                            f"ExifTool failed for large video, attempting ffmpeg remux: "
+                            f"{short_path(request.file_path)}"
+                        )
+
+                        remux_result = _remux_video_with_metadata(
+                            Path(request.file_path), remux_metadata
+                        )
+
+                        if remux_result.success:
+                            # Remux succeeded - treat as success
+                            outcome.successes.add(request.file_path)
+                            continue
+                        else:
+                            # Remux failed - record the remux failure
+                            outcome.failures.append(
+                                ExifWriteFailure(
+                                    file_path=request.file_path,
+                                    reason_code=f"video_metadata_remux_failed:{remux_result.reason_code}",
+                                    stderr_excerpt=remux_result.stderr_excerpt,
+                                )
+                            )
+                            continue
+
+                    # Standard ExifTool failure classification
+                    reason_code = "exiftool_write_failed"
+                    if (
+                        "format error" in error_msg.lower()
+                        or "not a valid" in error_msg.lower()
+                    ):
+                        reason_code = "format_error"
+                    elif "moov atom not found" in error_msg.lower():
+                        reason_code = "probe_error"
+                    elif "file not found" in error_msg.lower():
+                        reason_code = "file_missing"
+
+                    outcome.failures.append(
+                        ExifWriteFailure(
+                            file_path=request.file_path,
+                            reason_code=reason_code,
+                            stderr_excerpt=error_msg[:500],
+                        )
+                    )
+                else:
+                    # File not in error list - it succeeded
+                    outcome.successes.add(request.file_path)
+
+            os.unlink(argfile_path)
 
         except InvariantViolation:
             # Hard-fail invariants bubble up
@@ -732,6 +738,11 @@ def batch_write_metadata_requests(
             logger.warning(
                 f"Failed to batch write metadata for {filtered_chunk[0].processor_name if filtered_chunk else 'unknown'} chunk: {e}"
             )
+            try:
+                if argfile_path is not None:
+                    os.unlink(argfile_path)
+            except Exception:
+                pass
 
     return outcome
 
@@ -751,6 +762,9 @@ def _get_merged_metadata_for_request(
     """
     if dedup_manifest is None or content_hash is None:
         return None
+
+    # Import here to avoid circular imports
+    from common.dedup.service import get_merged_metadata_for_hash
 
     return get_merged_metadata_for_hash(dedup_manifest, content_hash)
 
@@ -885,6 +899,10 @@ def _get_description_for_file(
     if dedup_manifest is None or content_hash is None:
         return default_description
 
+    # Import here to avoid circular imports
+    from common.dedup.service import get_secondary_sources_for_hash
+    from common.dedup.description import format_secondary_source
+
     # Get all secondary sources from dedup manifest
     # Same-source entries use relative path notation (build_image_description handles this)
     secondary_sources = get_secondary_sources_for_hash(
@@ -991,10 +1009,16 @@ def batch_validate_exif(file_paths: Sequence[Optional[str]]) -> Set[str]:
         chunk = exif_paths[i : i + chunk_size]
         try:
             # Use exiftool to validate files in this chunk
-            args = ["-validate", "-warning"]
-            args.extend([str(path) for path in chunk])
+            cmd = ["exiftool", "-validate", "-warning"]
+            cmd.extend([str(path) for path in chunk])
 
-            result = run_exiftool_direct(args)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
 
             # Parse output to identify corrupted files
             # Format: "======== {filename}" followed by "Warning: ..."
@@ -1046,33 +1070,59 @@ def batch_rebuild_exif(file_paths: List[str]) -> None:
     chunk_size = 500
     for i in range(0, len(file_paths), chunk_size):
         chunk = file_paths[i : i + chunk_size]
+        argfile_path: Optional[str] = None
 
         try:
-            with exiftool_argfile("exiftool_rebuild") as argfile_path:
-                with open(argfile_path, "w") as argfile:
-                    # Write commands for each file using -execute separator
-                    for file_path in chunk:
-                        argfile.write("-ignoreMinorErrors\n")
-                        argfile.write("-overwrite_original\n")
-                        argfile.write("-all=\n")
-                        argfile.write("-tagsfromfile\n")
-                        argfile.write("@\n")
-                        argfile.write("-all:all\n")
-                        argfile.write("-unsafe\n")
-                        argfile.write(f"{file_path}\n")
-                        argfile.write("-execute\n")
+            # Create temporary argfile for batch processing
+            # Use process ID to ensure unique temp files per worker
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                prefix=f"exiftool_{os.getpid()}_",
+                suffix=".args",
+                delete=False,
+            ) as argfile:
+                argfile_path = argfile.name
 
-                result = run_exiftool_with_argfile(argfile_path)
+                # Write commands for each file using -execute separator
+                for file_path in chunk:
+                    argfile.write("-ignoreMinorErrors\n")
+                    argfile.write("-overwrite_original\n")
+                    argfile.write("-all=\n")
+                    argfile.write("-tagsfromfile\n")
+                    argfile.write("@\n")
+                    argfile.write("-all:all\n")
+                    argfile.write("-unsafe\n")
+                    argfile.write(f"{file_path}\n")
+                    argfile.write("-execute\n")
 
-                # Count successes
-                success_count = result.stdout.count("image files updated")
-                if success_count > 0:
-                    logger.debug(
-                        f"Successfully rebuilt EXIF for {success_count} files in chunk"
-                    )
+            # Run exiftool with argfile
+            cmd = ["exiftool", "-@", argfile_path]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+
+            # Count successes
+            success_count = result.stdout.count("image files updated")
+            if success_count > 0:
+                logger.debug(
+                    f"Successfully rebuilt EXIF for {success_count} files in chunk"
+                )
+
+            # Clean up argfile
+            os.unlink(argfile_path)
 
         except Exception as e:
             logger.warning(f"Failed to batch rebuild EXIF for chunk: {e}")
+            # Try to clean up argfile if it exists
+            try:
+                if argfile_path is not None:
+                    os.unlink(argfile_path)
+            except Exception:
+                pass
 
 
 # =============================================================================
@@ -1143,7 +1193,8 @@ def _read_metadata_batch(file_paths: List[str]) -> Dict[str, Dict[str, bool]]:
     metadata_map = {}
 
     # Use exiftool with JSON output for easy parsing
-    args = [
+    cmd = [
+        "exiftool",
         "-ignoreMinorErrors",
         "-json",
         "-s",
@@ -1157,12 +1208,19 @@ def _read_metadata_batch(file_paths: List[str]) -> Dict[str, Dict[str, bool]]:
         "-GPSLongitude",
         "-GPSAltitude",
     ]
-    args.extend([str(path) for path in file_paths])
+    cmd.extend([str(path) for path in file_paths])
 
-    result = run_exiftool_direct(args)
+    # Don't use check=True - handle errors manually
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+    )
 
     # Check for serious errors (not just missing files)
-    if not result.success:
+    if result.returncode != 0:
         logger.debug(f"Exiftool returned non-zero exit code {result.returncode}")
         if result.stderr:
             logger.debug(f"Exiftool stderr: {result.stderr[:500]}")

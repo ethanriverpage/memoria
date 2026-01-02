@@ -2,17 +2,22 @@
 Media processing utilities for images and videos.
 
 This package provides:
-- Batch EXIF metadata operations via exiftool (import from common.media.exiftool)
-- Overlay embedding for Snapchat memories (import from common.media.overlay)
+- Batch EXIF metadata operations via exiftool
+- Overlay embedding for Snapchat memories
 - Video encoding with hardware acceleration detection
-- Video probing utilities
-
-Note: exiftool and overlay modules have many exports and are involved in
-complex import chains. Import directly from the submodules when needed:
-    from common.media.exiftool import batch_write_metadata_requests, ...
-    from common.media.overlay import embed_overlay, ...
 """
 
+from common.media.exiftool import (
+    GPSData,
+    DescriptionWriteSpec,
+    MetadataWriteRequest,
+    batch_write_metadata_requests,
+    batch_read_existing_metadata,
+    batch_validate_exif,
+    batch_rebuild_exif,
+    DEFAULT_PREAMBLE,
+    PREAMBLE_WITH_IGNORE_ERRORS,
+)
 from common.media.encoder import (
     get_encoder_args,
     get_encoder_input_args,
@@ -28,7 +33,20 @@ from common.media.probe import (
     quick_isobmff_header_check,
 )
 
+# Note: overlay module has many exports, import directly when needed
+# from common.media.overlay import embed_overlay, process_video_with_overlay, ...
+
 __all__ = [
+    # Exiftool
+    "GPSData",
+    "DescriptionWriteSpec",
+    "MetadataWriteRequest",
+    "batch_write_metadata_requests",
+    "batch_read_existing_metadata",
+    "batch_validate_exif",
+    "batch_rebuild_exif",
+    "DEFAULT_PREAMBLE",
+    "PREAMBLE_WITH_IGNORE_ERRORS",
     # Encoder
     "get_encoder_args",
     "get_encoder_input_args",

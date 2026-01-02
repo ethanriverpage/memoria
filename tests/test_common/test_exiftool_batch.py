@@ -59,7 +59,7 @@ class TestDescriptionWriting:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=capture_argfile),
+            patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
             patch("common.media.exiftool.get_media_type", return_value="image"),
         ):
             batch_write_metadata_requests(
@@ -108,7 +108,7 @@ class TestDescriptionWriting:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=capture_argfile),
+            patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
             patch("common.media.exiftool.get_media_type", return_value="image"),
         ):
             batch_write_metadata_requests(
@@ -148,7 +148,7 @@ class TestDescriptionWriting:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=capture_argfile),
+            patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
             patch("common.media.exiftool.get_media_type", return_value="video"),
         ):
             batch_write_metadata_requests(
@@ -196,7 +196,7 @@ class TestDedupOverride:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=capture_argfile),
+            patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
             patch("common.media.exiftool.get_media_type", return_value="image"),
             patch(
                 "common.media.exiftool._get_description_for_file",
@@ -241,7 +241,7 @@ class TestDedupOverride:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=capture_argfile),
+            patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
             patch("common.media.exiftool.get_media_type", return_value="image"),
         ):
             batch_write_metadata_requests(
@@ -292,7 +292,7 @@ class TestDatetimeAndGPS:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=capture_argfile),
+            patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
             patch("common.media.exiftool.get_media_type", return_value="image"),
         ):
             batch_write_metadata_requests(
@@ -342,7 +342,7 @@ class TestDatetimeAndGPS:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=capture_argfile),
+            patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
             patch("common.media.exiftool.get_media_type", return_value="image"),
         ):
             batch_write_metadata_requests(
@@ -382,7 +382,7 @@ class TestDatetimeAndGPS:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=capture_argfile),
+            patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
             patch("common.media.exiftool.get_media_type", return_value="image"),
             patch("common.media.exiftool.get_gps_format", return_value="signed"),
         ):
@@ -415,18 +415,14 @@ class TestUnsupportedFormatsSkipped:
         )
         existing_metadata_map = {str(test_file): {}}
 
-        with (
-            patch("common.media.exiftool_runner.subprocess.run") as mock_runner_run,
-            patch("common.media.exiftool.subprocess.run") as mock_exiftool_run,
-        ):
+        with patch("common.media.exiftool.subprocess.run") as mock_run:
             outcome = batch_write_metadata_requests(
                 [request],
                 existing_metadata_map,
                 dedup_manifest=None,
             )
 
-        mock_runner_run.assert_not_called()
-        mock_exiftool_run.assert_not_called()
+        mock_run.assert_not_called()
         assert str(test_file) in outcome.skipped
         assert str(test_file) not in outcome.successes
         assert outcome.failures == []
@@ -495,7 +491,7 @@ class TestOriginalFilename:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=capture_argfile),
+            patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
             patch("common.media.exiftool.get_media_type", return_value="image"),
         ):
             batch_write_metadata_requests(
@@ -526,8 +522,7 @@ class TestOriginalFilename:
 
         existing_metadata_map = {str(test_file): {}}
         with (
-            patch("common.media.exiftool_runner.subprocess.run") as mock_runner_run,
-            patch("common.media.exiftool.subprocess.run") as mock_exiftool_run,
+            patch("common.media.exiftool.subprocess.run") as mock_run,
             patch("common.media.exiftool.get_media_type", return_value="image"),
         ):
             outcome = batch_write_metadata_requests(
@@ -536,8 +531,7 @@ class TestOriginalFilename:
                 dedup_manifest=None,
             )
 
-        mock_runner_run.assert_not_called()
-        mock_exiftool_run.assert_not_called()
+        mock_run.assert_not_called()
         assert str(test_file) in outcome.skipped
 
     def test_original_filename_not_written_when_none(self, tmp_path: Path) -> None:
@@ -566,7 +560,7 @@ class TestOriginalFilename:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=capture_argfile),
+            patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
             patch("common.media.exiftool.get_media_type", return_value="image"),
         ):
             batch_write_metadata_requests(
@@ -623,7 +617,7 @@ class TestOriginalFilename:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=capture_argfile),
+            patch("common.media.exiftool.subprocess.run", side_effect=capture_argfile),
             patch("common.media.exiftool.get_media_type", return_value="video"),
         ):
             batch_write_metadata_requests(
@@ -650,7 +644,7 @@ class TestBatchWriteOutcomes:
         )
 
         with patch(
-            "common.media.exiftool_runner.subprocess.run",
+            "common.media.exiftool.subprocess.run",
             return_value=MagicMock(returncode=0, stdout="", stderr=""),
         ):
             outcome = batch_write_metadata_requests(
@@ -693,7 +687,7 @@ class TestBatchWriteOutcomes:
         )
 
         with patch(
-            "common.media.exiftool_runner.subprocess.run",
+            "common.media.exiftool.subprocess.run",
             return_value=MagicMock(
                 returncode=1,
                 stdout="",
@@ -744,7 +738,7 @@ class TestBatchWriteOutcomes:
         # Simulate exiftool output where only bad.jpg fails
         stderr = f"Error: Not a valid JPG (looks more like a TXT) - {bad}"
         with patch(
-            "common.media.exiftool_runner.subprocess.run",
+            "common.media.exiftool.subprocess.run",
             return_value=MagicMock(returncode=1, stdout="", stderr=stderr),
         ):
             outcome = batch_write_metadata_requests(
@@ -800,7 +794,7 @@ class TestBatchWriteOutcomes:
             f"Error: File not found - {bad2}"
         )
         with patch(
-            "common.media.exiftool_runner.subprocess.run",
+            "common.media.exiftool.subprocess.run",
             return_value=MagicMock(returncode=1, stdout="", stderr=stderr),
         ):
             outcome = batch_write_metadata_requests(
@@ -849,7 +843,7 @@ class TestBatchWriteOutcomes:
 
         stderr = f"Warning: Bad EXIF data - {warned}"
         with patch(
-            "common.media.exiftool_runner.subprocess.run",
+            "common.media.exiftool.subprocess.run",
             return_value=MagicMock(returncode=1, stdout="", stderr=stderr),
         ):
             outcome = batch_write_metadata_requests(
@@ -986,9 +980,8 @@ class TestLargeVideoFfmpegFallback:
                 return MagicMock(returncode=0, stdout="10.5\n", stderr="")
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=mock_subprocess_run),
-            patch("common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run),
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run
         ):
             outcome = batch_write_metadata_requests(
                 [request],
@@ -1036,9 +1029,8 @@ class TestLargeVideoFfmpegFallback:
                 return MagicMock(returncode=0, stdout="10.5\n", stderr="")
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=mock_subprocess_run),
-            patch("common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run),
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run
         ):
             outcome = batch_write_metadata_requests(
                 [request],
@@ -1079,9 +1071,8 @@ class TestLargeVideoFfmpegFallback:
                 )
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=mock_subprocess_run),
-            patch("common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run),
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run
         ):
             outcome = batch_write_metadata_requests(
                 [request],
@@ -1118,9 +1109,8 @@ class TestLargeVideoFfmpegFallback:
                 )
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=mock_subprocess_run),
-            patch("common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run),
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run
         ):
             outcome = batch_write_metadata_requests(
                 [request],
@@ -1163,9 +1153,8 @@ class TestLargeVideoFfmpegFallback:
                 return MagicMock(returncode=0, stdout="10.5\n", stderr="")
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=mock_subprocess_run),
-            patch("common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run),
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run
         ):
             outcome = batch_write_metadata_requests(
                 [request],
@@ -1200,9 +1189,8 @@ class TestLargeVideoFfmpegFallback:
                 )
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with (
-            patch("common.media.exiftool_runner.subprocess.run", side_effect=mock_subprocess_run),
-            patch("common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run),
+        with patch(
+            "common.media.exiftool.subprocess.run", side_effect=mock_subprocess_run
         ):
             outcome = batch_write_metadata_requests(
                 [request],
