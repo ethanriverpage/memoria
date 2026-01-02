@@ -299,16 +299,13 @@ def source_path(dataset_paths) -> Path:
     return dataset_paths[0]
 
 
-# For backwards compatibility with tests that don't use fixtures
-def _get_processed_path() -> Path:
-    """Get processed path for non-fixture tests."""
-    return TEST_DATASET_PROCESSED
-
-
-skip_no_dataset = pytest.mark.skipif(
-    not TEST_DATASET_PROCESSED.exists() and not os.environ.get("RUN_FULL_PIPELINE"),
-    reason=f"Processed test dataset not found at {TEST_DATASET_PROCESSED}",
-)
+#
+# NOTE: This module is intentionally opt-in and is expected to be skipped in CI
+# unless a processed dataset exists (or --run-full-pipeline is used).
+#
+# Per workspace rules, we do not maintain internal backwards compatibility for
+# Memoria output formats. Assertions in this file should reflect the single
+# current schema produced by the codebase.
 
 
 def read_exif(file_path: Path) -> Dict[str, Any]:
@@ -383,9 +380,9 @@ class TestDatasetStructure:
             # Some exports may not produce output (e.g., Google Chat only)
             # but most should have output directories
             if output_export.exists():
-                assert output_export.is_dir(), (
-                    f"{source_export.name} output should be a directory"
-                )
+                assert (
+                    output_export.is_dir()
+                ), f"{source_export.name} output should be a directory"
 
     def test_dedup_manifest_exists(self, processed_path):
         """Deduplication manifest should be created."""
@@ -412,9 +409,9 @@ class TestDatasetStructure:
                 file_count = sum(1 for f in files if f.is_file())
                 # Allow some directories to be empty (e.g., issues folders)
                 # but the export should have at least some output
-                assert file_count > 0 or "issues" in str(export_dir), (
-                    f"{export_dir.name} should contain output files"
-                )
+                assert file_count > 0 or "issues" in str(
+                    export_dir
+                ), f"{export_dir.name} should contain output files"
 
 
 @pytest.mark.integration
@@ -480,10 +477,9 @@ class TestGooglePhotosOutput:
                         for d in year_folder.iterdir()
                         if d.is_dir() and len(d.name) == 10  # YYYY-MM-DD format
                     ]
-                    # Should have some date folders
-                    assert (
-                        len(date_folders) >= 0
-                    )  # May have files directly in year folder
+                    # If date folders exist, they should actually be valid dates.
+                    for d in date_folders:
+                        datetime.strptime(d.name, "%Y-%m-%d")
 
 
 @pytest.mark.integration
@@ -538,9 +534,9 @@ class TestSnapchatOutput:
             for file_path in media_files[:5]:  # Sample
                 name = file_path.stem
                 # Should start with snap-memories-
-                assert name.startswith("snap-memories-"), (
-                    f"{file_path.name} should start with snap-memories-"
-                )
+                assert name.startswith(
+                    "snap-memories-"
+                ), f"{file_path.name} should start with snap-memories-"
 
 
 @pytest.mark.integration
@@ -616,8 +612,9 @@ class TestIMessageOutput:
 
             # Should have subdirectories for contacts
             subdirs = [d for d in messages_dir.iterdir() if d.is_dir()]
-            # May have contact folders or year folders
-            assert len(subdirs) >= 0  # Structure varies by config
+            # Structure varies by config; the only invariant is that the directory
+            # exists and may contain subdirectories/files.
+            assert messages_dir.is_dir()
 
 
 @pytest.mark.integration
@@ -655,11 +652,12 @@ class TestDiscordOutput:
             if dedup_ref.exists():
                 with open(dedup_ref) as f:
                     refs = json.load(f)
-                # Can be a dict with version info or a list
-                assert isinstance(refs, (list, dict))
-                if isinstance(refs, dict):
-                    # Dict format has deduplicated_files list
-                    assert "deduplicated_files" in refs or "version" in refs
+                # Internal schema is pinned (no internal backwards compatibility).
+                assert isinstance(refs, dict)
+                assert refs["version"] == "1.0"
+                assert isinstance(refs.get("processor"), str) and refs["processor"]
+                assert isinstance(refs.get("total_skipped"), int)
+                assert isinstance(refs.get("deduplicated_files"), list)
 
 
 @pytest.mark.integration
@@ -675,11 +673,9 @@ class TestDeduplicationResults:
         with open(manifest_path) as f:
             manifest = json.load(f)
 
-        stats = manifest.get("statistics", {})
-
-        # Basic sanity checks - key names may vary
-        total = stats.get("total_files") or stats.get("total_files_scanned", 0)
-        unique = stats.get("unique_files", 0)
+        stats = manifest["statistics"]
+        total = stats["total_files_scanned"]
+        unique = stats["unique_files"]
 
         assert total > 0, "Should have processed files"
         assert unique > 0, "Should have unique files"
@@ -694,22 +690,34 @@ class TestDeduplicationResults:
         with open(manifest_path) as f:
             manifest = json.load(f)
 
-        duplicates = manifest.get("duplicates", {})
+        duplicates = manifest["duplicates"]
+        assert isinstance(duplicates, dict)
 
-        # Duplicates are keyed by content hash, value is a dict with primary/secondary
-        if isinstance(duplicates, dict):
-            for hash_key, dup_info in duplicates.items():
-                assert "primary" in dup_info, (
-                    f"Duplicate {hash_key} should have primary reference"
-                )
-                assert "source_path" in dup_info["primary"], (
-                    "Primary should have source_path"
-                )
-        elif isinstance(duplicates, list):
-            for dup in duplicates:
-                assert "file_path" in dup or "path" in dup or "primary" in dup, (
-                    "Duplicate should have file path or primary"
-                )
+        # Duplicates are keyed by content hash (or "perceptual_<hash>..."),
+        # value is a dict with primary/best_quality/secondary/merged_metadata.
+        for hash_key, dup_info in duplicates.items():
+            assert "match_type" in dup_info, f"Duplicate {hash_key} missing match_type"
+            assert dup_info["match_type"] in {"exact", "perceptual"}
+
+            assert "primary" in dup_info, f"Duplicate {hash_key} missing primary"
+            assert (
+                "source_path" in dup_info["primary"]
+            ), "Primary should have source_path"
+
+            assert (
+                "best_quality" in dup_info
+            ), f"Duplicate {hash_key} missing best_quality"
+            assert (
+                "source_path" in dup_info["best_quality"]
+            ), "Best quality should have source_path"
+
+            assert "secondary" in dup_info, f"Duplicate {hash_key} missing secondary"
+            assert isinstance(dup_info["secondary"], list)
+
+            assert (
+                "merged_metadata" in dup_info
+            ), f"Duplicate {hash_key} missing merged_metadata"
+            assert isinstance(dup_info["merged_metadata"], dict)
 
 
 @pytest.mark.integration
@@ -773,9 +781,9 @@ class TestMetadataIntegrity:
                             try:
                                 dt = datetime.strptime(dto, fmt)
                                 # Sanity check: date should be reasonable
-                                assert 1990 <= dt.year <= 2030, (
-                                    f"Year {dt.year} seems invalid"
-                                )
+                                assert (
+                                    1990 <= dt.year <= 2030
+                                ), f"Year {dt.year} seems invalid"
                                 break
                             except ValueError:
                                 continue
@@ -825,9 +833,9 @@ class TestFileIntegrity:
                 with open(file_path, "rb") as f:
                     header = f.read(3)
                 # JPEG magic number
-                assert header[:2] == b"\xff\xd8", (
-                    f"{file_path.name} should have JPEG header"
-                )
+                assert (
+                    header[:2] == b"\xff\xd8"
+                ), f"{file_path.name} should have JPEG header"
                 checked += 1
 
         assert checked > 0, "Should have checked some JPG files"

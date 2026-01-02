@@ -88,7 +88,7 @@ class TestTemplateEnforcement:
     """Tests for preprocessor template enforcement via __init_subclass__."""
 
     def test_all_preprocessors_importable(self):
-        """All 10 preprocessors should import without error.
+        """All 11 preprocessors should import without error.
 
         Note: InstaloaderFormatPreprocessor is now under instagram_public_media.
         """
@@ -105,6 +105,7 @@ class TestTemplateEnforcement:
         from processors.google_photos.preprocess import GooglePhotosPreprocessor
         from processors.imessage.preprocess import IMessagePreprocessor
         from processors.imessage.preprocess_imazing import ImazingPreprocessor
+        from processors.snapchat_memories.preprocess import SnapchatMemoriesPreprocessor
         from processors.snapchat_messages.preprocess import SnapchatMessagesPreprocessor
 
         # All should be subclasses of PreprocessorBase
@@ -117,6 +118,7 @@ class TestTemplateEnforcement:
         assert issubclass(GooglePhotosPreprocessor, PreprocessorBase)
         assert issubclass(IMessagePreprocessor, PreprocessorBase)
         assert issubclass(ImazingPreprocessor, PreprocessorBase)
+        assert issubclass(SnapchatMemoriesPreprocessor, PreprocessorBase)
         assert issubclass(SnapchatMessagesPreprocessor, PreprocessorBase)
 
     def test_missing_get_content_key_raises_error_at_class_definition(self):

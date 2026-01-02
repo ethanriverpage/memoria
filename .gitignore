@@ -148,3 +148,5 @@ final_*
 POTENTIAL_REFACTORS.md
 
 dedup.db
+dedup.db-shm
+dedup.db-wal

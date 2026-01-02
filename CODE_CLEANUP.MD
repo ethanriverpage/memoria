@@ -431,6 +431,168 @@ These findings have moderate impact on maintainability, performance, or code qua
   - **Low-Medium**: Works today, but increases the surface area impacted by future export format changes.
 - **Confidence**: **High**
 
+## Finding E1 — Catalog building errors logged but not propagated in parallel workers
+
+- **Category**: Error handling / observability gap
+- **Location**: `memoria.py` (lines 388-392, 616-617)
+- **Description & evidence**
+  - Parallel catalog workers catch exceptions, log warnings, but don't affect the return value or aggregated status:
+
+    ```python
+    except Exception as e:
+        logging.warning(
+            f"Catalog build failed for {processor.get_name()} "
+            f"in {export_dir.name}: {e}"
+        )
+    # Returns (export_dir.name, file_count) regardless of failure
+    ```
+
+  - Sequential catalog building has similar pattern (line 674): `logger.error("    ERROR: %s", e)` with no failure tracking.
+  - Catalog failures silently reduce file count without surfacing as processing failures.
+- **Impact**
+  - **Medium**: Significant issues may go unnoticed in final status reporting.
+- **Confidence**: **High**
+
+## Finding E2 — Upload worker failures not tracked in summary reporting
+
+- **Category**: Error handling / observability gap
+- **Location**: `memoria.py` (lines 214-220)
+- **Description & evidence**
+  - Upload worker thread catches and logs exceptions but doesn't track failures for final reporting:
+
+    ```python
+    except Exception as e:
+        logger.error("    Failed: %s", e)
+    # Continues to next upload, no failure counter incremented
+
+    logger.info("[Upload Worker] Completed %s", export_name)
+    # Reports "Completed" even if some uploads failed
+    ```
+
+  - No mechanism to report failed uploads in final summary or exit code.
+- **Impact**
+  - **Medium**: Users may not notice failed uploads without checking logs line-by-line.
+- **Confidence**: **High**
+
+## Finding E3 — No correlation IDs or run tracing in error reports
+
+- **Category**: Observability gap
+- **Location**: `common/failures/tracker.py`, `memoria.py`
+- **Description & evidence**
+  - `run_id` is generated in `memoria.py` (line 1684) but not included in:
+    - FailureTracker reports
+    - Error log messages
+    - Exception context
+  - When debugging failures across multiple runs, no easy way to correlate logs to failure reports:
+
+    ```python
+    # run_id exists but isn't passed to FailureTracker
+    run_id = f"run_{uuid.uuid4().hex[:12]}"
+    # ...
+    failure_tracker = FailureTracker(processor_name=..., export_directory=...)
+    # No run_id parameter
+    ```
+
+- **Impact**
+  - **Medium**: Debugging production issues requires manual correlation of timestamps.
+- **Confidence**: **High**
+
+## Finding E4 — ProcessorBase.process() catches all exceptions losing type information
+
+- **Category**: Error handling pattern
+- **Location**: `processors/base.py` (lines 273-275)
+- **Description & evidence**
+  - Template method catches bare `Exception`, masking specific error types:
+
+    ```python
+    except Exception as e:
+        logger.error("Error in %s: %s", cls.get_name(), e)
+        return False
+    ```
+
+  - Callers cannot distinguish between:
+    - Validation errors (recoverable, skip this export)
+    - System errors (disk full, permissions - may affect all exports)
+    - KeyboardInterrupt (should propagate)
+  - No re-raising or error type preservation for caller decision-making.
+- **Impact**
+  - **Medium**: All failures treated identically; no escalation path for critical errors.
+- **Confidence**: **High**
+
+## Finding E8 — Exceptions are logged without tracebacks (no `logger.exception` / `exc_info`)
+
+- **Category**: Observability gap
+- **Location**: `memoria.py`, multiple processor modules, `processors/base.py`, `processors/preprocess_base.py`
+- **Description & evidence**
+  - Multiple top-level exception handlers log only `str(e)`:
+
+    ```python
+    except Exception as e:
+        logger.error("... %s", e)
+    ```
+
+  - Repo-wide, there is effectively no usage of traceback-preserving logging patterns (`logger.exception(...)` or `exc_info=True`).
+  - This loses stack traces, local context, and the precise failure site in production runs.
+- **Impact**
+  - **High**: Debugging relies on reproducing locally or adding ad-hoc prints; multi-export runs become hard to diagnose.
+- **Confidence**: **High**
+
+## Finding E9 — PreprocessorBase.run() failure paths can skip writing `issues/` artifacts
+
+- **Category**: Error handling / failure policy mismatch
+- **Location**: `processors/preprocess_base.py` (`PreprocessorBase.run`, around lines 884-939)
+- **Description & evidence**
+  - `run()` returns early on multiple failure paths:
+    - `validate_export()` returns False
+    - username invariant violation
+    - `process_export()` returns False
+    - `process_export()` throws
+  - `save_log()` and `failure_tracker.handle_failures(...)` are executed only on the success path:
+
+    ```python
+    if not self.process_export():
+        return False
+    ...
+    self.save_log()
+    self.failure_tracker.handle_failures(self.final_output_dir)
+    ```
+
+  - This conflicts with the Failure Handling policy goal that non-trivial failures should be tracked and materialized under `issues/`.
+- **Impact**
+  - **Medium-High**: Preprocessing failures can become “silent” (no `issues/` report), reducing actionability and auditability.
+- **Confidence**: **High**
+
+## Finding E10 — FailureTracker reports may persist sensitive message context verbatim
+
+- **Category**: Security / safety risk
+- **Location**: `common/failures/tracker.py` (`add_orphaned_metadata`, `add_processing_failure`, report serialization)
+- **Description & evidence**
+  - FailureTracker stores `metadata_entry` and `metadata` dicts verbatim and writes them to `issues/failure-report*.json` and per-item JSON.
+  - Messaging processors’ metadata structures commonly contain message content, participant identifiers, and other sensitive fields (even if the intent is “non-PII”).
+  - There is no redaction/minimization layer for `issues/` artifacts.
+- **Impact**
+  - **High**: Failure reports are easy to share for debugging and can unintentionally leak sensitive conversation data.
+- **Confidence**: **High**
+
+## Finding E11 — Copy/timestamp failures are counted but not consistently tracked as failed-processing
+
+- **Category**: Failure tracking gap
+- **Location**: `processors/base.py` (`ProcessorBase.process_media_copy_batch`), processors using batch copy pipeline + `finalize_files()`
+- **Description & evidence**
+  - Shared copy worker logs errors and returns a failure tuple, but does not record a FailureTracker entry:
+
+    ```python
+    except Exception as e:
+        logger.error("Failed to copy %s: %s", short_path(src), e)
+        results.append((False, None, None))
+    ```
+
+  - Many pipelines only track failures that happen later (EXIF stage) via `ProcessorBase.finalize_files(...)`.
+  - Result: copy-stage failures may only show up as “failed_count” without `issues/failed-processing/` entries or reason codes.
+- **Impact**
+  - **Medium**: Operators see missing outputs but lack per-file reasons and failure artifacts aligned with `docs/Failure-Handling.md`.
+- **Confidence**: **High**
+
 ---
 
 ## 4. Low Impact Findings
@@ -476,6 +638,72 @@ These findings have limited impact but are worth addressing for code hygiene and
 - **Impact**
   - **Low**: Only relevant if transient failures are observed in production.
 - **Confidence**: **Medium**
+
+## Finding E5 — Log level inconsistencies for similar-severity exceptions
+
+- **Category**: Inconsistency
+- **Location**: Multiple files in `memoria.py`, `processors/`
+- **Description & evidence**
+  - Same severity issues logged at different levels across modules:
+
+    ```python
+    # Catalog failure in parallel mode (line 618):
+    logger.error("Catalog failed for %s: %s", export_dir.name, e)
+
+    # Preprocessing failure (line 528-532):
+    logger.warning("Preprocessing failed: %s (%s)", export_dir.name, processor_name)
+
+    # Upload failure (line 215):
+    logger.error("    Failed: %s", e)
+
+    # Processing exception (line 1195):
+    logger.error("%s failed with exception: %s", processor_name, e)
+    ```
+
+  - No documented policy for when to use `warning` vs `error` for processing failures.
+- **Impact**
+  - **Low**: Log filtering becomes unreliable; users may miss issues or get false alarms.
+- **Confidence**: **High**
+
+## Finding E6 — Limited test coverage for parallel processing error aggregation
+
+- **Category**: Test coverage gap
+- **Location**: `tests/test_integration/`
+- **Description & evidence**
+  - Existing error tests (`test_error_handling.py`) focus on single-processor scenarios.
+  - Missing test coverage for:
+    - Multiple processors failing simultaneously in parallel mode
+    - Catalog build failures in `_build_catalog_worker()`
+    - Upload worker failure scenarios with queued uploads
+    - Error state when `ProcessPoolExecutor` worker crashes
+  - No tests verify that failures in parallel workers are properly aggregated and reported.
+- **Impact**
+  - **Low**: Parallel error handling behavior is untested; regressions possible.
+- **Confidence**: **High**
+
+## Finding E7 — Invariant validation used inconsistently across processors
+
+- **Category**: Inconsistency
+- **Location**: `common/validation/invariants.py`, various processors
+- **Description & evidence**
+  - `require_non_unknown_username()` is enforced in `PreprocessorBase.run()` (lines 918-924) but some code paths bypass preprocessing.
+  - `validate_gps()` exists but is not consistently called before GPS embedding:
+
+    ```python
+    # invariants.py defines:
+    def validate_gps(lat: float, lon: float, *, processor: str, file_path: str) -> None:
+        if lat == 0.0 and lon == 0.0:
+            raise InvariantViolation(...)
+
+    # But processors check inline without using the validator:
+    if latitude != 0.0 or longitude != 0.0:
+        gps = GPSData(latitude=float(latitude), ...)
+    ```
+
+  - No mechanism to enforce invariant checks at compile/import time.
+- **Impact**
+  - **Low**: Validation exists but inconsistent usage reduces its effectiveness.
+- **Confidence**: **High**
 
 ## Finding 7 — `get_similar` pulls all hashes into memory
 
