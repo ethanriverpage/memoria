@@ -4,7 +4,6 @@
 
 Overall the repo is **well-structured and test-backed** (clear processor boundaries in `processors/`, shared utilities in `common/`, and broad test coverage under `tests/`).
 
-
 ---
 
 ## 2. High Impact Findings
@@ -22,19 +21,6 @@ These findings represent the largest opportunities for improvement, either throu
   - Minor variations in metadata structure extraction and task tuple construction.
 - **Impact**
   - **High**: ~2500 lines of near-identical boilerplate across processors.
-- **Confidence**: **High**
-
-## Finding P4 — Massive code duplication between iMessage processors
-
-- **Category**: DRY violation
-- **Location**: `processors/imessage/processor.py`, `processors/imessage_imazing/processor.py`
-- **Description & evidence**
-  - Files are nearly identical (~80% overlap).
-  - Duplicated core logic: `_process_working_directory`, `_process_file_worker`, `_build_metadata_requests`.
-  - Duplicated helpers: `_build_description`, `_extract_date_from_source_export`, `_extract_device_from_source_export`.
-  - Any fix to timestamp parsing or deduplication must be applied twice.
-- **Impact**
-  - **High**: ~600+ lines of duplicated code; high risk of drift.
 - **Confidence**: **High**
 
 ## Finding 56 — Near-identical dedup filtering in 10 processors
@@ -560,7 +546,7 @@ These findings have limited impact but are worth addressing for code hygiene and
 ## Finding P5 — Duplicated timestamp extraction functions
 
 - **Category**: DRY violation
-- **Location**: `processors/imessage/processor.py:538+`, `processors/imessage_imazing/processor.py:449+`, `processors/snapchat_messages/processor.py:480+`
+- **Location**: `processors/imessage/processor.py:538+`, `processors/snapchat_messages/processor.py:480+`
 - **Description & evidence**
   - `_extract_message_timestamp()` / `_get_message_timestamp()` implement identical logic for extracting timestamps from merged vs single messages.
   - All check for `primary_created`, then `messages[0].created`, then `created`.
@@ -753,14 +739,13 @@ These findings have limited impact but are worth addressing for code hygiene and
 ## Finding Q3 — Bare `pass` statements in exception handlers
 
 - **Category**: Code smell / potential silent failures
-- **Location**: 17 occurrences across codebase
+- **Location**: Multiple occurrences across codebase
 - **Key locations**:
-  - `processors/imessage/processor.py:97, 372`
-  - `processors/imessage_imazing/processor.py:62, 72, 102, 300`
-  - `common/media/exiftool.py:430, 507, 755`
-  - `common/files/utils.py:156, 172`
-  - `common/text/parse.py:39, 45`
-  - `common/dedup/hashing.py:48, 352, 403`
+  - `processors/imessage/processor.py`
+  - `common/media/exiftool.py`
+  - `common/files/utils.py`
+  - `common/text/parse.py`
+  - `common/dedup/hashing.py`
 - **Description & evidence**
   - Many are intentional fallback logic (e.g., trying multiple parse formats).
   - Some may suppress unexpected errors silently.
@@ -907,4 +892,3 @@ These findings have minimal impact but can be addressed during regular maintenan
 - **Confidence**: **High**
 
 ---
-

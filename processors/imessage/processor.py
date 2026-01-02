@@ -6,7 +6,6 @@ This processor handles iMessage exports from Mac and iPhone backups.
 It supports cross-export consolidation for deduplication across multiple devices.
 """
 
-import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -38,11 +37,127 @@ from common.output.paths import OutputInfo
 from common.output.summary import print_processing_summary
 from processors.base import ProcessorBase
 from processors.imessage.preprocess import IMessagePreprocessor
+from processors.imessage.preprocess_imazing import ImazingPreprocessor
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
 # Standardized processor logger for consistent output
 log = get_processor_logger(__name__)
+
+
+# ============================================================================
+# iMazing Export Detection Helpers
+# ============================================================================
+
+
+def _is_imazing_raw_export(input_path: Path) -> bool:
+    """Check if a directory is an iMazing raw (unpreprocessed) export.
+
+    iMazing exports have distinctive markers:
+    1. Device-Info.txt containing "iMazing" or "DigiDNA"
+    2. vCard files (Contact - *.vcf) containing "iMazing" or "DigiDNA"
+    3. Messages CSV files + media files with iMazing filename pattern
+
+    Args:
+        input_path: Directory to check
+
+    Returns:
+        True if this is an iMazing raw export
+    """
+    import re
+    from common.files.types import ALL_EXTENSIONS as ALL_MEDIA_EXTENSIONS
+
+    # Check for Device-Info.txt with iMazing reference
+    device_info = input_path / "Device-Info.txt"
+    if device_info.exists():
+        try:
+            content = device_info.read_text(encoding="utf-8")
+            if "iMazing" in content or "DigiDNA" in content:
+                return True
+        except Exception:
+            pass
+
+    # Check for iMazing-style vCard files
+    vcf_files = list(input_path.glob("Contact - *.vcf"))
+    if vcf_files:
+        try:
+            content = vcf_files[0].read_text(encoding="utf-8")
+            if "iMazing" in content or "DigiDNA" in content:
+                return True
+        except Exception:
+            pass
+
+    # Check for pattern: Messages CSV + media files with timestamp prefix
+    message_csvs = list(input_path.glob("Messages - *.csv"))
+    if message_csvs:
+        # Pattern: "YYYY-MM-DD HH MM SS - Name - filename.ext"
+        pattern = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2} \d{2} \d{2} - .+ - .+$")
+
+        for f in input_path.iterdir():
+            if f.is_file() and f.suffix.lower() in ALL_MEDIA_EXTENSIONS:
+                if pattern.match(f.name):
+                    return True
+
+    return False
+
+
+def _is_sqlite_raw_export(input_path: Path) -> bool:
+    """Check if a directory is a SQLite-based raw iMessage export.
+
+    Args:
+        input_path: Directory to check
+
+    Returns:
+        True if this is a SQLite raw export (Mac or iPhone)
+    """
+    # Mac export: chat.db + Attachments/
+    if (input_path / "chat.db").exists() and (input_path / "Attachments").is_dir():
+        return True
+
+    # iPhone export: SMS/sms.db + SMS/Attachments/
+    sms_dir = input_path / "SMS"
+    if sms_dir.exists():
+        if (sms_dir / "sms.db").exists() and (sms_dir / "Attachments").is_dir():
+            return True
+
+    return False
+
+
+def _categorize_inputs(
+    input_dirs: List[str],
+) -> Tuple[List[Path], List[Path], List[Path], List[Path]]:
+    """Categorize input directories by type.
+
+    Args:
+        input_dirs: List of input directory paths
+
+    Returns:
+        Tuple of (sqlite_raw, imazing_raw, preprocessed, unknown) path lists.
+        Unknown directories are those that could not be classified and should
+        be handled as errors (not silently processed).
+    """
+    sqlite_raw: List[Path] = []
+    imazing_raw: List[Path] = []
+    preprocessed: List[Path] = []
+    unknown: List[Path] = []
+
+    for input_dir in input_dirs:
+        input_path = Path(input_dir)
+
+        # Check if already preprocessed
+        if IMessageProcessor.is_preprocessed_export_dir(
+            input_path, container_key="conversations"
+        ):
+            preprocessed.append(input_path)
+        elif _is_imazing_raw_export(input_path):
+            imazing_raw.append(input_path)
+        elif _is_sqlite_raw_export(input_path):
+            sqlite_raw.append(input_path)
+        else:
+            # Unknown type - do not silently treat as SQLite
+            unknown.append(input_path)
+
+    return sqlite_raw, imazing_raw, preprocessed, unknown
 
 
 # ============================================================================
@@ -60,7 +175,8 @@ class IMessageProcessor(ProcessorBase):
         Detection criteria for iMessage:
         - Mac export: chat.db + Attachments/ directory
         - iPhone export: SMS/sms.db + SMS/Attachments/ directory
-        - Preprocessed: metadata.json with conversations and file_hashes
+        - iMazing export: Device-Info.txt with iMazing markers, or Messages CSV + media
+        - Preprocessed: metadata.json with platform="iMessage" and conversations
         """
         try:
             # Check for Mac export: chat.db + Attachments/
@@ -75,22 +191,15 @@ class IMessageProcessor(ProcessorBase):
                 if (sms_dir / "sms.db").exists() and (sms_dir / "Attachments").is_dir():
                     return True
 
+            # Check for iMazing raw export
+            if _is_imazing_raw_export(input_path):
+                return True
+
             # Check for preprocessed iMessage export using platform/service markers
+            # Both SQLite and iMazing preprocessed exports use platform="iMessage"
             if ProcessorBase.is_preprocessed_for_platform(
                 input_path, platform="iMessage", service=None
             ):
-                # Also verify it's NOT the iMazing format (that has its own processor)
-                metadata_file = input_path / "metadata.json"
-                if metadata_file.exists():
-                    try:
-                        with open(metadata_file, "r", encoding="utf-8") as f:
-                            metadata = json.load(f)
-                        export_info = metadata.get("export_info", {})
-                        # iMazing exports have export_format: "imazing"
-                        if export_info.get("export_format") == "imazing":
-                            return False
-                    except Exception:
-                        pass
                 return True
 
             return False
@@ -137,7 +246,12 @@ class IMessageProcessor(ProcessorBase):
 
     @staticmethod
     def needs_preprocessing(input_dir: str) -> bool:
-        """Check if iMessage export needs preprocessing."""
+        """Check if iMessage export needs preprocessing.
+
+        Returns True for:
+        - SQLite exports (Mac or iPhone) that haven't been preprocessed
+        - iMazing exports that haven't been preprocessed
+        """
         input_path = Path(input_dir)
 
         # Check if already preprocessed (validated metadata schema)
@@ -146,31 +260,48 @@ class IMessageProcessor(ProcessorBase):
         ):
             return False
 
-        # Check for raw export structure (chat.db or SMS/sms.db)
+        # Check for SQLite raw export structure (chat.db or SMS/sms.db)
         if (input_path / "chat.db").exists():
             return True
         sms_dir = input_path / "SMS"
         if sms_dir.exists() and (sms_dir / "sms.db").exists():
             return True
 
+        # Check for iMazing raw export
+        if _is_imazing_raw_export(input_path):
+            return True
+
         return False
 
     @staticmethod
     def preprocess(input_dir: str, cache_dir: str, **kwargs) -> Optional[str]:
-        """Run preprocessing on raw iMessage export."""
+        """Run preprocessing on raw iMessage export.
+
+        Dispatches to the appropriate preprocessor based on export format:
+        - ImazingPreprocessor for iMazing exports
+        - IMessagePreprocessor for SQLite exports (Mac/iPhone)
+        """
         input_path = Path(input_dir)
         cache_path = Path(cache_dir)
         workers = kwargs.get("workers")
 
-        logger.info("Preprocessing iMessage export to: %s", cache_path)
-
         cache_path.mkdir(parents=True, exist_ok=True)
 
-        preprocessor = IMessagePreprocessor(
-            export_paths=input_path,
-            output_dir=cache_path,
-            workers=workers,
-        )
+        # Dispatch to appropriate preprocessor based on export format
+        if _is_imazing_raw_export(input_path):
+            logger.info("Preprocessing iMazing export to: %s", cache_path)
+            preprocessor = ImazingPreprocessor(
+                export_path=input_path,
+                output_dir=cache_path,
+                workers=workers,
+            )
+        else:
+            logger.info("Preprocessing iMessage SQLite export to: %s", cache_path)
+            preprocessor = IMessagePreprocessor(
+                export_paths=input_path,
+                output_dir=cache_path,
+                workers=workers,
+            )
 
         if preprocessor.run():
             return str(cache_path)
@@ -229,8 +360,12 @@ class IMessageProcessor(ProcessorBase):
         """Process multiple iMessage exports as a consolidated unit.
 
         Called by memoria.py when CONSOLIDATE_EXPORTS=true (default) and
-        multiple iMessage exports are detected. Enables cross-export
-        deduplication before any files are copied.
+        multiple iMessage exports are detected. Handles mixed inputs:
+        - SQLite exports (Mac/iPhone): consolidated together via IMessagePreprocessor
+        - iMazing exports: preprocessed separately via ImazingPreprocessor
+        - Already preprocessed: processed directly
+
+        All outputs write to the same directory using the same dedup manifest.
 
         Args:
             input_dirs: List of paths to iMessage export directories
@@ -247,16 +382,116 @@ class IMessageProcessor(ProcessorBase):
         try:
             # Calculate output directory using the subdirectory helper
             if output_dir:
-                processor_output = str(Path(output_dir) / cls.get_output_subdirectory())
+                processor_output = Path(output_dir) / cls.get_output_subdirectory()
             else:
-                processor_output = kwargs.pop("output", None) or cls.get_default_output()
+                processor_output = Path(
+                    kwargs.pop("output", None) or cls.get_default_output()
+                )
 
-            return process_logic(
-                input_dirs=input_dirs,
-                output_dir=processor_output,
-                workers=kwargs.get("workers"),
-                dedup_manifest=dedup_manifest,
+            workers = kwargs.get("workers")
+            temp_dir = kwargs.get("temp_dir")
+
+            # Categorize inputs by type
+            sqlite_raw, imazing_raw, preprocessed, unknown = _categorize_inputs(
+                input_dirs
             )
+
+            # Fail early if any directories could not be classified
+            if unknown:
+                for unk_path in unknown:
+                    logger.error(
+                        "Unknown input type for directory: %s. "
+                        "Expected SQLite export (chat.db), iMazing export (Device-Info.txt), "
+                        "or preprocessed export (metadata.json with conversations).",
+                        unk_path.name,
+                    )
+                return False
+
+            logger.info(
+                "Categorized %d inputs: %d SQLite, %d iMazing, %d preprocessed",
+                len(input_dirs),
+                len(sqlite_raw),
+                len(imazing_raw),
+                len(preprocessed),
+            )
+
+            # Build list of preprocessed directories to process
+            dirs_to_process: List[Path] = list(preprocessed)
+
+            # Preprocess SQLite exports together (consolidation)
+            if sqlite_raw:
+                logger.info(
+                    "Consolidating %d SQLite exports together...", len(sqlite_raw)
+                )
+                # Use temp directory for consolidated preprocessing
+                if temp_dir:
+                    consolidated_cache = Path(temp_dir) / "imessage_consolidated"
+                else:
+                    consolidated_cache = sqlite_raw[0].parent / "imessage_consolidated"
+
+                consolidated_cache.mkdir(parents=True, exist_ok=True)
+
+                preprocessor = IMessagePreprocessor(
+                    export_paths=sqlite_raw,
+                    output_dir=consolidated_cache,
+                    workers=workers,
+                )
+
+                if preprocessor.run():
+                    dirs_to_process.append(consolidated_cache)
+                else:
+                    logger.error("Failed to preprocess consolidated SQLite exports")
+                    return False
+
+            # Preprocess each iMazing export separately
+            for imazing_path in imazing_raw:
+                logger.info("Preprocessing iMazing export: %s", imazing_path.name)
+                if temp_dir:
+                    imazing_cache = Path(temp_dir) / f"imazing_{imazing_path.name}"
+                else:
+                    imazing_cache = (
+                        imazing_path.parent
+                        / f"imazing_{imazing_path.name}_preprocessed"
+                    )
+
+                imazing_cache.mkdir(parents=True, exist_ok=True)
+
+                preprocessor = ImazingPreprocessor(
+                    export_path=imazing_path,
+                    output_dir=imazing_cache,
+                    workers=workers,
+                )
+
+                if preprocessor.run():
+                    dirs_to_process.append(imazing_cache)
+                else:
+                    logger.warning(
+                        "Failed to preprocess iMazing export: %s", imazing_path.name
+                    )
+                    # Continue with other exports
+
+            if not dirs_to_process:
+                logger.error("No preprocessed directories to process")
+                return False
+
+            # Process each preprocessed directory (all write to same output)
+            # Use namespace when processing multiple dirs to avoid artifact overwrites
+            use_namespace = len(dirs_to_process) > 1
+            success = True
+            for preprocessed_dir in dirs_to_process:
+                # Use directory name as namespace for artifact filenames
+                export_namespace = preprocessed_dir.name if use_namespace else None
+                result = process_logic(
+                    input_dirs=[str(preprocessed_dir)],
+                    output_dir=str(processor_output),
+                    workers=workers,
+                    dedup_manifest=dedup_manifest,
+                    export_namespace=export_namespace,
+                )
+                if not result:
+                    success = False
+
+            return success
 
         except Exception as e:
             logger.error("Error in %s: %s", cls.get_name(), e)
@@ -634,6 +869,7 @@ def process_logic(
     output_dir: Optional[str] = None,
     workers: Optional[int] = None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
+    export_namespace: Optional[str] = None,
 ) -> bool:
     """Core processing logic for iMessage exports.
 
@@ -645,6 +881,8 @@ def process_logic(
         output_dir: Output directory for processed files (final path, no subdirs created)
         workers: Number of parallel workers
         dedup_manifest: Optional deduplication manifest for filtering secondary files
+        export_namespace: Optional namespace for artifact filenames when processing
+            multiple exports into the same output directory.
 
     Returns:
         True if processing succeeded, False otherwise
@@ -690,7 +928,11 @@ def process_logic(
     messages_output_dir.mkdir(parents=True, exist_ok=True)
 
     return _process_working_directory(
-        working_dir, messages_output_dir, workers, dedup_manifest
+        working_dir,
+        messages_output_dir,
+        workers,
+        dedup_manifest,
+        export_namespace=export_namespace,
     )
 
 
@@ -699,6 +941,7 @@ def _process_working_directory(
     output_dir: Path,
     workers: Optional[int],
     dedup_manifest: Optional[Dict[str, Any]] = None,
+    export_namespace: Optional[str] = None,
 ) -> bool:
     """Process a working directory (preprocessed export).
 
@@ -707,6 +950,8 @@ def _process_working_directory(
         output_dir: Output directory for processed files
         workers: Number of parallel workers
         dedup_manifest: Optional deduplication manifest for filtering secondary files
+        export_namespace: Optional namespace for artifact filenames (dedup refs, failure reports).
+            Used when processing multiple exports into the same output directory.
 
     Returns:
         True if processing succeeded, False otherwise
@@ -913,7 +1158,7 @@ def _process_working_directory(
             reason="no_media_files",
             error_details="No media files found in export to process",
         )
-        failure_tracker.handle_failures(output_dir)
+        failure_tracker.handle_failures(output_dir, report_namespace=export_namespace)
         return False
 
     # Process files
@@ -982,15 +1227,22 @@ def _process_working_directory(
         log.exif_written(len(file_info))
 
     # Handle failures - move failed outputs and generate report
-    failure_tracker.handle_failures(output_dir)
+    failure_tracker.handle_failures(output_dir, report_namespace=export_namespace)
 
     # Save dedup references for skipped secondary files
     if dedup_manifest and skipped_secondary_files:
+        # Use namespaced filename if processing multiple exports into same output
+        dedup_filename = (
+            f"dedup_references__{export_namespace}.json"
+            if export_namespace
+            else "dedup_references.json"
+        )
         save_dedup_metadata(
             manifest=dedup_manifest,
             skipped_files=skipped_secondary_files,
             processor_name="iMessage",
             output_dir=output_dir,
+            metadata_filename=dedup_filename,
         )
 
     # Print summary using shared utility

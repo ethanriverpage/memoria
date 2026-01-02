@@ -16,12 +16,11 @@ This guide covers processing Instagram exports including messages, posts, and le
 Instagram provides data export through their settings. Memoria can process:
 
 - **Instagram Messages**: Direct messages and group chat media
-- **Instagram Public Media**: Posts and archived posts (new JSON-based format)
-- **Instaloader**: Scrape data from the Instaloader tool (not official Instagram export)
+- **Instagram Public Media**: Posts and archived posts (official export and Instaloader format)
 
 Instagram has changed their export format over time, so you may encounter different structures depending on when you requested your export.
 
-**Note:** Memoria also supports data scraped using [Instaloader](https://instaloader.github.io/), a third-party tool. This is distinct from Instagram's official data export.
+**Note:** Memoria also supports data scraped using [Instaloader](https://instaloader.github.io/), a third-party tool. Instaloader format is processed by the Instagram Public Media processor and treated as posts.
 
 ### Supported Export Formats
 
@@ -250,6 +249,8 @@ For videos, equivalent metadata is embedded in the `Comment` and `Description` f
 
 Instaloader is a command-line tool that downloads public (or accessible) Instagram profiles, posts, and stories. If you've used Instaloader to archive content, Memoria can process this data.
 
+**Note:** Instaloader format is handled by the Instagram Public Media processor and all content is treated as posts (regardless of original source). Output goes to the `posts/` subfolder and uploads to the `Instagram/{username}/posts` album.
+
 ### Export Structure
 
 ```
@@ -285,7 +286,8 @@ Both `.json` and `.json.xz` files are automatically processed during preprocessi
 - Metadata from paired `.json` or `.json.xz` files (if available) including:
   - More detailed caption information
   - Precise timestamp
-  - Media type
+
+Note: All Instaloader content is treated as posts regardless of original content type. Location data from Instaloader JSON is not currently extracted during preprocessing.
 
 ### Filename Pattern
 
@@ -321,7 +323,7 @@ Each media file may have one or both metadata files:
 2023-01-15_10-30-45_UTC.json
 ```
 
-Note: Some Instaloader versions create `.json.xz` (compressed) which must be extracted first (see above).
+Note: Some Instaloader versions create `.json.xz` (LZMA-compressed) files which are automatically processed.
 
 ### Required Elements
 
@@ -345,7 +347,7 @@ For videos, equivalent metadata is embedded in the `Comment` and `Description` f
 
 ### Common Issues
 
-**Compressed JSON files**: If you see `.json.xz` files, you must extract them first using `xz -d *.json.xz` (Linux/macOS) or 7-Zip (Windows). The processor currently expects uncompressed `.json` files.
+**Compressed JSON files**: Both `.json` and `.json.xz` (LZMA-compressed) metadata files are automatically processed. No manual extraction is required.
 
 **No JSON files**: Some Instaloader configurations may use only `.txt` files for captions - this is expected.
 
@@ -596,6 +598,7 @@ Both formats use the same HTML structure for posts metadata with identical CSS c
 ### Implications for Processing
 
 Memoria automatically detects which format is present and handles both:
+
 - Detection requires both:
   - Media structure (`media/posts/` or `media/archived_posts/` with YYYYMM subfolders)
   - HTML metadata directory (`your_instagram_activity/media/` or `content/`) with at least one `.html` file

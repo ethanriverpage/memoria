@@ -99,7 +99,7 @@ Update iMessage processors’ `OutputInfo`:
 Impacted files:
 
 - `processors/imessage/processor.py` (`IMessageProcessor.get_output_info()`)
-- `processors/imessage_imazing/processor.py` (`ImazingProcessor.get_output_info()`)
+  - Note: iMazing format is now handled by the unified iMessage processor
 
 #### Remove/rename internal `messages/` output subfolder
 
@@ -135,7 +135,7 @@ Then update processor detection code that checks preprocessed directories:
 Impacted files:
 
 - `processors/imessage/processor.py`
-- `processors/imessage_imazing/processor.py`
+  - Note: iMazing format is now handled by the unified iMessage processor
 
 ### 3) Dedup provenance mapping: iMessage now renders as Apple/.../imessage
 
@@ -143,8 +143,9 @@ Update `common/dedup/description.py`:
 
 - Replace `PLATFORM_IMESSAGE = "iMessage"` with a new constant (or reuse an existing pattern):
   - `PLATFORM_APPLE = "Apple"`
-- Ensure `"iMessage"` and `"iMessage-iMazing"` map to:
+- Ensure `"iMessage"` maps to:
   - `(PLATFORM_APPLE, "imessage")`
+- Note: iMazing format is now handled by the unified iMessage processor (no separate processor)
 
 This will update:
 
@@ -215,5 +216,3 @@ When implementing the new processor:
 - Set `OutputInfo(platform="Apple", service="photos", username_prefix="apple" or appropriate detector)`
 - Ensure its preprocessor emits `export_info.platform="Apple"`, `export_info.service="photos"`
 - Ensure its catalog entries include `username` and `service` in dedup contexts (per `docs/Deduplication.md` expectations), so relative `./` notation works reliably.
-
-

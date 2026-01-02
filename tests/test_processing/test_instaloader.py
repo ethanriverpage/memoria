@@ -1,5 +1,5 @@
 """
-Processing tests for Instaloader processor.
+Processing tests for Instaloader format via Instagram Public Media processor.
 
 Tests cover edge cases including:
 - UTC timestamp filename pattern
@@ -7,7 +7,7 @@ Tests cover edge cases including:
 - Paired .json metadata files
 - Carousel numbering (_1, _2)
 
-Note: This is NOT an official Instagram export - it handles scrape data from Instaloader.
+Note: Instaloader format is now handled by the unified Instagram Public Media processor.
 """
 
 import json
@@ -21,7 +21,7 @@ class TestInstaloaderFilenamePattern:
     """Tests for UTC timestamp filename pattern."""
 
     def test_utc_timestamp_pattern(
-        self, instaloader_processor, temp_export_dir, temp_output_dir
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
     ):
         """Should process files with YYYY-MM-DD_HH-MM-SS_UTC pattern."""
         create_instaloader_export(
@@ -38,7 +38,7 @@ class TestInstaloaderFilenamePattern:
         assert (temp_export_dir / "2021-01-01_12-00-00_UTC.jpg").exists()
 
     def test_multiple_timestamps(
-        self, instaloader_processor, temp_export_dir, temp_output_dir
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
     ):
         """Should handle files with different timestamps."""
         create_instaloader_export(
@@ -71,7 +71,7 @@ class TestInstaloaderCaptions:
     """Tests for paired .txt caption files."""
 
     def test_paired_txt_caption(
-        self, instaloader_processor, temp_export_dir, temp_output_dir
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
     ):
         """Should handle paired .txt caption files."""
         create_instaloader_export(
@@ -92,7 +92,7 @@ class TestInstaloaderCaptions:
         assert caption == "This is the caption text"
 
     def test_media_without_caption(
-        self, instaloader_processor, temp_export_dir, temp_output_dir
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
     ):
         """Should handle media without caption file."""
         create_instaloader_export(
@@ -118,7 +118,7 @@ class TestInstaloaderMetadata:
     """
 
     def test_media_file_without_metadata(
-        self, instaloader_processor, temp_export_dir, temp_output_dir
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
     ):
         """Should handle media files without accompanying metadata."""
         # Create media file manually without using generator (which always creates JSON)
@@ -131,7 +131,7 @@ class TestInstaloaderMetadata:
         assert not (temp_export_dir / "2021-01-01_12-00-00_UTC.json").exists()
 
     def test_json_metadata_handling(
-        self, instaloader_processor, temp_export_dir, temp_output_dir
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
     ):
         """Should preserve location data in JSON metadata when present."""
         temp_export_dir.mkdir(parents=True, exist_ok=True)
@@ -161,7 +161,7 @@ class TestInstaloaderCarousel:
     """Tests for carousel numbering (_1, _2, etc.)."""
 
     def test_carousel_numbering(
-        self, instaloader_processor, temp_export_dir, temp_output_dir
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
     ):
         """Should handle carousel files with _1, _2 suffixes."""
         create_instaloader_export(
@@ -193,7 +193,7 @@ class TestInstaloaderCarousel:
         assert (temp_export_dir / "2021-01-01_12-00-00_UTC_3.jpg").exists()
 
     def test_carousel_caption_on_first_only(
-        self, instaloader_processor, temp_export_dir, temp_output_dir
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
     ):
         """Should have caption only on first carousel item."""
         create_instaloader_export(
@@ -219,7 +219,7 @@ class TestInstaloaderCarousel:
         assert not (temp_export_dir / "2021-01-01_12-00-00_UTC_2.txt").exists()
 
     def test_carousel_mixed_media(
-        self, instaloader_processor, temp_export_dir, temp_output_dir
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
     ):
         """Should handle carousel with mixed photos and videos."""
         create_instaloader_export(
@@ -254,7 +254,9 @@ class TestInstaloaderCarousel:
 class TestInstaloaderFileTypes:
     """Tests for various file types in Instaloader format."""
 
-    def test_jpg_files(self, instaloader_processor, temp_export_dir, temp_output_dir):
+    def test_jpg_files(
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle JPG files."""
         create_instaloader_export(
             temp_export_dir,
@@ -268,7 +270,9 @@ class TestInstaloaderFileTypes:
         )
         assert (temp_export_dir / "2021-01-01_12-00-00_UTC.jpg").exists()
 
-    def test_mp4_files(self, instaloader_processor, temp_export_dir, temp_output_dir):
+    def test_mp4_files(
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle MP4 video files."""
         create_instaloader_export(
             temp_export_dir,
@@ -282,7 +286,9 @@ class TestInstaloaderFileTypes:
         )
         assert (temp_export_dir / "2021-01-01_12-00-00_UTC.mp4").exists()
 
-    def test_png_files(self, instaloader_processor, temp_export_dir, temp_output_dir):
+    def test_png_files(
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
+    ):
         """Should handle PNG files."""
         temp_export_dir.mkdir(parents=True, exist_ok=True)
         write_media_file(temp_export_dir / "2021-01-01_12-00-00_UTC.png", "png")
@@ -297,10 +303,12 @@ class TestInstaloaderOrphanDetection:
     """Tests for orphaned metadata detection."""
 
     def test_orphaned_metadata_txt_without_media(
-        self, instaloader_processor, temp_export_dir, temp_output_dir
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
     ):
         """Should track .txt caption files without matching media as orphaned metadata."""
-        from processors.instaloader.preprocess import InstaloaderPreprocessor
+        from processors.instagram_public_media.preprocess_instaloader import (
+            InstaloaderFormatPreprocessor,
+        )
 
         temp_export_dir.mkdir(parents=True, exist_ok=True)
 
@@ -315,7 +323,7 @@ class TestInstaloaderOrphanDetection:
         (temp_export_dir / "2021-01-01_12-00-00_UTC.txt").write_text("Orphaned caption")
 
         # Run preprocessor
-        preprocessor = InstaloaderPreprocessor(
+        preprocessor = InstaloaderFormatPreprocessor(
             export_path=temp_export_dir,
             output_dir=temp_output_dir,
             final_output_dir=temp_output_dir,
@@ -332,10 +340,12 @@ class TestInstaloaderOrphanDetection:
         assert orphaned_entry["context"]["has_txt"] is True
 
     def test_orphaned_metadata_json_without_media(
-        self, instaloader_processor, temp_export_dir, temp_output_dir
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
     ):
         """Should track .json metadata files without matching media as orphaned metadata."""
-        from processors.instaloader.preprocess import InstaloaderPreprocessor
+        from processors.instagram_public_media.preprocess_instaloader import (
+            InstaloaderFormatPreprocessor,
+        )
 
         temp_export_dir.mkdir(parents=True, exist_ok=True)
 
@@ -352,7 +362,7 @@ class TestInstaloaderOrphanDetection:
         )
 
         # Run preprocessor
-        preprocessor = InstaloaderPreprocessor(
+        preprocessor = InstaloaderFormatPreprocessor(
             export_path=temp_export_dir,
             output_dir=temp_output_dir,
             final_output_dir=temp_output_dir,
@@ -365,10 +375,12 @@ class TestInstaloaderOrphanDetection:
         assert orphaned_entry["context"]["has_json"] is True
 
     def test_no_orphans_when_media_exists(
-        self, instaloader_processor, temp_export_dir, temp_output_dir
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
     ):
         """Should not track orphans when media file exists."""
-        from processors.instaloader.preprocess import InstaloaderPreprocessor
+        from processors.instagram_public_media.preprocess_instaloader import (
+            InstaloaderFormatPreprocessor,
+        )
 
         create_instaloader_export(
             temp_export_dir,
@@ -382,7 +394,7 @@ class TestInstaloaderOrphanDetection:
         )
 
         # Run preprocessor
-        preprocessor = InstaloaderPreprocessor(
+        preprocessor = InstaloaderFormatPreprocessor(
             export_path=temp_export_dir,
             output_dir=temp_output_dir,
             final_output_dir=temp_output_dir,
@@ -393,14 +405,75 @@ class TestInstaloaderOrphanDetection:
         assert len(preprocessor.failure_tracker.orphaned_metadata) == 0
 
 
+class TestInstaloaderPostsOnlyInvariant:
+    """Tests that Instaloader exports are always processed as posts."""
+
+    def test_all_media_items_have_posts_media_type(
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
+    ):
+        """All Instaloader media items must have media_type='posts'."""
+        from processors.instagram_public_media.preprocess_instaloader import (
+            InstaloaderFormatPreprocessor,
+        )
+
+        create_instaloader_export(
+            temp_export_dir,
+            media_files=[
+                {
+                    "timestamp": "2021-01-01_12-00-00",
+                    "extension": "jpg",
+                    "caption": "Test 1",
+                },
+                {
+                    "timestamp": "2021-01-02_12-00-00",
+                    "extension": "mp4",
+                    "caption": "Test 2",
+                },
+                {
+                    "timestamp": "2021-01-03_12-00-00",
+                    "extension": "jpg",
+                    "caption": None,
+                },
+            ],
+        )
+
+        preprocessor = InstaloaderFormatPreprocessor(
+            export_path=temp_export_dir,
+            output_dir=temp_output_dir,
+            final_output_dir=temp_output_dir,
+        )
+        preprocessor.run()
+
+        # Load and verify metadata
+        metadata_file = temp_output_dir / "metadata.json"
+        assert metadata_file.exists()
+
+        metadata = json.loads(metadata_file.read_text())
+
+        # Verify export_info
+        assert metadata["export_info"]["platform"] == "Instagram"
+        assert metadata["export_info"]["service"] == "public-media"
+
+        # Verify ALL items have media_type == "posts"
+        media_items = metadata.get("media", [])
+        assert len(media_items) > 0, "Should have processed media items"
+
+        for item in media_items:
+            assert (
+                item.get("media_type") == "posts"
+            ), f"Instaloader item must have media_type='posts', got: {item.get('media_type')}"
+
+
 class TestInstaloaderEmptyExport:
     """Tests for empty export handling (Policy A: export-level soft-fail)."""
 
     def test_empty_export_produces_failure_report(
-        self, instaloader_processor, temp_export_dir, temp_output_dir
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
     ):
         """Empty export should produce failure-report.json with export_failures."""
-        from processors.instaloader.preprocess import InstaloaderPreprocessor
+        from processors.instagram_public_media.preprocess_instaloader import (
+            InstaloaderFormatPreprocessor,
+        )
 
         # Create empty export directory (no media files)
         temp_export_dir.mkdir(parents=True, exist_ok=True)
@@ -408,7 +481,7 @@ class TestInstaloaderEmptyExport:
         (temp_export_dir / "profile_pic.txt").write_text("not a media file")
 
         # Run preprocessor
-        preprocessor = InstaloaderPreprocessor(
+        preprocessor = InstaloaderFormatPreprocessor(
             export_path=temp_export_dir,
             output_dir=temp_output_dir,
             final_output_dir=temp_output_dir,

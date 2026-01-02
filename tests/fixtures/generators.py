@@ -1082,7 +1082,9 @@ def create_imessage_imazing_export(
     username: str = "testuser",
     conversations: Optional[List[Dict]] = None,
 ) -> Path:
-    """Create a minimal iMessage iMazing export structure.
+    """Create a minimal iMazing-format iMessage export structure.
+
+    Note: iMazing exports are now processed by the unified iMessage processor.
 
     Structure:
         {base_path}/

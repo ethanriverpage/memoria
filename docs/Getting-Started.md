@@ -219,8 +219,7 @@ See [Google Export Guide](Google-Export) for:
 See [Instagram Export Guide](Instagram-Export) for:
 
 - Instagram Messages (DMs, group chats)
-- Instagram Public Media (new format with date folders)
-- Instaloader (scrape data from Instaloader tool)
+- Instagram Public Media (new format with date folders + Instaloader format)
 
 ### Snapchat
 

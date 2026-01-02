@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Detection tests for all 11 processors.
+"""Detection tests for all 9 processors.
+
+Notes:
+- iMazing format exports are handled by the unified iMessage processor.
+- Instaloader format exports are handled by the unified Instagram Public Media processor.
 
 Tests verify that each processor's detect() function:
 - Returns True for valid exports of that processor type
@@ -24,10 +28,8 @@ from processors.snapchat_memories.processor import SnapchatMemoriesProcessor
 from processors.snapchat_messages.processor import SnapchatMessagesProcessor
 from processors.instagram_messages.processor import InstagramMessagesProcessor
 from processors.instagram_public_media.processor import InstagramPublicMediaProcessor
-from processors.instaloader.processor import InstaloaderProcessor
 from processors.discord.processor import DiscordProcessor
 from processors.imessage.processor import IMessageProcessor
-from processors.imessage_imazing.processor import ImazingProcessor
 
 
 # Use static detect methods from processor classes
@@ -59,20 +61,12 @@ def detect_instagram_public(path):
     return InstagramPublicMediaProcessor.detect(path)
 
 
-def detect_instaloader(path):
-    return InstaloaderProcessor.detect(path)
-
-
 def detect_discord(path):
     return DiscordProcessor.detect(path)
 
 
 def detect_imessage(path):
     return IMessageProcessor.detect(path)
-
-
-def detect_imessage_imazing(path):
-    return ImazingProcessor.detect(path)
 
 
 class TestGooglePhotosDetection:
@@ -237,27 +231,26 @@ class TestInstagramPublicDetection:
         assert detect_instagram_public(tmp_path) is False
 
 
-class TestInstaloaderDetection:
-    """Detection tests for Instaloader processor."""
+class TestInstaloaderFormatDetection:
+    """Detection tests for Instaloader format via Instagram Public Media processor.
+
+    Note: Instaloader format is now handled by the unified Instagram Public Media processor.
+    """
 
     def test_detects_valid_export(self, tmp_path: Path) -> None:
-        """Should detect valid Instaloader scrape data."""
+        """Should detect valid Instaloader scrape data via Instagram Public Media."""
         copy_export_fixture("instaloader", "basic_with_json_xz", tmp_path)
-        assert detect_instaloader(tmp_path) is True
+        # Instaloader format is now detected by Instagram Public Media processor
+        assert detect_instagram_public(tmp_path) is True
 
     def test_rejects_empty_directory(self, tmp_path: Path) -> None:
         """Should reject empty directory."""
-        assert detect_instaloader(tmp_path) is False
+        assert detect_instagram_public(tmp_path) is False
 
     def test_rejects_no_instaloader_pattern(self, tmp_path: Path) -> None:
         """Should reject directory without Instaloader filename pattern."""
         write_media_file(tmp_path / "random_photo.jpg", "jpeg")
-        assert detect_instaloader(tmp_path) is False
-
-    def test_rejects_other_processor_exports(self, tmp_path: Path) -> None:
-        """Should reject exports from other processors."""
-        copy_export_fixture("google_photos", "takeout_basic", tmp_path)
-        assert detect_instaloader(tmp_path) is False
+        assert detect_instagram_public(tmp_path) is False
 
 
 class TestDiscordDetection:
@@ -307,26 +300,23 @@ class TestIMessageDetection:
 
 
 class TestIMessageIMazingDetection:
-    """Detection tests for iMessage iMazing processor."""
+    """Detection tests for iMazing format exports via unified iMessage processor."""
 
     def test_detects_valid_export(self, tmp_path: Path) -> None:
-        """Should detect valid iMazing iMessage export."""
+        """Should detect valid iMazing iMessage export via unified processor."""
         copy_export_fixture("imessage_imazing", "basic_device_info", tmp_path)
-        assert detect_imessage_imazing(tmp_path) is True
+        # iMazing exports are now detected by the unified iMessage processor
+        assert detect_imessage(tmp_path) is True
 
     def test_rejects_empty_directory(self, tmp_path: Path) -> None:
         """Should reject empty directory."""
-        assert detect_imessage_imazing(tmp_path) is False
+        assert detect_imessage(tmp_path) is False
 
     def test_rejects_no_device_info(self, tmp_path: Path) -> None:
-        """Should reject directory without Device-Info.txt."""
+        """Should reject directory without Device-Info.txt and no SQLite DB."""
         (tmp_path / "Messages - Contact.csv").write_text("header\n")
-        assert detect_imessage_imazing(tmp_path) is False
-
-    def test_rejects_other_processor_exports(self, tmp_path: Path) -> None:
-        """Should reject exports from other processors."""
-        copy_export_fixture("google_photos", "takeout_basic", tmp_path)
-        assert detect_imessage_imazing(tmp_path) is False
+        # Just a CSV with no iMazing markers won't be detected
+        assert detect_imessage(tmp_path) is False
 
 
 class TestCrossProcessorDetection:
@@ -375,6 +365,7 @@ class TestCrossProcessorDetection:
         copy_export_fixture("instaloader", "basic_with_json_xz", exports["instaloader"])
         copy_export_fixture("discord", "raw_minimal", exports["discord"])
         copy_export_fixture("imessage", "mac_basic", exports["imessage"])
+        # iMazing format is now handled by unified iMessage processor
         copy_export_fixture(
             "imessage_imazing", "basic_device_info", exports["imessage_imazing"]
         )

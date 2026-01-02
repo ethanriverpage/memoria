@@ -1,8 +1,12 @@
 """
-Instagram Media Processor
+Instagram Public Media Processor
 
-This processor is designed to be used through memoria.py.
-It handles renaming Instagram media files, embedding metadata, and updating filesystem timestamps.
+This processor handles Instagram public media exports through memoria.py.
+It supports two source export formats:
+- Official Instagram public media export (HTML metadata with media/posts structure)
+- Instaloader scrape data (timestamped files at export root)
+
+Instaloader exports are treated strictly as posts (media_type="posts").
 """
 
 import logging
@@ -38,6 +42,9 @@ from common.output.summary import print_processing_summary
 from common.processing import process_batches_parallel
 from processors.base import MediaCopyTask, ProcessorBase
 from processors.instagram_public_media.preprocess import InstagramPreprocessor
+from processors.instagram_public_media.preprocess_instaloader import (
+    InstaloaderFormatPreprocessor,
+)
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -51,89 +58,144 @@ log = get_processor_logger(__name__)
 
 
 class InstagramPublicMediaProcessor(ProcessorBase):
-    """Processor for Instagram public media exports (new format)"""
+    """Processor for Instagram public media exports.
+
+    Supports two source export formats:
+    - Official Instagram export: media/posts with YYYYMM folders and HTML metadata
+    - Instaloader scrape data: timestamped files at export root (treated as posts)
+    """
+
+    # Instaloader filename pattern: YYYY-MM-DD_HH-MM-SS_UTC[_N].*
+    # The optional _N suffix is for carousel posts (e.g., _1, _2)
+    # Extensions match common Instaloader media outputs and metadata files.
+    # This should align with MEDIA_EXTENSIONS in common/files/types.py for processing.
+    _INSTALOADER_PATTERN = re.compile(
+        r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_UTC(_\d+)?\."
+        r"(jpg|jpeg|png|gif|webp|heic|heif|mp4|mov|webm|txt|json(\.xz)?)$",
+        re.IGNORECASE,
+    )
 
     @staticmethod
     def detect(input_path: Path) -> bool:
         """Check if this processor can handle the input directory.
 
-        Detection criteria for Instagram Public Media:
-        - Directory contains 'media/posts/' or 'media/archived_posts/'
-        - These directories contain YYYYMM date-organized folders
-        - HTML metadata directory exists with at least one HTML file
-          (either 'your_instagram_activity/media/' or 'content/')
+        Detection criteria (matches either):
 
-        The HTML metadata requirement ensures we only detect exports that
-        the preprocessor can actually handle. Exports with only JSON sidecars
-        (no HTML metadata) will not be detected.
+        1. Official Instagram Public Media export:
+           - Directory contains 'media/posts/' or 'media/archived_posts/'
+           - These directories contain YYYYMM date-organized folders
+           - HTML metadata directory exists with at least one HTML file
+             (either 'your_instagram_activity/media/' or 'content/')
+
+        2. Instaloader scrape data:
+           - Files directly in root directory matching pattern YYYY-MM-DD_HH-MM-SS_UTC.*
+           - At least 3 matching files (to avoid false positives)
         """
         try:
-            media_dir = input_path / "media"
-            posts_dir = media_dir / "posts"
-            archived_posts_dir = media_dir / "archived_posts"
+            # Check for official Instagram export format first
+            if InstagramPublicMediaProcessor._detect_official_export(input_path):
+                return True
 
-            # Check if media directory exists
-            if not media_dir.exists() or not media_dir.is_dir():
-                return False
+            # Check for Instaloader format
+            if InstagramPublicMediaProcessor._detect_instaloader_format(input_path):
+                return True
 
-            # Check for posts or archived_posts directories
-            has_posts = posts_dir.exists() and posts_dir.is_dir()
-            has_archived = archived_posts_dir.exists() and archived_posts_dir.is_dir()
-
-            if not (has_posts or has_archived):
-                return False
-
-            # Verify date-organized structure (YYYYMM folders)
-            date_folder_pattern = re.compile(r"^\d{6}$")  # YYYYMM format
-            has_date_folders = False
-
-            # Check posts directory for date folders
-            if has_posts:
-                date_folders = [
-                    d
-                    for d in posts_dir.iterdir()
-                    if d.is_dir() and date_folder_pattern.match(d.name)
-                ]
-                if len(date_folders) > 0:
-                    has_date_folders = True
-
-            # Check archived_posts directory for date folders
-            if not has_date_folders and has_archived:
-                date_folders = [
-                    d
-                    for d in archived_posts_dir.iterdir()
-                    if d.is_dir() and date_folder_pattern.match(d.name)
-                ]
-                if len(date_folders) > 0:
-                    has_date_folders = True
-
-            if not has_date_folders:
-                return False
-
-            # Verify HTML metadata directory exists with at least one HTML file
-            # The preprocessor requires HTML metadata to function
-            new_format_html_dir = input_path / "your_instagram_activity" / "media"
-            legacy_format_html_dir = input_path / "content"
-
-            html_dir = None
-            if new_format_html_dir.exists() and new_format_html_dir.is_dir():
-                html_dir = new_format_html_dir
-            elif legacy_format_html_dir.exists() and legacy_format_html_dir.is_dir():
-                html_dir = legacy_format_html_dir
-
-            if html_dir is None:
-                return False
-
-            # Check for at least one HTML file in the metadata directory
-            html_files = list(html_dir.glob("*.html"))
-            if len(html_files) == 0:
-                return False
-
-            return True
+            return False
 
         except Exception as e:
             log.detection_failed("Instagram Public Media", e)
             return False
+
+    @staticmethod
+    def _detect_official_export(input_path: Path) -> bool:
+        """Detect official Instagram public media export format."""
+        media_dir = input_path / "media"
+        posts_dir = media_dir / "posts"
+        archived_posts_dir = media_dir / "archived_posts"
+
+        # Check if media directory exists
+        if not media_dir.exists() or not media_dir.is_dir():
+            return False
+
+        # Check for posts or archived_posts directories
+        has_posts = posts_dir.exists() and posts_dir.is_dir()
+        has_archived = archived_posts_dir.exists() and archived_posts_dir.is_dir()
+
+        if not (has_posts or has_archived):
+            return False
+
+        # Verify date-organized structure (YYYYMM folders)
+        date_folder_pattern = re.compile(r"^\d{6}$")  # YYYYMM format
+        has_date_folders = False
+
+        # Check posts directory for date folders
+        if has_posts:
+            date_folders = [
+                d
+                for d in posts_dir.iterdir()
+                if d.is_dir() and date_folder_pattern.match(d.name)
+            ]
+            if len(date_folders) > 0:
+                has_date_folders = True
+
+        # Check archived_posts directory for date folders
+        if not has_date_folders and has_archived:
+            date_folders = [
+                d
+                for d in archived_posts_dir.iterdir()
+                if d.is_dir() and date_folder_pattern.match(d.name)
+            ]
+            if len(date_folders) > 0:
+                has_date_folders = True
+
+        if not has_date_folders:
+            return False
+
+        # Verify HTML metadata directory exists with at least one HTML file
+        new_format_html_dir = input_path / "your_instagram_activity" / "media"
+        legacy_format_html_dir = input_path / "content"
+
+        html_dir = None
+        if new_format_html_dir.exists() and new_format_html_dir.is_dir():
+            html_dir = new_format_html_dir
+        elif legacy_format_html_dir.exists() and legacy_format_html_dir.is_dir():
+            html_dir = legacy_format_html_dir
+
+        if html_dir is None:
+            return False
+
+        # Check for at least one HTML file in the metadata directory
+        html_files = list(html_dir.glob("*.html"))
+        if len(html_files) == 0:
+            return False
+
+        return True
+
+    @staticmethod
+    def _detect_instaloader_format(input_path: Path) -> bool:
+        """Detect Instaloader scrape data format.
+
+        Instaloader exports have timestamped files directly in the root directory
+        matching pattern: YYYY-MM-DD_HH-MM-SS_UTC[_N].*
+        """
+        matching_files = 0
+
+        for file_path in input_path.iterdir():
+            if file_path.is_file():
+                if InstagramPublicMediaProcessor._INSTALOADER_PATTERN.match(
+                    file_path.name
+                ):
+                    matching_files += 1
+                    # If we find at least 3 matching files, it's Instaloader format
+                    if matching_files >= 3:
+                        return True
+
+        return False
+
+    @staticmethod
+    def _is_instaloader_format(input_path: Path) -> bool:
+        """Check if input is Instaloader format (for routing preprocessing)."""
+        return InstagramPublicMediaProcessor._detect_instaloader_format(input_path)
 
     @staticmethod
     def get_name() -> str:
@@ -160,7 +222,10 @@ class InstagramPublicMediaProcessor(ProcessorBase):
 
     @staticmethod
     def needs_preprocessing(input_dir: str) -> bool:
-        """Check if Instagram Public Media export needs preprocessing."""
+        """Check if Instagram Public Media export needs preprocessing.
+
+        Handles both official Instagram exports and Instaloader format.
+        """
         # Check if already preprocessed
         if InstagramPublicMediaProcessor.is_preprocessed_export_dir(
             Path(input_dir), media_files_key="media"
@@ -168,7 +233,12 @@ class InstagramPublicMediaProcessor(ProcessorBase):
             return False
 
         input_path = Path(input_dir)
-        # Check for raw export structure (media/posts or media/stories)
+
+        # Check for Instaloader format (timestamped files at root)
+        if InstagramPublicMediaProcessor._is_instaloader_format(input_path):
+            return True
+
+        # Check for official export structure (media/posts or media/stories)
         media_dir = input_path / "media"
         if media_dir.exists():
             posts_dir = media_dir / "posts"
@@ -180,20 +250,35 @@ class InstagramPublicMediaProcessor(ProcessorBase):
 
     @staticmethod
     def preprocess(input_dir: str, cache_dir: str, **kwargs) -> Optional[str]:
-        """Run preprocessing on raw Instagram Public Media export."""
+        """Run preprocessing on raw Instagram Public Media export.
+
+        Routes to appropriate preprocessor based on detected format:
+        - Instaloader format: InstaloaderFormatPreprocessor
+        - Official export: InstagramPreprocessor
+        """
         input_path = Path(input_dir)
         cache_path = Path(cache_dir)
         workers = kwargs.get("workers")
 
-        logger.info("Preprocessing Instagram Public Media export to: %s", cache_path)
-
         cache_path.mkdir(parents=True, exist_ok=True)
 
-        preprocessor = InstagramPreprocessor(
-            export_path=input_path,
-            output_dir=cache_path,
-            workers=workers,
-        )
+        # Route to appropriate preprocessor based on format
+        if InstagramPublicMediaProcessor._is_instaloader_format(input_path):
+            logger.info("Preprocessing Instaloader format export to: %s", cache_path)
+            preprocessor = InstaloaderFormatPreprocessor(
+                export_path=input_path,
+                output_dir=cache_path,
+                workers=workers,
+            )
+        else:
+            logger.info(
+                "Preprocessing Instagram Public Media export to: %s", cache_path
+            )
+            preprocessor = InstagramPreprocessor(
+                export_path=input_path,
+                output_dir=cache_path,
+                workers=workers,
+            )
 
         if preprocessor.run():
             return str(cache_path)
@@ -334,7 +419,7 @@ def process_logic(
     """Core processing logic for Instagram Public Media exports.
 
     Expects input_dir to be preprocessed (via memoria.py preprocessing phase
-    or by calling InstagramPublicProcessor.preprocess() directly).
+    or by calling InstagramPublicMediaProcessor.preprocess() directly).
 
     Args:
         input_dir: Input directory (must be preprocessed)

@@ -73,11 +73,9 @@ Albums follow a `Platform/username[/service]` structure:
 - Google Chat: `Google/{USERNAME}/chat`
 - Google Photos: `Google/{USERNAME}/photos`
 - Google Voice: `Google/{USERNAME}/voice`
-- iMessage: `iMessage/{device}` (extracted from directory name, e.g., `iMessage/mac`, `iMessage/iph13p`)
-- iMessage (iMazing): `iMessage/{device}`
+- iMessage: `iMessage/{device}` (extracted from directory name, e.g., `iMessage/mac`, `iMessage/iph13p`; includes iMazing-format exports)
 - Instagram Messages: `Instagram/{USERNAME}/messages`
-- Instagram Public Media: `Instagram/{USERNAME}/{service}` where service is one of: `posts`, `archived_posts`, `profile`, `stories`, `reels`, `other`
-- Instaloader: `Instagram/{USERNAME}/posts`
+- Instagram Public Media: `Instagram/{USERNAME}/{service}` where service is one of: `posts`, `archived_posts`, `profile`, `stories`, `reels`, `other` (Instaloader format goes to `posts`)
 - Snapchat Messages: `Snapchat/{USERNAME}/messages`
 - Snapchat Memories: `Snapchat/{USERNAME}/memories`
 

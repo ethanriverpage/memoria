@@ -88,7 +88,7 @@ Then `get_merged_description_for_file()` reads `context["username"]` (and only t
         )
 ```
 
-For Instagram Public Media and Instaloader, the catalog metadata extractors currently **do not populate** `username` (or `service`) at all:
+For Instagram Public Media (including Instaloader format), the catalog metadata extractors currently **do not populate** `username` (or `service`) at all:
 
 ```218:226:processors/instagram_public_media/processor.py
         def extract_preprocessed_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -222,7 +222,7 @@ As a result, `common/dedup/description.py` cannot faithfully implement the docum
 
 1. Produce a dedup manifest where a media file appears in both:
    - a Google source (e.g. Chat or Photos), and
-   - an Instagram posts source (Instagram Public Media and/or Instaloader),
+   - an Instagram posts source (Instagram Public Media, including Instaloader format),
    and at least two secondaries collapse into the same `Instagram/<missing-username>/posts` identity.
 2. Call `common.dedup.service.get_merged_description_for_file(manifest, primary_source_path)`.
 3. Observe missing usernames, missing caption context, repeated Instagram lines, and non-relative Google paths.

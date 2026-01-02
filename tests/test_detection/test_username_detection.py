@@ -233,11 +233,16 @@ class TestInstagramMessagesUsernameDetection:
 
 
 class TestInstaloaderUsernameDetection:
-    """Tests for Instaloader username detection."""
+    """Tests for Instaloader username detection.
+
+    Note: InstaloaderFormatPreprocessor is now under instagram_public_media.
+    """
 
     def test_detect_from_json_metadata(self, tmp_path):
         """Should detect username from JSON metadata files."""
-        from processors.instaloader.preprocess import InstaloaderPreprocessor
+        from processors.instagram_public_media.preprocess_instaloader import (
+            InstaloaderFormatPreprocessor,
+        )
 
         # Create export structure
         export_dir = tmp_path / "instagram-unknown-20251219"
@@ -260,7 +265,7 @@ class TestInstaloaderUsernameDetection:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
-        preprocessor = InstaloaderPreprocessor(export_dir, output_dir)
+        preprocessor = InstaloaderFormatPreprocessor(export_dir, output_dir)
         result = preprocessor.detect_username()
 
         assert result.username == "jsonuser"
@@ -268,7 +273,9 @@ class TestInstaloaderUsernameDetection:
 
     def test_detect_from_compressed_json(self, tmp_path):
         """Should detect username from .json.xz compressed metadata."""
-        from processors.instaloader.preprocess import InstaloaderPreprocessor
+        from processors.instagram_public_media.preprocess_instaloader import (
+            InstaloaderFormatPreprocessor,
+        )
 
         # Create export structure
         export_dir = tmp_path / "instagram-unknown-20251219"
@@ -293,7 +300,7 @@ class TestInstaloaderUsernameDetection:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
-        preprocessor = InstaloaderPreprocessor(export_dir, output_dir)
+        preprocessor = InstaloaderFormatPreprocessor(export_dir, output_dir)
         result = preprocessor.detect_username()
 
         assert result.username == "compresseduser"

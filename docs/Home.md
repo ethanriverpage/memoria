@@ -27,8 +27,7 @@ Memoria can process exports from the following platforms:
 ### Instagram
 
 - **Instagram Messages** - DM and group chat media
-- **Instagram Public Media** - Posts and archived posts (new JSON format)
-- **Instaloader** - Scrape data from Instaloader (not official export)
+- **Instagram Public Media** - Posts and archived posts (official export + Instaloader format)
 
 ### Snapchat
 

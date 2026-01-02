@@ -435,14 +435,17 @@ class TestInstagramPublicProcessing:
 
 
 @pytest.mark.integration
-class TestInstaloaderProcessing:
-    """Integration tests for Instaloader processor."""
+class TestInstaloaderFormatProcessing:
+    """Integration tests for Instaloader format via Instagram Public Media processor.
+
+    Note: Instaloader format is now handled by the unified Instagram Public Media processor.
+    """
 
     @skip_no_exiftool
     def test_process_basic_export(self, tmp_path):
-        """Should process Instaloader scrape data."""
-        from processors.instaloader.processor import (
-            InstaloaderProcessor,
+        """Should process Instaloader scrape data via Instagram Public Media."""
+        from processors.instagram_public_media.processor import (
+            InstagramPublicMediaProcessor,
         )
 
         export_dir = tmp_path / "export"
@@ -451,10 +454,12 @@ class TestInstaloaderProcessing:
 
         create_instaloader_export(export_dir)
 
-        # Preprocess first
-        working_dir = preprocess_export(InstaloaderProcessor, export_dir, cache_dir)
+        # Preprocess first (routes to InstaloaderFormatPreprocessor)
+        working_dir = preprocess_export(
+            InstagramPublicMediaProcessor, export_dir, cache_dir
+        )
 
-        result = InstaloaderProcessor.process(working_dir, str(output_dir))
+        result = InstagramPublicMediaProcessor.process(working_dir, str(output_dir))
 
         assert result is True
 

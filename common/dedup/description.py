@@ -50,15 +50,14 @@ SERVICE_REELS = "reels"
 # =============================================================================
 
 # Maps full processor names (from get_name()) to (platform, service) tuples
+# Note: Instaloader format is handled by "Instagram Public Media" processor
 PROCESSOR_TO_PLATFORM_SERVICE: Dict[str, tuple] = {
     "Google Photos": (PLATFORM_GOOGLE, SERVICE_PHOTOS),
     "Google Chat": (PLATFORM_GOOGLE, SERVICE_CHAT),
     "Google Voice": (PLATFORM_GOOGLE, SERVICE_VOICE),
     "iMessage": (PLATFORM_IMESSAGE, ""),
-    "iMessage-iMazing": (PLATFORM_IMESSAGE, ""),
     "Instagram Messages": (PLATFORM_INSTAGRAM, SERVICE_MESSAGES),
     "Instagram Public Media": (PLATFORM_INSTAGRAM, SERVICE_POSTS),
-    "Instaloader": (PLATFORM_INSTAGRAM, SERVICE_POSTS),
     "Snapchat Messages": (PLATFORM_SNAPCHAT, SERVICE_MESSAGES),
     "Snapchat Memories": (PLATFORM_SNAPCHAT, SERVICE_MEMORIES),
     "Discord": (PLATFORM_DISCORD, ""),
@@ -66,7 +65,7 @@ PROCESSOR_TO_PLATFORM_SERVICE: Dict[str, tuple] = {
 
 # Processors that consolidate multiple exports as a single logical source
 # For these, different usernames (device IDs) are treated as the same source
-CONSOLIDATING_PROCESSORS = {"iMessage", "iMessage-iMazing"}
+CONSOLIDATING_PROCESSORS = {"iMessage"}
 
 
 def get_platform_service(processor_name: str) -> tuple:

@@ -56,20 +56,20 @@ Processors use the `ProcessorLogger` class for consistent, single-line events (s
 
 ### Examples (DEBUG)
 
-- Instaloader copy:
-  - `proc=instaloader src=2018-08-01_18-08-04_UTC.mp4 dest=insta-posts-ethantastic_-20180801.mp4 type=posts`
+- Instagram Public Media copy (Instaloader format):
+  - `proc=instagram_public_media src=2018-08-01_18-08-04_UTC.mp4 dest=insta-posts-ethantastic_-20180801.mp4 type=posts`
 - Overlay decision:
   - `proc=overlay video=2021-03-11_19-50-55.mp4 rotate=90 dims=1232x656->656x1232 bitrate=6.6Mbps encoder=hevc_vaapi overlay=memories_overlay.png out=snap-memories-ethriverpage-20110311.mkv`
 - Dedup validation summary:
   - `Dedup validation rejects: gps=1234 aspect=456`
 
-### Processor audit (all 11)
+### Processor audit (all 9)
 
 - High-cardinality per-item logs collapsed to one-line summaries:
-  - Instaloader, Instagram Messages, Instagram Public Media preprocessors.
+  - Instagram Messages, Instagram Public Media preprocessors.
 - Shared noise hotspots updated:
   - `common/media/probe.py` (quiet on success), `common/media/overlay.py` (one decision line; commands on failure), `common/dedup/service.py` (aggregated rejects).
-- Path shortening and banner cleanup applied to Discord, Google Chat, Google Voice, iMessage, iMessage iMazing, Snapchat Memories, Snapchat Messages.
+- Path shortening and banner cleanup applied to Discord, Google Chat, Google Voice, iMessage (including iMazing-format exports), Snapchat Memories, Snapchat Messages.
 
 ### Using ProcessorLogger
 
@@ -94,11 +94,13 @@ log.exif_written(145)
 ### Available Methods
 
 #### Header/Phase Markers
+
 - `processor_start(name)` - Log processor start with separator
 - `preprocessor_start(name, export_path, output_path)` - Log preprocessor start
 - `phase_separator()` - Log a separator line
 
 #### Metadata and Scanning
+
 - `loading_metadata(path)` - Log metadata loading
 - `export_username(username)` - Log detected username
 - `scanning_directory(path)` - Log directory scan
@@ -106,6 +108,7 @@ log.exif_written(145)
 - `found_items(count, item_type)` - Log items found (generic)
 
 #### Matching and Processing
+
 - `building_index(index_type)` - Log index building
 - `matched_files(matched, unmatched)` - Log matching results
 - `skipped_secondary(count)` - Log dedup skipped files
@@ -115,11 +118,13 @@ log.exif_written(145)
 - `created_files(success, needs_exif)` - Log file creation results
 
 #### EXIF Operations
+
 - `exif_batch_start()` - Log EXIF batch start
 - `exif_rebuilding(count)` - Log EXIF rebuild
 - `exif_written(count)` - Log EXIF write completion
 
 #### Preprocessor Operations
+
 - `downloading(count, item_type)` - Log download start
 - `parsing(item_type)` - Log parsing phase
 - `loaded_mappings(count, mapping_type)` - Log loaded mappings
@@ -127,6 +132,7 @@ log.exif_written(145)
 - `preprocessing_complete()` - Log preprocessing done
 
 #### Directory Detection
+
 - `using_preprocessed(path)` - Log using preprocessed export
 - `using_cache(path)` - Log using cache
 - `running_preprocessing()` - Log preprocessing start
@@ -136,6 +142,7 @@ log.exif_written(145)
 - `already_preprocessed(path)` - Log already preprocessed
 
 #### Errors and Warnings
+
 - `file_not_found(path, file_type)` - Log file not found
 - `processing_error(filename, error)` - Log processing error
 - `copy_error(filename, error)` - Log copy error
@@ -144,6 +151,7 @@ log.exif_written(145)
 - `no_metadata_for_file(filename)` - Log no metadata warning
 
 #### Debug Level
+
 - `detection_failed(processor_name, error)` - Log detection failure
 - `generating_filenames()` - Log filename pre-generation
 - `file_operation(operation, source, dest)` - Log file operations
@@ -177,6 +185,7 @@ Progress bars display with a consistent format across all processing phases:
 ```
 
 Components shown:
+
 - **Phase**: Current processing phase (Preprocess, Process, EXIF, Catalog, Dedup)
 - **Action**: Description of the current operation
 - **Progress bar**: Visual indicator of completion
@@ -228,6 +237,7 @@ Log files use a plain text format (no Rich formatting) for compatibility with lo
 All logs are stored in the `logs/` directory, created automatically in the project root.
 
 File logging is enabled when using `-v` or `-vv` flags:
+
 - Main log file: `logs/media_processor_YYYYMMDD_HHMMSS.log`
 - Per-export logs: `logs/log-{export-name}_YYYYMMDD_HHMMSS.log` (when using `--originals`)
 

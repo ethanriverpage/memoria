@@ -96,11 +96,6 @@ class TestProcessorMapping:
         assert platform == PLATFORM_IMESSAGE
         assert service == ""
 
-    def test_imessage_imazing_mapping(self):
-        """Test iMessage-iMazing maps to iMessage with no service."""
-        platform, service = get_platform_service("iMessage-iMazing")
-        assert platform == PLATFORM_IMESSAGE
-        assert service == ""
 
     def test_instagram_messages_mapping(self):
         """Test Instagram Messages maps to Instagram/messages."""
@@ -145,16 +140,15 @@ class TestProcessorMapping:
             "Google Chat",
             "Google Voice",
             "iMessage",
-            "iMessage-iMazing",
             "Instagram Messages",
             "Instagram Public Media",
-            "Instaloader",
             "Snapchat Messages",
             "Snapchat Memories",
             "Discord",
         ]
         for processor in expected:
             assert processor in PROCESSOR_TO_PLATFORM_SERVICE
+        # Note: Instaloader is now handled by Instagram Public Media
 
 
 class TestConsolidatingProcessors:
@@ -163,10 +157,6 @@ class TestConsolidatingProcessors:
     def test_imessage_is_consolidating(self):
         """Test iMessage is a consolidating processor."""
         assert is_consolidating_processor("iMessage") is True
-
-    def test_imessage_imazing_is_consolidating(self):
-        """Test iMessage-iMazing is a consolidating processor."""
-        assert is_consolidating_processor("iMessage-iMazing") is True
 
     def test_google_photos_not_consolidating(self):
         """Test Google Photos is not a consolidating processor."""

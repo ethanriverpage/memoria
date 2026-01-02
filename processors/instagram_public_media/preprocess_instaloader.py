@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Instaloader Preprocessor
+Instagram Instaloader Format Preprocessor
 
 Organizes media files scraped using Instaloader (https://instaloader.github.io/)
 and creates cleaned metadata:
@@ -9,7 +9,8 @@ and creates cleaned metadata:
 - Extracts metadata from .json files
 - Creates metadata.json with essential information (captions, timestamps)
 
-Note: This is NOT an official Instagram export format - it handles scrape data from Instaloader.
+This is a source export format handled by the Instagram Public Media processor.
+Instaloader exports are treated strictly as posts (media_type="posts").
 """
 
 import json
@@ -18,7 +19,6 @@ import lzma
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from datetime import datetime
 
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
 from common.files.scanner import iter_files
@@ -36,8 +36,12 @@ logger = logging.getLogger(__name__)
 log = get_processor_logger(__name__)
 
 
-class InstaloaderPreprocessor(PreprocessorBase):
-    """Preprocesses Instaloader scrape data by organizing files and cleaning metadata"""
+class InstaloaderFormatPreprocessor(PreprocessorBase):
+    """Preprocesses Instaloader scrape data by organizing files and cleaning metadata.
+
+    This preprocessor handles Instaloader-format exports as a source format for the
+    Instagram Public Media processor. All posts are treated as media_type="posts".
+    """
 
     # Use common media extensions (images and videos only)
     MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
@@ -50,7 +54,7 @@ class InstaloaderPreprocessor(PreprocessorBase):
         final_output_dir: Optional[Path] = None,
     ):
         super().__init__(
-            processor_name="Instaloader",
+            processor_name="Instagram Public Media",
             export_path=export_path,
             output_dir=output_dir,
             workers=workers,
@@ -205,7 +209,7 @@ class InstaloaderPreprocessor(PreprocessorBase):
         Uses shared iter_files utility for consistent file scanning
         with automatic hidden file and banned pattern filtering.
         """
-        catalog = {}
+        catalog: Dict[str, Dict] = {}
 
         logger.info("Scanning export directory...")
 
@@ -327,13 +331,13 @@ class InstaloaderPreprocessor(PreprocessorBase):
     def extract_metadata_from_json(self, json_path: Path) -> Dict:
         """
         Extract metadata from .json or .json.xz file
-        Returns dict with: caption, timestamp, timestamp_raw, media_type
+        Returns dict with: caption, timestamp, timestamp_raw
+        Note: media_type is NOT extracted from JSON - Instaloader exports are always posts.
         """
-        metadata = {
+        metadata: Dict[str, Any] = {
             "caption": "",
             "timestamp": None,
             "timestamp_raw": None,
-            "media_type": None,
         }
 
         try:
@@ -361,13 +365,13 @@ class InstaloaderPreprocessor(PreprocessorBase):
             if timestamp_raw:
                 metadata["timestamp_raw"] = timestamp_raw
                 # Convert Unix timestamp to canonical ISO 8601 format
-                dt = datetime.fromtimestamp(timestamp_raw)
+                from datetime import datetime, timezone
+
+                dt = datetime.fromtimestamp(timestamp_raw, tz=timezone.utc)
                 metadata["timestamp"] = dt.strftime(CANONICAL_TIMESTAMP_FORMAT)
 
-            # Extract media type
-            typename = node.get("__typename", "")
-            if typename:
-                metadata["media_type"] = typename
+            # Note: We intentionally do NOT extract __typename from JSON.
+            # Instaloader exports are always treated as posts.
 
         except json.JSONDecodeError as e:
             self.log_message(
@@ -396,7 +400,8 @@ class InstaloaderPreprocessor(PreprocessorBase):
         """
         base_name, entry = post_tuple
 
-        post_data = {
+        # Instaloader exports are always treated as posts
+        post_data: Dict[str, Any] = {
             "media_type": "posts",
             "caption": "",
             "timestamp": None,
@@ -574,18 +579,18 @@ class InstaloaderPreprocessor(PreprocessorBase):
         logger.info("   Deduplicated %d duplicate files", self.stats["duplicate_files"])
 
     def get_content_key(self) -> str:
-        """Return the content key for Instaloader metadata."""
+        """Return the content key for Instagram Instaloader format metadata."""
         return "media"
 
     @staticmethod
     def get_platform() -> str:
-        """Return the platform identifier for Instaloader."""
+        """Return the platform identifier for Instagram."""
         return "Instagram"
 
     @staticmethod
     def get_service() -> str:
-        """Return the service identifier for Instaloader."""
-        return "posts"
+        """Return the service identifier for Instagram public media."""
+        return "public-media"
 
     def print_statistics(self) -> None:
         """Print processing statistics as a compact table."""
@@ -599,7 +604,7 @@ class InstaloaderPreprocessor(PreprocessorBase):
             "Media only": self.stats["posts_with_only_media"],
             "Banned skipped": self.stats["banned_files_skipped"],
         }
-        print_preprocessing_stats("Preprocessing Stats", stats)
+        print_preprocessing_stats("Preprocessing Stats (Instaloader format)", stats)
 
     def process_export(self) -> bool:
         """Platform-specific preprocessing logic.
@@ -625,6 +630,7 @@ class InstaloaderPreprocessor(PreprocessorBase):
             extra_export_info={
                 "total_posts": self.stats["total_posts"],
                 "total_media_files": self.stats["media_copied"],
+                "source_format": "instaloader",
             },
         )
 

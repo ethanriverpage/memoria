@@ -472,12 +472,17 @@ class FailureTracker:
             f"Saved {saved_count}/{len(self.orphaned_metadata)} orphaned metadata entries"
         )
 
-    def save_report(self, output_dir: Path) -> None:
+    def save_report(
+        self, output_dir: Path, report_namespace: Optional[str] = None
+    ) -> None:
         """
         Save the failure report to a JSON file.
 
         Args:
             output_dir: Processor output directory (e.g., {base}/Google Photos/)
+            report_namespace: Optional namespace for the report filename.
+                If provided, the report is saved as failure-report__{namespace}.json.
+                Useful for processors processing multiple exports into the same output.
         """
         if not self.has_failures():
             logger.info("No failures to report")
@@ -487,7 +492,12 @@ class FailureTracker:
         issues_dir = output_dir / "issues"
         issues_dir.mkdir(parents=True, exist_ok=True)
 
-        report_path = issues_dir / "failure-report.json"
+        # Determine report filename
+        if report_namespace:
+            report_filename = f"failure-report__{report_namespace}.json"
+        else:
+            report_filename = "failure-report.json"
+        report_path = issues_dir / report_filename
 
         try:
             report = self.generate_report()
@@ -497,7 +507,9 @@ class FailureTracker:
         except Exception as e:
             logger.error(f"Failed to save failure report to {report_path}: {e}")
 
-    def handle_failures(self, output_dir: Path) -> None:
+    def handle_failures(
+        self, output_dir: Path, report_namespace: Optional[str] = None
+    ) -> None:
         """
         Handle all tracked failures by copying files and generating reports.
 
@@ -509,6 +521,9 @@ class FailureTracker:
 
         Args:
             output_dir: Processor output directory (e.g., {base}/Google Photos/)
+            report_namespace: Optional namespace for the failure report filename.
+                If provided, the report is saved as failure-report__{namespace}.json.
+                Useful for processors processing multiple exports into the same output.
         """
         if not self.has_failures():
             return
@@ -530,7 +545,7 @@ class FailureTracker:
         self.move_processing_failures(output_path)
 
         # Save failure report
-        self.save_report(output_path)
+        self.save_report(output_path, report_namespace=report_namespace)
 
         summary = self.get_summary()
         logger.info(

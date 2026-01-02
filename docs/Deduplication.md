@@ -439,8 +439,7 @@ The system uses a hybrid matching strategy:
 | iMessage | Yes |
 | Discord | Yes |
 | Instagram Messages | Yes |
-| Instagram Public Media | Yes |
-| Instaloader | Yes |
+| Instagram Public Media | Yes (includes Instaloader format) |
 | Snapchat Memories | Yes |
 | Snapchat Messages | Yes |
 | Google Chat | Yes |

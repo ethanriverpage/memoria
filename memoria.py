@@ -843,9 +843,9 @@ def show_supported_formats() -> None:
     logger.info("    - Snapchat Messages: json/ with chat_history.json")
     logger.info("  Instagram (can match multiple):")
     logger.info("    - Instagram Messages: your_instagram_activity/messages/inbox/")
-    logger.info("    - Instagram Public Media: media/posts/ and media/archived_posts/")
     logger.info(
-        "    - Instaloader: YYYY-MM-DD_HH-MM-SS_UTC.* files in root (scrape data)"
+        "    - Instagram Public Media: media/posts/, media/archived_posts/, or "
+        "Instaloader format (YYYY-MM-DD_HH-MM-SS_UTC.* files)"
     )
     logger.info("Examples:")
     logger.info("  google-username-20250526/     -> Google Photos + Chat + Voice")

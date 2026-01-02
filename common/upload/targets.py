@@ -102,9 +102,8 @@ def build_upload_targets(
     )
 
     # Handle Instagram Public Media specially (has nested subfolder structure)
-    # Note: Only apply to "Instagram Public Media" processor, NOT "Instaloader"
     # Instagram Public Media outputs to public-media/{service} subfolders
-    # while Instaloader outputs directly to posts/
+    # (Instaloader format exports are also handled by this processor as posts/)
     if processor_name == _INSTAGRAM_PUBLIC_MEDIA_NAME:
         return _ig_public_media_targets(out_base, username)
 

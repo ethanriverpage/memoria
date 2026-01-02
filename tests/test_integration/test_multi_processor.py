@@ -171,10 +171,13 @@ class TestNoMatch:
 class TestProcessorCount:
     """Tests for processor count validation."""
 
-    def test_at_least_10_processors(self, processor_registry):
-        """Should have at least 10 registered processors."""
+    def test_at_least_9_processors(self, processor_registry):
+        """Should have at least 9 registered processors.
+
+        Note: Instaloader is now handled by Instagram Public Media, reducing count from 10 to 9.
+        """
         count = processor_registry.get_processor_count()
-        assert count >= 10
+        assert count >= 9
 
     def test_all_processors_have_required_methods(self, processor_registry):
         """All processors should implement required methods."""

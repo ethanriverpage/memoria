@@ -189,7 +189,10 @@ def instagram_public_export(temp_export_dir) -> Path:
 
 @pytest.fixture
 def instaloader_export(temp_export_dir) -> Path:
-    """Create a minimal Instaloader scrape data export."""
+    """Create a minimal Instaloader scrape data export.
+
+    Note: Instaloader exports are now processed by the unified Instagram Public Media processor.
+    """
     from tests.fixtures.export_tree import copy_export_fixture
 
     return copy_export_fixture("instaloader", "basic_with_json_xz", temp_export_dir)
@@ -221,7 +224,10 @@ def imessage_iphone_export(temp_export_dir) -> Path:
 
 @pytest.fixture
 def imessage_imazing_export(temp_export_dir) -> Path:
-    """Create a minimal iMessage iMazing export."""
+    """Create a minimal iMazing-format iMessage export.
+
+    Note: iMazing exports are now processed by the unified iMessage processor.
+    """
     from tests.fixtures.export_tree import copy_export_fixture
 
     return copy_export_fixture("imessage_imazing", "basic_device_info", temp_export_dir)
@@ -288,16 +294,6 @@ def instagram_public_processor() -> Type[ProcessorBase]:
     )
 
     return InstagramPublicMediaProcessor
-
-
-@pytest.fixture
-def instaloader_processor() -> Type[ProcessorBase]:
-    """Return the Instaloader processor class."""
-    from processors.instaloader.processor import (
-        InstaloaderProcessor,
-    )
-
-    return InstaloaderProcessor
 
 
 @pytest.fixture

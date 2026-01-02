@@ -19,12 +19,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from common.dedup import compute_content_hash
 from common.detection import DetectionResult
 from common.files.scanner import iter_files
 from common.files.types import (
-    IMAGE_EXTENSIONS,
-    VIDEO_EXTENSIONS,
-    AUDIO_EXTENSIONS,
     ALL_EXTENSIONS as ALL_MEDIA_EXTENSIONS,
     get_media_type,
 )
@@ -32,7 +30,7 @@ from common.output.logging import get_processor_logger
 from common.output.progress import PHASE_PREPROCESS, progress_bar
 from common.output.summary import print_preprocessing_stats
 from common.preprocess.context_mergers import merge_imessage_context
-from processors.preprocess_base import CopyTask, HashResult, PreprocessorBase
+from processors.preprocess_base import CopyTask, PreprocessorBase
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -42,6 +40,10 @@ log = get_processor_logger(__name__)
 # Filename pattern for iMazing exports:
 # "YYYY-MM-DD HH MM SS - Contact Name - OriginalFile.ext"
 FILENAME_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2} \d{2} \d{2}) - (.+?) - (.+)$")
+
+# Live Photo detection: HEIC/JPG images paired with MOV files sharing the same stem
+_LIVE_PHOTO_IMAGE_EXTENSIONS = {".heic", ".heif", ".jpg", ".jpeg"}
+_LIVE_PHOTO_VIDEO_EXTENSIONS = {".mov"}
 
 
 def parse_imazing_filename(filename: str) -> Optional[Dict]:
@@ -94,6 +96,22 @@ def is_group_chat(conversation_name: str) -> bool:
     return " & " in conversation_name
 
 
+def _get_live_photo_stem(original_filename: str) -> Optional[str]:
+    """Extract stem from original filename for Live Photo pairing.
+
+    Args:
+        original_filename: Original filename (e.g., "IMG_1234.HEIC")
+
+    Returns:
+        Stem without extension (e.g., "IMG_1234"), or None if not a Live Photo candidate
+    """
+    path = Path(original_filename)
+    ext = path.suffix.lower()
+    if ext in _LIVE_PHOTO_IMAGE_EXTENSIONS or ext in _LIVE_PHOTO_VIDEO_EXTENSIONS:
+        return path.stem
+    return None
+
+
 class ImazingPreprocessor(PreprocessorBase):
     """Preprocessor for iMazing-format iMessage exports.
 
@@ -130,8 +148,9 @@ class ImazingPreprocessor(PreprocessorBase):
         if output_dir is None:
             output_dir = Path(export_path).parent / "imessage-imazing-processed"
 
+        # Use "iMessage" as processor_name (unified processor)
         super().__init__(
-            processor_name="iMessage-iMazing",
+            processor_name="iMessage",
             export_path=export_path,
             output_dir=output_dir,
             workers=workers,
@@ -160,6 +179,7 @@ class ImazingPreprocessor(PreprocessorBase):
                 "duplicate_files": 0,
                 "csv_messages_loaded": 0,
                 "conversations": 0,
+                "live_photos": 0,
             }
         )
 
@@ -364,6 +384,59 @@ class ImazingPreprocessor(PreprocessorBase):
         """
         return source_path.name
 
+    def _detect_live_photo_pairs(
+        self, media_files: List[Path]
+    ) -> Dict[str, Dict[str, Path]]:
+        """Detect Live Photo pairs (HEIC/JPG + MOV with same original filename stem).
+
+        Uses stem-based pairing (not timestamp-based) to be robust to cases where
+        iMazing exports HEIC and MOV with slightly different prefix timestamps.
+
+        Args:
+            media_files: List of media file paths
+
+        Returns:
+            Dict mapping pair_key -> {"image": Path, "video": Path}
+        """
+        # Group files by (conversation, stem) - NOT including timestamp
+        # This handles cases where HEIC and MOV have slightly different iMazing
+        # prefix timestamps (e.g., 1-2 second difference)
+        # Key: (conversation, stem) -> {"image": Path, "video": Path}
+        candidates: Dict[Tuple[str, str], Dict[str, Path]] = {}
+
+        for file_path in media_files:
+            parsed = parse_imazing_filename(file_path.name)
+            if not parsed:
+                continue
+
+            original_filename = parsed["original_filename"]
+            stem = _get_live_photo_stem(original_filename)
+            if not stem:
+                continue
+
+            ext = Path(original_filename).suffix.lower()
+            # Use conversation + stem (without timestamp) for tolerant pairing
+            key = (parsed["conversation"], stem)
+
+            if key not in candidates:
+                candidates[key] = {}
+
+            if ext in _LIVE_PHOTO_IMAGE_EXTENSIONS:
+                candidates[key]["image"] = file_path
+            elif ext in _LIVE_PHOTO_VIDEO_EXTENSIONS:
+                candidates[key]["video"] = file_path
+
+        # Filter to only pairs where both image and video exist
+        pairs: Dict[str, Dict[str, Path]] = {}
+        for (conv, stem), paths in candidates.items():
+            if "image" in paths and "video" in paths:
+                # Create a deterministic stem-based pair key
+                pair_key = f"imazing:{conv}:{stem}"
+                pairs[pair_key] = paths
+                self.stats["live_photos"] += 1
+
+        return pairs
+
     def _build_conversations(self, media_files: List[Path]) -> Dict[str, Dict]:
         """Build conversations structure using hash_with_dedup (no file copying).
 
@@ -373,6 +446,21 @@ class ImazingPreprocessor(PreprocessorBase):
         Returns:
             Conversations dict
         """
+        # Detect Live Photo pairs first
+        live_photo_pairs = self._detect_live_photo_pairs(media_files)
+
+        # Build reverse lookup: file_path -> (pair_key, is_video, image_hash)
+        live_photo_lookup: Dict[Path, Tuple[str, bool, Optional[str]]] = {}
+
+        for pair_key, paths in live_photo_pairs.items():
+            image_path = paths["image"]
+            video_path = paths["video"]
+
+            # Compute hash of the image for cross-export pairing
+            image_hash = compute_content_hash(image_path)
+
+            live_photo_lookup[image_path] = (pair_key, False, image_hash)
+            live_photo_lookup[video_path] = (pair_key, True, image_hash)
 
         # Sort files by parsed timestamp so oldest is processed first (becomes primary)
         def get_timestamp(file_path: Path) -> datetime:
@@ -428,6 +516,14 @@ class ImazingPreprocessor(PreprocessorBase):
                 "media_type": media_type.value if media_type else None,
             }
 
+            # Add Live Photo fields if applicable
+            if file_path in live_photo_lookup:
+                pair_key, is_video, image_hash = live_photo_lookup[file_path]
+                context["live_photo_pair_key"] = pair_key
+                context["live_photo_image_hash"] = image_hash
+                if is_video:
+                    context["is_live_photo_video"] = True
+
             copy_tasks.append(
                 CopyTask(
                     source_path=file_path,
@@ -445,7 +541,7 @@ class ImazingPreprocessor(PreprocessorBase):
         unique_files_copied = 0
         duplicate_count = 0
 
-        for source_path, result in results.items():
+        for _, result in results.items():
             if result.is_duplicate:
                 duplicate_count += 1
                 continue
@@ -476,6 +572,22 @@ class ImazingPreprocessor(PreprocessorBase):
 
             media_type = primary_context.get("media_type")
 
+            # Collect live_photo_pair_keys from all merged contexts (sorted unique)
+            all_pair_keys: set[str] = set()
+            for ctx in merged_contexts:
+                pair_key = ctx.get("live_photo_pair_key")
+                if pair_key:
+                    all_pair_keys.add(pair_key)
+            live_photo_pair_keys = sorted(all_pair_keys) if all_pair_keys else None
+
+            # Get live_photo_image_hash (should be same across all contexts for same Live Photo)
+            live_photo_image_hash = None
+            for ctx in merged_contexts:
+                img_hash = ctx.get("live_photo_image_hash")
+                if img_hash:
+                    live_photo_image_hash = img_hash
+                    break
+
             # Check if this has merged duplicates
             if len(merged_contexts) > 1:
                 # Create merged message with messages array
@@ -487,6 +599,18 @@ class ImazingPreprocessor(PreprocessorBase):
                     "messages": [],
                     "media_type": media_type,
                 }
+
+                # Add Live Photo marker if applicable
+                if primary_context.get("is_live_photo_video"):
+                    merged_message["is_live_photo_video"] = True
+
+                # Add live_photo_pair_keys if present
+                if live_photo_pair_keys:
+                    merged_message["live_photo_pair_keys"] = live_photo_pair_keys
+
+                # Add live_photo_image_hash for cross-export pairing
+                if live_photo_image_hash:
+                    merged_message["live_photo_image_hash"] = live_photo_image_hash
 
                 # Add all occurrences to messages array
                 for ctx in merged_contexts:
@@ -521,6 +645,18 @@ class ImazingPreprocessor(PreprocessorBase):
                     "source_paths": {result.dest_filename: str(result.source_path)},
                     "media_type": media_type,
                 }
+
+                # Add Live Photo marker if applicable
+                if primary_context.get("is_live_photo_video"):
+                    message["is_live_photo_video"] = True
+
+                # Add live_photo_pair_keys if present
+                if live_photo_pair_keys:
+                    message["live_photo_pair_keys"] = live_photo_pair_keys
+
+                # Add live_photo_image_hash for cross-export pairing
+                if live_photo_image_hash:
+                    message["live_photo_image_hash"] = live_photo_image_hash
 
                 conversations[conv_id]["messages"].append(message)
                 conversations[conv_id]["message_count"] += 1
@@ -563,9 +699,9 @@ class ImazingPreprocessor(PreprocessorBase):
         self.stats["media_files_found"] = len(media_files)
         log.found_files(len(media_files), "media")
 
+        # No export_format field - normalized to standard iMessage schema
         extra_export_info = {
             "export_paths": [str(self.export_path)],
-            "export_format": "imazing",
             "csv_messages_loaded": self.stats["csv_messages_loaded"],
         }
 
@@ -608,5 +744,6 @@ class ImazingPreprocessor(PreprocessorBase):
             "Conversations": self.stats["conversations"],
             "Unique files": self.stats["unique_files"],
             "Duplicates removed": self.stats["duplicate_files"],
+            "Live Photo pairs": self.stats["live_photos"],
         }
         print_preprocessing_stats("iMazing Preprocessing", stats)

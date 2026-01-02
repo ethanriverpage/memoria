@@ -384,31 +384,8 @@ class TestInstagramPublicMediaTargets:
             assert f"Instagram/testuser/{folder}" in albums
 
 
-class TestInstaloaderVsInstagramPublicMedia:
-    """Tests for proper differentiation between Instaloader and Instagram Public Media."""
-
-    def test_instaloader_gets_single_posts_album(self, tmp_path: Path) -> None:
-        """Instaloader should get a single Instagram/{username}/posts album."""
-        from unittest.mock import MagicMock
-
-        # Mock an Instaloader processor
-        mock_processor = MagicMock()
-        mock_processor.get_name.return_value = "Instaloader"
-        mock_processor.get_output_info.return_value = OutputInfo(
-            platform="Instagram",
-            service="posts",
-            username_prefix="instagram",
-        )
-
-        targets = build_upload_targets(
-            mock_processor,
-            input_dir="instagram-testuser-20240101",
-            output_base=str(tmp_path),
-        )
-
-        assert len(targets) == 1
-        path, album = targets[0]
-        assert album == "Instagram/testuser/posts"
+class TestInstagramPublicMediaUploadTargets:
+    """Tests for Instagram Public Media upload target building."""
 
     def test_instagram_public_media_uses_subfolders(self, tmp_path: Path) -> None:
         """Instagram Public Media should use per-subfolder albums."""
@@ -461,6 +438,33 @@ class TestInstaloaderVsInstagramPublicMedia:
         )
 
         # Should get single album (can't distinguish without processor name)
+        assert len(targets) == 1
+        assert targets[0][1] == "Instagram/testuser/posts"
+
+    def test_instaloader_format_only_produces_posts_subfolder(
+        self, tmp_path: Path
+    ) -> None:
+        """Instaloader-format exports should only create posts/ subfolder."""
+        from unittest.mock import MagicMock
+
+        # Only posts subfolder exists (Instaloader format = posts-only)
+        (tmp_path / "posts").mkdir()
+
+        mock_processor = MagicMock()
+        mock_processor.get_name.return_value = "Instagram Public Media"
+        mock_processor.get_output_info.return_value = OutputInfo(
+            platform="Instagram",
+            service="public-media",
+            username_prefix="instagram",
+        )
+
+        targets = build_upload_targets(
+            mock_processor,
+            input_dir="instagram-testuser-20240101",
+            output_base=str(tmp_path),
+        )
+
+        # Only posts album should exist
         assert len(targets) == 1
         assert targets[0][1] == "Instagram/testuser/posts"
 

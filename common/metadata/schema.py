@@ -70,7 +70,6 @@ class ExportInfo(TypedDict, total=False):
         export_name: Name of the export directory
         export_paths: List of paths for multi-export processors (iMessage)
         username_source: Method used to detect username
-        export_format: Format variant (e.g., "imazing" for iMessage)
 
     Processor-specific stats are allowed as additional keys.
     """
@@ -86,7 +85,6 @@ class ExportInfo(TypedDict, total=False):
     export_name: str
     export_paths: List[str]
     username_source: str
-    export_format: str
 
 
 # =============================================================================

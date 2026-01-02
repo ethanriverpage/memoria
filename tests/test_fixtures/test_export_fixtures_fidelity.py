@@ -339,16 +339,22 @@ class TestInstagramPublicFixtureFidelity:
 
 
 class TestInstaloaderFixtureFidelity:
-    """Fidelity tests for Instaloader fixtures."""
+    """Fidelity tests for Instaloader fixtures.
+
+    Note: Instaloader format is now handled by the unified Instagram Public Media processor.
+    """
 
     @pytest.fixture
     def processor(self):
-        from processors.instaloader.processor import InstaloaderProcessor
+        # Instaloader format is now detected by Instagram Public Media processor
+        from processors.instagram_public_media.processor import (
+            InstagramPublicMediaProcessor,
+        )
 
-        return InstaloaderProcessor
+        return InstagramPublicMediaProcessor
 
     def test_basic_with_json_xz_detected(self, processor, tmp_path):
-        """basic_with_json_xz should be detected as Instaloader."""
+        """basic_with_json_xz should be detected via Instagram Public Media."""
         from tests.fixtures.export_tree import copy_export_fixture
 
         copy_export_fixture("instaloader", "basic_with_json_xz", tmp_path)
@@ -414,12 +420,13 @@ class TestIMessageImazingFixtureFidelity:
 
     @pytest.fixture
     def processor(self):
-        from processors.imessage_imazing.processor import ImazingProcessor
+        # iMazing exports are now handled by unified iMessage processor
+        from processors.imessage.processor import IMessageProcessor
 
-        return ImazingProcessor
+        return IMessageProcessor
 
     def test_basic_device_info_detected(self, processor, tmp_path):
-        """basic_device_info should be detected as iMazing."""
+        """basic_device_info should be detected as iMazing by unified iMessage processor."""
         from tests.fixtures.export_tree import copy_export_fixture
 
         copy_export_fixture("imessage_imazing", "basic_device_info", tmp_path)
@@ -447,7 +454,10 @@ class TestFixtureExclusivity:
 
     @pytest.fixture
     def all_processors(self):
-        """Get all processor classes."""
+        """Get all processor classes.
+
+        Note: Instaloader format is now handled by Instagram Public Media processor.
+        """
         from processors.google_photos.processor import GooglePhotosProcessor
         from processors.google_chat.processor import GoogleChatProcessor
         from processors.google_voice.processor import GoogleVoiceProcessor
@@ -458,9 +468,7 @@ class TestFixtureExclusivity:
         from processors.instagram_public_media.processor import (
             InstagramPublicMediaProcessor,
         )
-        from processors.instaloader.processor import InstaloaderProcessor
         from processors.imessage.processor import IMessageProcessor
-        from processors.imessage_imazing.processor import ImazingProcessor
 
         return {
             "google_photos": GooglePhotosProcessor,
@@ -471,9 +479,11 @@ class TestFixtureExclusivity:
             "snapchat_messages": SnapchatMessagesProcessor,
             "instagram_messages": InstagramMessagesProcessor,
             "instagram_public": InstagramPublicMediaProcessor,
-            "instaloader": InstaloaderProcessor,
+            # Note: Instaloader fixtures are now detected by InstagramPublicMediaProcessor
+            "instaloader": InstagramPublicMediaProcessor,
             "imessage": IMessageProcessor,
-            "imessage_imazing": ImazingProcessor,
+            # Note: imessage_imazing fixtures are now detected by IMessageProcessor
+            "imessage_imazing": IMessageProcessor,
         }
 
     def test_google_photos_not_detected_by_others(self, all_processors, tmp_path):

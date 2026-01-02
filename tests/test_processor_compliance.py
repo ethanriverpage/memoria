@@ -24,8 +24,11 @@ def _get_registered_processor_classes(processor_registry) -> Set[Type[ProcessorB
     return processors
 
 
-def test_all_11_processors_are_registered(processor_registry) -> None:
-    """Ensure our suite covers every processor (no silent skips)."""
+def test_all_9_processors_are_registered(processor_registry) -> None:
+    """Ensure our suite covers every processor (no silent skips).
+
+    Note: InstaloaderProcessor was merged into InstagramPublicMediaProcessor.
+    """
 
     expected_class_names = {
         "DiscordProcessor",
@@ -33,10 +36,8 @@ def test_all_11_processors_are_registered(processor_registry) -> None:
         "GooglePhotosProcessor",
         "GoogleVoiceProcessor",
         "IMessageProcessor",
-        "ImazingProcessor",
         "InstagramMessagesProcessor",
         "InstagramPublicMediaProcessor",
-        "InstaloaderProcessor",
         "SnapchatMemoriesProcessor",
         "SnapchatMessagesProcessor",
     }

@@ -183,15 +183,18 @@ class TestInstagramPublicDetection:
         assert instagram_public_processor.detect(temp_export_dir) is False
 
 
-class TestInstaloaderDetection:
-    """Tests for Instaloader processor detection."""
+class TestInstaloaderFormatDetection:
+    """Tests for Instaloader format detection via Instagram Public Media processor.
 
-    def test_detect_valid_export(self, instaloader_processor, temp_export_dir):
-        """Should detect valid Instaloader scrape data."""
+    Note: Instaloader format is now handled by the unified Instagram Public Media processor.
+    """
+
+    def test_detect_valid_export(self, instagram_public_processor, temp_export_dir):
+        """Should detect valid Instaloader scrape data via Instagram Public Media."""
         create_instaloader_export(temp_export_dir)
-        assert instaloader_processor.detect(temp_export_dir) is True
+        assert instagram_public_processor.detect(temp_export_dir) is True
 
-    def test_detect_single_file(self, instaloader_processor, temp_export_dir):
+    def test_detect_single_file(self, instagram_public_processor, temp_export_dir):
         """Should reject export with less than 3 UTC-timestamped files."""
         # Detection requires at least 3 files matching the pattern
         create_instaloader_export(
@@ -205,12 +208,12 @@ class TestInstaloaderDetection:
             ],
         )
         # Requires 3+ files for detection
-        assert instaloader_processor.detect(temp_export_dir) is False
+        assert instagram_public_processor.detect(temp_export_dir) is False
 
-    def test_detect_multiple_files(self, instaloader_processor, temp_export_dir):
-        """Should detect export with 3+ UTC-timestamped files."""
-        # Detection requires at least 3 files matching YYYY-MM-DD_HH-MM-SS_UTC.ext
-        # Note: Carousel suffixes (_1, _2) don't match the strict detection pattern
+    def test_detect_multiple_files(self, instagram_public_processor, temp_export_dir):
+        """Should detect Instaloader export with 3+ UTC-timestamped files."""
+        # Detection requires at least 3 files matching YYYY-MM-DD_HH-MM-SS_UTC[_N].ext
+        # Carousel suffixes (_1, _2) are supported by the detection pattern.
         create_instaloader_export(
             temp_export_dir,
             media_files=[
@@ -231,17 +234,58 @@ class TestInstaloaderDetection:
                 },
             ],
         )
-        assert instaloader_processor.detect(temp_export_dir) is True
+        assert instagram_public_processor.detect(temp_export_dir) is True
 
-    def test_reject_empty_directory(self, instaloader_processor, temp_export_dir):
-        """Should reject empty directory."""
-        assert instaloader_processor.detect(temp_export_dir) is False
+    def test_reject_empty_directory(self, instagram_public_processor, temp_export_dir):
+        """Should reject empty directory for Instaloader format."""
+        assert instagram_public_processor.detect(temp_export_dir) is False
 
-    def test_reject_non_utc_files(self, instaloader_processor, temp_export_dir):
+    def test_reject_non_utc_files(self, instagram_public_processor, temp_export_dir):
         """Should reject directory with non-UTC-timestamped files."""
         (temp_export_dir / "regular_photo.jpg").write_bytes(b"test")
         (temp_export_dir / "another_file.png").write_bytes(b"test")
-        assert instaloader_processor.detect(temp_export_dir) is False
+        assert instagram_public_processor.detect(temp_export_dir) is False
+
+    def test_detect_png_files(self, instagram_public_processor, temp_export_dir):
+        """Should detect Instaloader exports with PNG files."""
+        # Detection pattern should support common image formats beyond jpg
+        from tests.fixtures.media_samples import write_media_file
+
+        write_media_file(temp_export_dir / "2021-01-01_12-00-00_UTC.png", "png")
+        write_media_file(temp_export_dir / "2021-01-02_12-00-00_UTC.png", "png")
+        write_media_file(temp_export_dir / "2021-01-03_12-00-00_UTC.png", "png")
+
+        assert instagram_public_processor.detect(temp_export_dir) is True
+
+    def test_detect_webp_files(self, instagram_public_processor, temp_export_dir):
+        """Should detect Instaloader exports with WebP files."""
+        from tests.fixtures.media_samples import write_media_file
+
+        write_media_file(temp_export_dir / "2021-01-01_12-00-00_UTC.webp", "webp")
+        write_media_file(temp_export_dir / "2021-01-02_12-00-00_UTC.webp", "webp")
+        write_media_file(temp_export_dir / "2021-01-03_12-00-00_UTC.webp", "webp")
+
+        assert instagram_public_processor.detect(temp_export_dir) is True
+
+    def test_detect_mov_files(self, instagram_public_processor, temp_export_dir):
+        """Should detect Instaloader exports with MOV video files."""
+        from tests.fixtures.media_samples import write_media_file
+
+        write_media_file(temp_export_dir / "2021-01-01_12-00-00_UTC.mov", "mov")
+        write_media_file(temp_export_dir / "2021-01-02_12-00-00_UTC.mov", "mov")
+        write_media_file(temp_export_dir / "2021-01-03_12-00-00_UTC.mov", "mov")
+
+        assert instagram_public_processor.detect(temp_export_dir) is True
+
+    def test_detect_mixed_extensions(self, instagram_public_processor, temp_export_dir):
+        """Should detect Instaloader exports with mixed file extensions."""
+        from tests.fixtures.media_samples import write_media_file
+
+        write_media_file(temp_export_dir / "2021-01-01_12-00-00_UTC.jpg", "jpeg")
+        write_media_file(temp_export_dir / "2021-01-02_12-00-00_UTC.png", "png")
+        write_media_file(temp_export_dir / "2021-01-03_12-00-00_UTC.mp4", "mp4")
+
+        assert instagram_public_processor.detect(temp_export_dir) is True
 
 
 class TestInstagramMultiProcessorDetection:
@@ -257,15 +301,14 @@ class TestInstagramMultiProcessorDetection:
         assert instagram_messages_processor.detect(temp_export_dir) is True
         assert instagram_public_processor.detect(temp_export_dir) is True
 
-    def test_instaloader_exclusive(
-        self, instaloader_processor, instagram_public_processor, temp_export_dir
+    def test_instaloader_detected_by_public_processor(
+        self, instagram_public_processor, temp_export_dir
     ):
-        """Instaloader format should be distinct from public media format."""
+        """Instaloader format should be detected by Instagram Public Media processor."""
         create_instaloader_export(temp_export_dir)
 
-        assert instaloader_processor.detect(temp_export_dir) is True
-        # Public processor should not match Instaloader format (no media/posts structure)
-        assert instagram_public_processor.detect(temp_export_dir) is False
+        # Instaloader format is now handled by the unified Instagram Public Media processor
+        assert instagram_public_processor.detect(temp_export_dir) is True
 
 
 class TestInstagramMessagesRealisticFixtures:

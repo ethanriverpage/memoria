@@ -192,15 +192,15 @@ Available processors:
   Instagram Messages             (priority: 88)
   Instagram Public Media         (priority: 87)
   Google Chat                    (priority: 86)
-  Instaloader                    (priority: 84)
   Snapchat Memories              (priority: 70)
   Snapchat Messages              (priority: 69)
   Google Photos                  (priority: 60)
-  iMessage-iMazing               (priority: 50)
   iMessage                       (priority: 49)
 
-Total: 11 processor(s)
+Total: 9 processor(s)
 ```
+
+Note: Instaloader format is handled by the Instagram Public Media processor.
 
 ### Upload-Only Mode
 
@@ -212,7 +212,7 @@ Process exports separately from uploading:
 ./memoria.py /path/to/export -o /path/to/output --skip-upload
 ```
 
-2. **Later**: Upload processed files
+1. **Later**: Upload processed files
 
 ```bash
 ./memoria.py /path/to/export --upload-only /path/to/output
@@ -370,10 +370,11 @@ Uploads are automatically organized into albums using `Platform/username[/servic
 | Google Voice | `Google/{username}/voice` |
 | iMessage | `iMessage/{device}` |
 | Instagram Messages | `Instagram/{username}/messages` |
-| Instagram Posts | `Instagram/{username}/posts/{subfolder}` |
-| Instaloader | `Instagram/{username}/posts` |
+| Instagram Public Media | `Instagram/{username}/posts/{subfolder}` |
 | Snapchat Memories | `Snapchat/{username}/memories` |
 | Snapchat Messages | `Snapchat/{username}/messages` |
+
+Note: Instaloader format content is processed as posts and goes to `Instagram/{username}/posts`.
 
 ### Ignore Patterns
 

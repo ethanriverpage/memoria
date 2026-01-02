@@ -88,24 +88,29 @@ class TestTemplateEnforcement:
     """Tests for preprocessor template enforcement via __init_subclass__."""
 
     def test_all_preprocessors_importable(self):
-        """All 10 preprocessors should import without error."""
+        """All 10 preprocessors should import without error.
+
+        Note: InstaloaderFormatPreprocessor is now under instagram_public_media.
+        """
         from processors.instagram_public_media.preprocess import InstagramPreprocessor
+        from processors.instagram_public_media.preprocess_instaloader import (
+            InstaloaderFormatPreprocessor,
+        )
         from processors.instagram_messages.preprocess import (
             InstagramMessagesPreprocessor,
         )
-        from processors.instaloader.preprocess import InstaloaderPreprocessor
         from processors.google_chat.preprocess import GoogleChatPreprocessor
         from processors.google_voice.preprocess import GoogleVoicePreprocessor
         from processors.discord.preprocess import DiscordPreprocessor
         from processors.google_photos.preprocess import GooglePhotosPreprocessor
         from processors.imessage.preprocess import IMessagePreprocessor
-        from processors.imessage_imazing.preprocess import ImazingPreprocessor
+        from processors.imessage.preprocess_imazing import ImazingPreprocessor
         from processors.snapchat_messages.preprocess import SnapchatMessagesPreprocessor
 
         # All should be subclasses of PreprocessorBase
         assert issubclass(InstagramPreprocessor, PreprocessorBase)
+        assert issubclass(InstaloaderFormatPreprocessor, PreprocessorBase)
         assert issubclass(InstagramMessagesPreprocessor, PreprocessorBase)
-        assert issubclass(InstaloaderPreprocessor, PreprocessorBase)
         assert issubclass(GoogleChatPreprocessor, PreprocessorBase)
         assert issubclass(GoogleVoicePreprocessor, PreprocessorBase)
         assert issubclass(DiscordPreprocessor, PreprocessorBase)
@@ -499,24 +504,29 @@ class TestProductionPreprocessorStats:
 
     @pytest.fixture
     def preprocessor_classes(self):
-        """Import all 10 production preprocessor classes."""
+        """Import all 10 production preprocessor classes.
+
+        Note: InstaloaderFormatPreprocessor is now under instagram_public_media.
+        """
         from processors.instagram_public_media.preprocess import InstagramPreprocessor
+        from processors.instagram_public_media.preprocess_instaloader import (
+            InstaloaderFormatPreprocessor,
+        )
         from processors.instagram_messages.preprocess import (
             InstagramMessagesPreprocessor,
         )
-        from processors.instaloader.preprocess import InstaloaderPreprocessor
         from processors.google_chat.preprocess import GoogleChatPreprocessor
         from processors.google_voice.preprocess import GoogleVoicePreprocessor
         from processors.discord.preprocess import DiscordPreprocessor
         from processors.google_photos.preprocess import GooglePhotosPreprocessor
         from processors.imessage.preprocess import IMessagePreprocessor
-        from processors.imessage_imazing.preprocess import ImazingPreprocessor
+        from processors.imessage.preprocess_imazing import ImazingPreprocessor
         from processors.snapchat_messages.preprocess import SnapchatMessagesPreprocessor
 
         return {
             "instagram_public_media": InstagramPreprocessor,
+            "instagram_public_media_instaloader": InstaloaderFormatPreprocessor,
             "instagram_messages": InstagramMessagesPreprocessor,
-            "instaloader": InstaloaderPreprocessor,
             "google_chat": GoogleChatPreprocessor,
             "google_voice": GoogleVoicePreprocessor,
             "discord": DiscordPreprocessor,

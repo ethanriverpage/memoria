@@ -47,7 +47,7 @@ exports/
 │   ├── live_photo_lp_image_pair/       # lp_image.HEIC + lp_image.MOV
 │   ├── ventura_attributedbody/
 │   └── with_contacts_vcf/
-├── imessage_imazing/
+├── imessage_imazing/                   # iMazing format (via iMessage processor)
 │   └── basic_device_info/              # Device-Info.txt + Messages CSV
 ├── instagram_messages/
 │   ├── current_format_doc_html/        # 2023+ format with <h2> sender

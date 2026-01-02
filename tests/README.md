@@ -25,7 +25,7 @@ tests/
 │       ├── instagram_public/
 │       ├── instaloader/
 │       ├── imessage/
-│       ├── imessage_imazing/
+│       ├── imessage_imazing/  # iMazing format (detected by iMessage processor)
 │       └── README.md
 ├── test_detection/                # Processor detect() tests
 ├── test_processing/               # Processor preprocess/process tests
@@ -269,7 +269,7 @@ Each processor has a fixture that copies the default schema-faithful export:
 - `discord_export`
 - `imessage_mac_export`
 - `imessage_iphone_export`
-- `imessage_imazing_export`
+- `imessage_imazing_export` (iMazing format via unified iMessage processor)
 
 ### Processor Class Fixtures
 

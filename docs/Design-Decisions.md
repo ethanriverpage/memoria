@@ -335,7 +335,7 @@ Documentation emphasizes:
 **Why this matters:**
 Platforms affected by this:
 
-- **Instaloader**: Relies on file modification times as fallback when filename parsing fails
+- **Instaloader format**: Uses JSON metadata timestamps when available, falls back to filename parsing (YYYY-MM-DD_HH-MM-SS_UTC pattern)
 - **Google Photos**: Some older items lack JSON metadata and use filesystem times
 - **Snapchat Messages**: Uses file modification timestamps to match overlay files to media files (critical for correct overlay embedding)
 - **Any platform with incomplete metadata**: Filesystem time may be the only available date

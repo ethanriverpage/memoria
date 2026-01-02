@@ -1098,3 +1098,209 @@ class TestIMessageCrossExportLivePhotoPairing:
 
         output_filename = f"{matched_base}.mov"
         assert output_filename == "imessage-testuser-20230526.mov"
+
+
+class TestMixedConsolidatedProcessing:
+    """Tests for mixed SQLite + iMazing consolidated processing.
+
+    Verifies that IMessageProcessor.process_consolidated() correctly handles
+    mixed input types: SQLite exports (Mac/iPhone) and iMazing exports.
+    """
+
+    def test_mixed_sqlite_and_imazing_consolidated(self, tmp_path):
+        """Mixed SQLite + iMazing exports should process into same output."""
+        from processors.imessage.processor import IMessageProcessor
+        from tests.fixtures.generators import (
+            create_imessage_mac_export,
+            create_imessage_imazing_export,
+        )
+
+        # Create a SQLite (Mac) export with proper naming convention
+        # Directory name must match pattern for username detection: imessage-{username}-YYYYMMDD
+        sqlite_export = tmp_path / "imessage-macuser-20210115"
+        sqlite_export.mkdir()
+        create_imessage_mac_export(
+            sqlite_export,
+            username="macuser",
+            conversations=[
+                {
+                    "chat_identifier": "+1234567890",
+                    "messages": [
+                        {
+                            "text": "SQLite message",
+                            "attachment": "00/00/sqlite_photo.jpg",
+                            "date": 631152000000000000,
+                        },
+                    ],
+                },
+            ],
+        )
+
+        # Create an iMazing export with proper naming convention
+        # Same naming pattern as SQLite exports: imessage-{device}-YYYYMMDD
+        imazing_export = tmp_path / "imessage-imazingdev-20210115"
+        imazing_export.mkdir()
+        create_imessage_imazing_export(
+            imazing_export,
+            username="imazinguser",
+            conversations=[
+                {
+                    "contact_name": "John Doe",
+                    "messages": [
+                        {
+                            "date": "2021-01-15 14:30:00",
+                            "sender": "John Doe",
+                            "text": "iMazing message",
+                            "attachment": "imazing_photo.jpg",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        # Verify both exports are detected
+        assert IMessageProcessor.detect(sqlite_export) is True
+        assert IMessageProcessor.detect(imazing_export) is True
+
+        # Create output directory
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Process both exports in consolidated mode
+        result = IMessageProcessor.process_consolidated(
+            input_dirs=[str(sqlite_export), str(imazing_export)],
+            output_dir=str(output_dir),
+            workers=1,
+            temp_dir=str(tmp_path / "temp"),
+        )
+
+        assert result is True, "Consolidated processing should succeed"
+
+        # Verify output directory contains processed files
+        messages_output = output_dir / "messages"
+        assert messages_output.exists(), "Messages output directory should exist"
+
+        # Should have at least one output file from each export
+        output_files = list(messages_output.rglob("*"))
+        media_files = [f for f in output_files if f.is_file() and f.suffix.lower() in {".jpg", ".jpeg", ".png", ".heic"}]
+        assert len(media_files) >= 2, f"Expected at least 2 media files, got {len(media_files)}: {media_files}"
+
+    def test_mixed_run_artifact_namespacing(self, tmp_path):
+        """Multiple preprocessed dirs should produce namespaced artifacts."""
+        from processors.imessage.processor import IMessageProcessor
+        from tests.fixtures.generators import create_imessage_imazing_export
+
+        # Create two iMazing exports with proper naming convention
+        # Same naming pattern as SQLite exports: imessage-{device}-YYYYMMDD
+        imazing1 = tmp_path / "imessage-dev1-20210115"
+        imazing1.mkdir()
+        create_imessage_imazing_export(
+            imazing1,
+            username="dev1",
+            conversations=[
+                {
+                    "contact_name": "Contact A",
+                    "messages": [
+                        {
+                            "date": "2021-01-15 14:30:00",
+                            "sender": "Contact A",
+                            "text": "Message A",
+                            "attachment": "photo_a.jpg",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        imazing2 = tmp_path / "imessage-dev2-20210116"
+        imazing2.mkdir()
+        create_imessage_imazing_export(
+            imazing2,
+            username="dev2",
+            conversations=[
+                {
+                    "contact_name": "Contact B",
+                    "messages": [
+                        {
+                            "date": "2021-01-16 15:30:00",
+                            "sender": "Contact B",
+                            "text": "Message B",
+                            "attachment": "photo_b.jpg",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Process both
+        result = IMessageProcessor.process_consolidated(
+            input_dirs=[str(imazing1), str(imazing2)],
+            output_dir=str(output_dir),
+            workers=1,
+            temp_dir=str(tmp_path / "temp"),
+        )
+
+        assert result is True
+
+        # Output should contain files from both exports
+        messages_output = output_dir / "messages"
+        media_files = list(messages_output.rglob("*.jpg")) + list(messages_output.rglob("*.jpeg"))
+
+        # Should have 2 media files (one from each export)
+        assert len(media_files) >= 2, f"Expected at least 2 files, got {len(media_files)}"
+
+    def test_unknown_input_type_fails_early(self, tmp_path):
+        """Unknown input directories should cause processing to fail early.
+
+        Directories that don't match SQLite, iMazing, or preprocessed formats
+        should not be silently processed as SQLite.
+        """
+        from processors.imessage.processor import IMessageProcessor
+
+        # Create an empty directory that doesn't match any known format
+        unknown_dir = tmp_path / "imessage-unknown-20210115"
+        unknown_dir.mkdir()
+        # Add a random file that doesn't match any export pattern
+        (unknown_dir / "random.txt").write_text("This is not an iMessage export")
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Processing should fail because the input type is unknown
+        result = IMessageProcessor.process_consolidated(
+            input_dirs=[str(unknown_dir)],
+            output_dir=str(output_dir),
+            workers=1,
+        )
+
+        assert result is False, "Processing should fail for unknown input type"
+
+    def test_mixed_valid_and_unknown_fails(self, tmp_path):
+        """Mix of valid and unknown inputs should still fail early."""
+        from processors.imessage.processor import IMessageProcessor
+        from tests.fixtures.generators import create_imessage_mac_export
+
+        # Create a valid SQLite export
+        valid_export = tmp_path / "imessage-valid-20210115"
+        valid_export.mkdir()
+        create_imessage_mac_export(valid_export)
+
+        # Create an unknown directory
+        unknown_dir = tmp_path / "imessage-unknown-20210115"
+        unknown_dir.mkdir()
+        (unknown_dir / "random.txt").write_text("Not an export")
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Should fail because one input is unknown
+        result = IMessageProcessor.process_consolidated(
+            input_dirs=[str(valid_export), str(unknown_dir)],
+            output_dir=str(output_dir),
+            workers=1,
+        )
+
+        assert result is False, "Processing should fail when any input is unknown"
