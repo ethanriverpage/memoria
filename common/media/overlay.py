@@ -33,13 +33,6 @@ from typing import Optional
 
 from PIL import Image  # type: ignore
 
-from common.dedup.description import (
-    PLATFORM_SNAPCHAT,
-    SERVICE_MESSAGES,
-    SourceEntry,
-    format_message_line,
-    build_source_line,
-)
 from common.files.utils import copy_file
 from common.media.encoder import (
     get_encoder_args,
@@ -539,70 +532,11 @@ def _pass2_apply_overlay_impl(
             )
 
 
-def _build_message_description(metadata: Optional[dict], export_username: str) -> str:
-    """
-    Build rich description for Snapchat Messages using unified format.
-
-    Uses the standard description format from common/dedup/description.py:
-        Source: Snapchat/{username}/messages
-          - {sender} in "{conversation}": "{content}"
-
-    Args:
-        metadata: Metadata dict with conversation fields (can be None)
-        export_username: Username for source path
-
-    Returns:
-        Multi-line description string with &#xa; separators
-    """
-    # Build source line using unified format
-    source_entry = SourceEntry(
-        processor=PLATFORM_SNAPCHAT,
-        username=export_username,
-        service=SERVICE_MESSAGES,
-    )
-    source_line = build_source_line(source_entry)
-
-    if metadata is None:
-        return source_line
-
-    conv_type = metadata.get("conversation_type")
-    conv_id = metadata.get("conversation_id")
-
-    if conv_id is None or conv_type is None:
-        # Orphaned media - minimal metadata (only Source)
-        return source_line
-
-    # Build conversation name
-    if conv_type == "dm":
-        conversation_name = f"DM with {conv_id}"
-    else:
-        conversation_name = metadata.get("conversation_title", "Unknown Group")
-
-    sender = metadata.get("sender", "unknown")
-    content = metadata.get("content", "")
-
-    # Build message context using unified format
-    msg_entry = SourceEntry(
-        processor=PLATFORM_SNAPCHAT,
-        sender=sender,
-        conversation=conversation_name,
-        content=content,
-    )
-    msg_line = format_message_line(msg_entry)
-
-    description_parts = [source_line]
-    if msg_line:
-        description_parts.append(msg_line)
-
-    return "&#xa;".join(description_parts)
-
-
 def _pass3_combine_and_embed(
     with_overlay_path: Path,
     original_video_path: Path,
     output_path: Path,
     metadata: Optional[dict] = None,
-    export_username: Optional[str] = None,
     description: Optional[str] = None,
     original_filename: Optional[str] = None,
 ) -> bool:
@@ -617,19 +551,12 @@ def _pass3_combine_and_embed(
     - Container metadata: creation time, GPS coordinates, source description,
       original filename
 
-    If a description is provided, it is used directly. Otherwise, auto-detects
-    whether to use rich message metadata or simple memory metadata based on
-    the presence of conversation_type and conversation_id fields.
-
     Args:
         with_overlay_path: Path to video with overlay from Pass 2
         original_video_path: Path to original rotated video from Pass 1
         output_path: Final output path for the video
         metadata: Optional dict with 'date', 'latitude', 'longitude' for embedding
-                  For messages: also 'conversation_type', 'conversation_id',
-                  'conversation_title', 'sender', 'content'
-        export_username: Optional username for source metadata
-        description: Optional pre-built description string (takes precedence)
+        description: Optional pre-built description string (provided by processor)
         original_filename: Optional original source filename for ORIGINAL_FILENAME tag
 
     Returns:
@@ -702,31 +629,11 @@ def _pass3_combine_and_embed(
     if original_filename:
         cmd.extend(["-metadata", f"ORIGINAL_FILENAME={original_filename}"])
 
-    # Add source description metadata
+    # Add source description metadata (processor-constructed)
     if description:
-        # Use pre-built description (from processor with full message context)
-        final_description = description
-    elif export_username:
-        # Auto-detect: if metadata has conversation fields, use rich format
-        has_conversation_data = (
-            metadata
-            and metadata.get("conversation_type") is not None
-            and metadata.get("conversation_id") is not None
-        )
-
-        if has_conversation_data:
-            # Rich format for messages
-            final_description = _build_message_description(metadata, export_username)
-        else:
-            # Simple format for memories
-            final_description = f"Source: Snapchat/{export_username}/memories"
-    else:
-        final_description = None
-
-    if final_description:
         # Convert &#xa; (XML entity) to actual newlines for FFmpeg
         # (&#xa; is used for EXIF/exiftool, but FFmpeg needs literal \n)
-        ffmpeg_description = final_description.replace("&#xa;", "\n")
+        ffmpeg_description = description.replace("&#xa;", "\n")
         cmd.extend(
             [
                 "-metadata",
@@ -894,7 +801,6 @@ def create_video_with_overlay(
     overlay_path: Path,
     output_path: Path,
     metadata: Optional[dict] = None,
-    export_username: Optional[str] = None,
     description: Optional[str] = None,
     original_filename: Optional[str] = None,
 ) -> bool:
@@ -908,10 +814,6 @@ def create_video_with_overlay(
     - Track 0 (default): Video with overlay embedded
     - Track 1: Original video without overlay
 
-    If a description is provided, it is used directly. Otherwise, auto-detects
-    whether to use rich message metadata or simple memory metadata based on
-    the presence of conversation_type and conversation_id fields.
-
     Uses a single FFprobe call to get all video metadata (rotation, dimensions,
     bitrate) for better performance.
 
@@ -920,10 +822,7 @@ def create_video_with_overlay(
         overlay_path: Path to the overlay image
         output_path: Path for the output MKV file
         metadata: Optional dict with 'date', 'latitude', 'longitude' for embedding
-                  For messages: also 'conversation_type', 'conversation_id',
-                  'conversation_title', 'sender', 'content'
-        export_username: Optional username for source metadata
-        description: Optional pre-built description string (takes precedence)
+        description: Optional pre-built description string (provided by processor)
         original_filename: Optional original source filename for ORIGINAL_FILENAME tag
 
     Returns:
@@ -960,7 +859,10 @@ def create_video_with_overlay(
                 final_height,
                 original_bitrate,
             )
-            temp_files.append(with_overlay_path)
+            # Only add temp file if overlay actually produced a new file.
+            # If overlay is missing, Pass 2 returns rotated_video_path directly.
+            if with_overlay_path != rotated_video_path:
+                temp_files.append(with_overlay_path)
         except OverlayProcessingError:
             # Re-raise overlay errors for soft-fail tracking per policy G
             raise
@@ -975,7 +877,6 @@ def create_video_with_overlay(
                 rotated_video_path,
                 output_path,
                 metadata,
-                export_username,
                 description,
                 original_filename,
             )

@@ -881,9 +881,8 @@ def _get_description_for_file(
     processor's context (sender, conversation, content) while adding
     provenance from all duplicate sources.
 
-    Note: This function appends all secondary sources. Same-source entries
-    are displayed with relative path notation or context folding by the
-    description builder (build_image_description), not filtered here.
+    Uses the canonical `deduplicate_secondary_entries()` helper for consistent
+    deduplication with `build_image_description()`.
 
     Args:
         default_description: The processor's rich description to enhance.
@@ -900,11 +899,20 @@ def _get_description_for_file(
         return default_description
 
     # Import here to avoid circular imports
-    from common.dedup.service import get_secondary_sources_for_hash
-    from common.dedup.description import format_secondary_source
+    from common.dedup.service import (
+        get_secondary_sources_for_hash,
+        get_primary_source_for_hash,
+        get_merged_metadata_for_hash,
+    )
+    from common.dedup.description import (
+        deduplicate_secondary_entries,
+        format_relative_source_path,
+        _format_secondary_with_relative_path,
+        format_secondary_source,
+    )
 
-    # Get all secondary sources from dedup manifest
-    # Same-source entries use relative path notation (build_image_description handles this)
+    # Get primary and secondary sources from dedup manifest
+    primary_entry = get_primary_source_for_hash(dedup_manifest, content_hash)
     secondary_sources = get_secondary_sources_for_hash(
         dedup_manifest, content_hash, processor_name
     )
@@ -912,10 +920,51 @@ def _get_description_for_file(
     if not secondary_sources:
         return default_description
 
-    # Append secondary source lines to processor's description
+    # Get canonical timestamp from merged metadata for:
+    # 1. Normalizing secondary timestamps (Bug 3 fix)
+    # 2. Suppressing redundant dates (Bug 4 fix)
+    reference_timestamp: Optional[datetime] = None
+    merged_meta = get_merged_metadata_for_hash(dedup_manifest, content_hash)
+    if merged_meta:
+        canonical_ts_str = merged_meta.get("timestamp")
+        if canonical_ts_str:
+            try:
+                reference_timestamp = datetime.fromisoformat(
+                    canonical_ts_str.replace("Z", "+00:00")
+                )
+            except (ValueError, AttributeError):
+                pass
+
+    # Normalize secondary timestamps to canonical (Bug 3 fix)
+    if reference_timestamp is not None:
+        for entry in secondary_sources:
+            entry.timestamp = reference_timestamp
+
+    # Deduplicate using canonical helper (Bug 1 + Bug 2 fix)
+    # Uses _get_secondary_dedup_key() for stable pre-format deduplication
+    deduplicated_sources = deduplicate_secondary_entries(
+        secondary_sources, primary=primary_entry
+    )
+
+    if not deduplicated_sources:
+        return default_description
+
+    # Append secondary source lines to processor's description using relative paths
     lines = [default_description]
-    for entry in secondary_sources:
-        lines.append(format_secondary_source(entry))
+    for entry in deduplicated_sources:
+        # Use relative path notation (e.g., ././messages instead of full path)
+        # when secondary source shares platform/username with primary
+        if primary_entry:
+            relative_path = format_relative_source_path(primary_entry, entry)
+            if relative_path:
+                lines.append(
+                    _format_secondary_with_relative_path(
+                        entry, relative_path, reference_timestamp=reference_timestamp
+                    )
+                )
+        else:
+            # No primary entry available - use full path
+            lines.append(format_secondary_source(entry, reference_timestamp=reference_timestamp))
 
     # Use &#xa; (XML entity for newline) instead of literal \n
     # Literal newlines break exiftool argfile format, causing secondary lines to be dropped

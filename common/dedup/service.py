@@ -1335,6 +1335,10 @@ def get_merged_description_for_file(
     to unified format (e.g., "Google" + "photos"). The description builder handles
     context folding for same-source entries and relative path notation.
 
+    Timestamps are normalized to the canonical merged timestamp (earliest across
+    all sources) to ensure consistent display and prevent duplicate entries from
+    appearing with different dates due to export quirks.
+
     Args:
         manifest: Deduplication manifest.
         source_path: Path to check.
@@ -1350,6 +1354,19 @@ def get_merged_description_for_file(
         # Only generate description for primary files
         if primary_path != source_path:
             continue
+
+        # Parse canonical timestamp from merged_metadata (Bug 3 fix)
+        # This is the earliest timestamp across all sources
+        merged_metadata = group.get("merged_metadata", {})
+        canonical_ts: Optional[datetime] = None
+        canonical_ts_str = merged_metadata.get("timestamp")
+        if canonical_ts_str:
+            try:
+                canonical_ts = datetime.fromisoformat(
+                    canonical_ts_str.replace("Z", "+00:00")
+                )
+            except (ValueError, AttributeError):
+                pass
 
         # Build primary source entry with platform/service mapping
         primary_processor = primary.get("processor", "Unknown")
@@ -1370,6 +1387,10 @@ def get_merged_description_for_file(
             service=primary_service,
         )
 
+        # Normalize primary timestamp to canonical (Bug 3 fix)
+        if canonical_ts is not None:
+            primary_entry.timestamp = canonical_ts
+
         # Build secondary source entries
         # Don't filter same-processor entries here - let build_image_description
         # handle context folding for same-source entries
@@ -1388,12 +1409,18 @@ def get_merged_description_for_file(
                 service=sec_service or sec_context.get("service", ""),
             )
 
+            # Normalize secondary timestamp to canonical (Bug 3 fix)
+            if canonical_ts is not None:
+                entry.timestamp = canonical_ts
+
             secondary_entries.append(entry)
 
-        # Build the formatted description
+        # Build the formatted description with reference_timestamp for date suppression
+        # (Bug 4 fix: suppress dates that match the EXIF-written date)
         return build_image_description(
             primary=primary_entry,
             secondary=secondary_entries,
+            reference_timestamp=canonical_ts,
         )
 
     # Not in manifest or not a primary file
@@ -1467,6 +1494,68 @@ def get_secondary_sources_for_hash(
         entries.append(entry)
 
     return entries
+
+
+def get_primary_source_for_hash(
+    manifest: Dict[str, Any],
+    content_hash: str,
+) -> Optional[SourceEntry]:
+    """Get the primary source entry for a content hash.
+
+    Looks up the duplicate group by content hash and returns the primary
+    source as a SourceEntry. Used for filtering secondary sources.
+
+    Args:
+        manifest: Deduplication manifest.
+        content_hash: Content hash to look up.
+
+    Returns:
+        SourceEntry for the primary source, or None if not found.
+    """
+    duplicates = manifest.get("duplicates", {})
+
+    # Look up by content hash (exact match groups use hash as key)
+    group = duplicates.get(content_hash)
+
+    # Also check perceptual groups if not found
+    if group is None:
+        for key, grp in duplicates.items():
+            if key.startswith("perceptual_"):
+                primary = grp.get("primary", {})
+                if primary.get("content_hash") == content_hash:
+                    group = grp
+                    break
+                # Check best_quality
+                best = grp.get("best_quality", {})
+                if best.get("content_hash") == content_hash:
+                    group = grp
+                    break
+                # Check secondaries too
+                for sec in grp.get("secondary", []):
+                    if sec.get("content_hash") == content_hash:
+                        group = grp
+                        break
+                if group:
+                    break
+
+    if group is None:
+        return None
+
+    # Get primary entry
+    primary = group.get("primary", {})
+    if not primary:
+        return None
+
+    primary_processor = primary.get("processor", "Unknown")
+    primary_platform, primary_service = get_platform_service(primary_processor)
+    primary_context = primary.get("context", {})
+
+    return create_source_entry(
+        processor=primary_platform,
+        metadata=primary_context,
+        is_primary=True,
+        service=primary_service,
+    )
 
 
 def get_merged_metadata_for_hash(

@@ -207,29 +207,169 @@ def _get_context_key(entry: SourceEntry) -> tuple:
     Returns:
         Tuple of (sender, conversation, content_prefix) for deduplication.
     """
-    content_prefix = entry.content[:50] if entry.content else ""
+    # Normalize whitespace/newlines in content prefix for stable comparison
+    content = entry.content.replace("\n", " ").strip() if entry.content else ""
+    content_prefix = content[:50]
     return (entry.sender, entry.conversation, content_prefix)
 
 
-def _has_unique_context(entry: SourceEntry, seen_contexts: set) -> bool:
+def _get_source_identity_key(entry: SourceEntry) -> tuple:
+    """Get a hashable key representing the source identity.
+
+    Used to group secondary entries by their source (platform/username/service)
+    for within-source deduplication.
+
+    For consolidating processors (like iMessage), username is ignored since
+    different device IDs represent the same logical source.
+
+    Args:
+        entry: Source entry.
+
+    Returns:
+        Tuple of (processor, username, service) for source identity grouping.
+    """
+    if is_consolidating_processor(entry.processor):
+        # For consolidating processors, ignore username (device ID)
+        return (entry.processor, "", entry.service)
+    return (entry.processor, entry.username, entry.service)
+
+
+def _get_secondary_dedup_key(entry: SourceEntry) -> tuple:
+    """Get a stable, hashable key for secondary entry deduplication.
+
+    Combines source identity with context to determine if two secondary entries
+    should be considered duplicates. This key is computed BEFORE formatting,
+    ensuring truncation budgets don't affect deduplication.
+
+    Args:
+        entry: Source entry.
+
+    Returns:
+        Tuple combining source identity and context for deduplication.
+    """
+    source_key = _get_source_identity_key(entry)
+    context_key = _get_context_key(entry)
+    # Note: timestamp is NOT included in the key because timestamps are
+    # normalized to the canonical merged timestamp (Bug 3 fix)
+    return source_key + context_key
+
+
+def deduplicate_secondary_entries(
+    secondary: List[SourceEntry],
+    primary: Optional[SourceEntry] = None,
+) -> List[SourceEntry]:
+    """Deduplicate secondary entries using stable keys.
+
+    This is the canonical deduplication helper for secondary entries. It:
+    - Uses `_get_secondary_dedup_key()` for stable, pre-format deduplication (Bug 1)
+    - Deduplicates entries among themselves by source identity (Bug 2)
+    - Does NOT include timestamp in dedup key (Bug 3 normalizes timestamps separately)
+    - Uses partial matching for consolidating processors (e.g., iMessage across devices)
+
+    For entries with empty context, keeps one representative per source identity.
+
+    Args:
+        secondary: List of secondary source entries to deduplicate.
+        primary: Optional primary entry. If provided, entries matching its
+            source identity and context are also excluded.
+
+    Returns:
+        Deduplicated list of secondary entries preserving order of first occurrence.
+    """
+    # Group entries by source identity for within-group deduplication
+    source_groups: Dict[tuple, List[SourceEntry]] = {}
+    for entry in secondary:
+        source_key = _get_source_identity_key(entry)
+        source_groups.setdefault(source_key, []).append(entry)
+
+    # Build initial seen_contexts from primary if provided
+    primary_contexts: Dict[tuple, set] = {}
+    if primary is not None:
+        primary_source_key = _get_source_identity_key(primary)
+        primary_context_key = _get_context_key(primary)
+        if primary_context_key != ("", "", ""):
+            primary_contexts[primary_source_key] = {primary_context_key}
+
+    deduplicated: List[SourceEntry] = []
+
+    for source_key, entries in source_groups.items():
+        # Get seen contexts for this source group (from primary if same source)
+        seen_contexts: set = set(primary_contexts.get(source_key, set()))
+
+        # Check if this source is consolidating (e.g., iMessage)
+        # For consolidating sources, use partial matching via _has_unique_context
+        is_consolidating = entries and is_consolidating_processor(entries[0].processor)
+
+        # Track if we've seen empty context for this source
+        has_empty_context_rep = False
+
+        for entry in entries:
+            context_key = _get_context_key(entry)
+
+            if context_key == ("", "", ""):
+                # Empty context: keep one representative per source identity
+                if not has_empty_context_rep:
+                    has_empty_context_rep = True
+                    deduplicated.append(entry)
+            elif is_consolidating:
+                # For consolidating processors, use partial matching
+                if _has_unique_context(entry, seen_contexts, is_consolidating=True):
+                    seen_contexts.add(context_key)
+                    deduplicated.append(entry)
+            else:
+                # For non-consolidating, use exact key matching
+                if context_key not in seen_contexts:
+                    seen_contexts.add(context_key)
+                    deduplicated.append(entry)
+
+    return deduplicated
+
+
+def _has_unique_context(
+    entry: SourceEntry,
+    seen_contexts: set,
+    is_consolidating: bool = False,
+) -> bool:
     """Check if entry has conversation context not yet seen.
+
+    For consolidating processors (like iMessage), uses partial matching:
+    if the secondary's non-empty fields all match a seen context's fields,
+    it's not considered unique. This handles cases where the same message
+    appears in multiple device exports with varying metadata completeness.
 
     Args:
         entry: Source entry to check.
         seen_contexts: Set of already-seen context keys.
+        is_consolidating: Whether this is a consolidating processor.
 
     Returns:
         True if entry has unique, non-empty context.
     """
     context_key = _get_context_key(entry)
+    sender, conv, content = context_key
 
     # Empty context is not unique
     if context_key == ("", "", ""):
         return False
 
-    # Already seen this context
+    # Already seen exact match
     if context_key in seen_contexts:
         return False
+
+    # For consolidating processors, check partial matches
+    # If all non-empty fields in entry match a seen context, not unique
+    if is_consolidating:
+        for seen_sender, seen_conv, seen_content in seen_contexts:
+            matches = True
+            # Check each non-empty field in the entry
+            if sender and sender != seen_sender:
+                matches = False
+            if conv and conv != seen_conv:
+                matches = False
+            if content and content != seen_content:
+                matches = False
+            if matches:
+                return False
 
     return True
 
@@ -287,6 +427,7 @@ def _format_message_line(
     entry: SourceEntry,
     is_secondary: bool = False,
     max_content: int = 100,
+    reference_timestamp: Optional[datetime] = None,
 ) -> str:
     """Format a message detail line for inclusion in the description.
 
@@ -297,39 +438,13 @@ def _format_message_line(
         entry: Source entry with message details.
         is_secondary: If True, prefix with '+' instead of '  - '.
         max_content: Maximum characters for content.
+        reference_timestamp: If provided, dates matching this timestamp's date
+            are suppressed (redundant with EXIF-written date).
 
     Returns:
         Formatted message detail line, or empty string if no message info.
     """
     if not entry.conversation and not entry.sender and not entry.content:
-        return ""
-
-    parts = []
-
-    # Build sender/conversation part
-    if entry.sender and entry.conversation:
-        parts.append(f'{entry.sender} in "{entry.conversation}"')
-    elif entry.sender:
-        parts.append(entry.sender)
-    elif entry.conversation:
-        parts.append(f'in "{entry.conversation}"')
-
-    # Add content in quotes
-    if entry.content:
-        content = entry.content.replace("\n", " ")
-        content = truncate_text(content, max_content)
-        if parts:
-            parts.append(f': "{content}"')
-        else:
-            parts.append(f'"{content}"')
-
-    # Add timestamp for secondary sources
-    if is_secondary and entry.timestamp:
-        date_str = format_timestamp(entry.timestamp)
-        if date_str:
-            parts.append(f" ({date_str})")
-
-    if not parts:
         return ""
 
     # Build the line with proper prefix
@@ -353,10 +468,16 @@ def _format_message_line(
         else:
             result = f'"{content}"'
 
+    # Add timestamp for secondary sources, unless it matches reference date (Bug 4 fix)
     if is_secondary and entry.timestamp:
-        date_str = format_timestamp(entry.timestamp)
-        if date_str:
-            result += f" ({date_str})"
+        entry_date_str = format_timestamp(entry.timestamp)
+        ref_date_str = format_timestamp(reference_timestamp) if reference_timestamp else ""
+        # Only show date if it differs from reference (non-redundant)
+        if entry_date_str and entry_date_str != ref_date_str:
+            result += f" ({entry_date_str})"
+
+    if not result:
+        return ""
 
     return prefix + result
 
@@ -512,7 +633,11 @@ def format_primary_source(entry: SourceEntry, max_chars: int = 100) -> str:
     return truncate_text(result, max_chars)
 
 
-def format_secondary_source(entry: SourceEntry, max_chars: int = 250) -> str:
+def format_secondary_source(
+    entry: SourceEntry,
+    max_chars: int = 250,
+    reference_timestamp: Optional[datetime] = None,
+) -> str:
     """Format a secondary source line using unified format.
 
     Format: +{platform}/{username}[/{service}]: {sender} in "{conv}": "{content}" ({date})
@@ -524,6 +649,8 @@ def format_secondary_source(entry: SourceEntry, max_chars: int = 250) -> str:
     Args:
         entry: Secondary source entry.
         max_chars: Maximum characters for this line.
+        reference_timestamp: If provided, dates matching this timestamp's date
+            are suppressed (redundant with EXIF-written date).
 
     Returns:
         Formatted secondary source string.
@@ -556,10 +683,11 @@ def format_secondary_source(entry: SourceEntry, max_chars: int = 250) -> str:
         truncated_content = truncate_text(content, msg_truncate)
         detail_parts.append(f'"{truncated_content}"')
 
-    # Add timestamp
-    date_str = format_timestamp(entry.timestamp)
-    if date_str:
-        detail_parts.append(f"({date_str})")
+    # Add timestamp, unless it matches reference date (Bug 4 fix)
+    entry_date_str = format_timestamp(entry.timestamp)
+    ref_date_str = format_timestamp(reference_timestamp) if reference_timestamp else ""
+    if entry_date_str and entry_date_str != ref_date_str:
+        detail_parts.append(f"({entry_date_str})")
 
     # Combine with proper separators
     if detail_parts:
@@ -585,6 +713,7 @@ def _format_secondary_with_relative_path(
     entry: SourceEntry,
     relative_path: str,
     max_chars: int = 250,
+    reference_timestamp: Optional[datetime] = None,
 ) -> str:
     """Format a secondary source line with relative path notation.
 
@@ -595,6 +724,8 @@ def _format_secondary_with_relative_path(
         entry: Secondary source entry.
         relative_path: Pre-computed relative path (or full path if different platform).
         max_chars: Maximum characters for this line.
+        reference_timestamp: If provided, dates matching this timestamp's date
+            are suppressed (redundant with EXIF-written date).
 
     Returns:
         Formatted secondary source string.
@@ -622,10 +753,11 @@ def _format_secondary_with_relative_path(
         truncated_content = truncate_text(content, msg_truncate)
         detail_parts.append(f'"{truncated_content}"')
 
-    # Add timestamp
-    date_str = format_timestamp(entry.timestamp)
-    if date_str:
-        detail_parts.append(f"({date_str})")
+    # Add timestamp, unless it matches reference date (Bug 4 fix)
+    entry_date_str = format_timestamp(entry.timestamp)
+    ref_date_str = format_timestamp(reference_timestamp) if reference_timestamp else ""
+    if entry_date_str and entry_date_str != ref_date_str:
+        detail_parts.append(f"({entry_date_str})")
 
     # Combine with proper separators
     if detail_parts:
@@ -652,6 +784,7 @@ def build_image_description(
     secondary: List[SourceEntry],
     max_total: Optional[int] = None,
     max_per_source: Optional[int] = None,
+    reference_timestamp: Optional[datetime] = None,
 ) -> str:
     """Build complete ImageDescription from multiple sources.
 
@@ -677,6 +810,8 @@ def build_image_description(
         secondary: List of secondary source entries.
         max_total: Maximum total characters (default from config).
         max_per_source: Maximum characters per source (default from config).
+        reference_timestamp: If provided, secondary dates matching this timestamp's
+            date are suppressed (redundant with EXIF-written date).
 
     Returns:
         Complete ImageDescription string with &#xa; line separators (XML entity
@@ -712,7 +847,7 @@ def build_image_description(
     )
     remaining = max_total - current_len
 
-    # 3. Group secondaries by source identity
+    # 3. Group secondaries by source identity (relative to primary)
     same_source_entries = []
     different_source_entries = []
 
@@ -723,32 +858,35 @@ def build_image_description(
             different_source_entries.append(entry)
 
     # 4. Add unique message details from same-source entries as additional lines
+    is_consolidating = is_consolidating_processor(primary.processor)
     for entry in same_source_entries:
         if remaining <= 0:
             break
 
-        if _has_unique_context(entry, seen_message_keys):
+        if _has_unique_context(entry, seen_message_keys, is_consolidating):
             # Add message key to seen set
             seen_message_keys.add(_get_context_key(entry))
 
             # Format as +details (secondary message detail line)
-            message_line = _format_message_line(entry, is_secondary=True)
+            message_line = _format_message_line(
+                entry, is_secondary=True, reference_timestamp=reference_timestamp
+            )
             if message_line:
                 if len(message_line) + 5 <= remaining:  # +5 for &#xa; separator
                     lines.append(message_line)
                     remaining -= len(message_line) + 5
 
-    # 5. Add different-source entries with relative path notation
-    # Track seen rendered lines to avoid duplicates (post-truncation deduplication)
-    seen_secondary_lines: set = set()
+    # 5. Deduplicate different-source entries BEFORE formatting (Bug 1 + Bug 2 fix)
+    # Use canonical deduplicate_secondary_entries() helper with _get_secondary_dedup_key()
+    deduplicated_different_source = deduplicate_secondary_entries(
+        different_source_entries, primary=primary
+    )
 
-    for entry in different_source_entries:
+    # 6. Add deduplicated different-source entries with relative path notation
+    # Use fixed truncation budget (max_per_source) to avoid order-dependent dedup (Bug 1)
+    # But respect max_total by checking if the line fits before adding
+    for entry in deduplicated_different_source:
         if remaining <= 0:
-            break
-
-        # Calculate budget for this source
-        source_budget = min(max_per_source, remaining)
-        if source_budget < 50:  # Don't add truncated entries
             break
 
         # Get relative path
@@ -757,18 +895,56 @@ def build_image_description(
             # Same source - shouldn't happen but handle gracefully
             continue
 
-        line = _format_secondary_with_relative_path(entry, relative_path, source_budget)
+        # Format with fixed max_per_source budget (consistent truncation for dedup)
+        line = _format_secondary_with_relative_path(
+            entry, relative_path, max_per_source, reference_timestamp
+        )
 
-        # Skip if this exact rendered line was already emitted
-        # (handles cases where distinct metadata collapses to identical display)
-        if line in seen_secondary_lines:
-            continue
-
-        seen_secondary_lines.add(line)
-        lines.append(line)
-        remaining -= len(line) + 5  # +5 for &#xa; separator
+        # Only add if it fits within remaining budget (respects max_total)
+        if len(line) + 5 <= remaining:  # +5 for &#xa; separator
+            lines.append(line)
+            remaining -= len(line) + 5
+        # If it doesn't fit, skip this entry (don't try to truncate further)
 
     return "&#xa;".join(lines)
+
+
+def filter_secondary_sources(
+    primary: SourceEntry,
+    secondary: List[SourceEntry],
+) -> List[SourceEntry]:
+    """Filter secondary sources, removing duplicates relative to primary.
+
+    This is a convenience wrapper around `deduplicate_secondary_entries()` that
+    only filters same-source entries (those matching primary's source identity).
+    Different-source entries pass through unchanged.
+
+    For comprehensive deduplication of all secondary entries (including
+    different-source entries among themselves), use `deduplicate_secondary_entries()`
+    directly.
+
+    Args:
+        primary: Primary source entry.
+        secondary: List of secondary source entries.
+
+    Returns:
+        Filtered list of secondary sources.
+    """
+    # Separate same-source and different-source entries
+    same_source = []
+    different_source = []
+
+    for entry in secondary:
+        if _same_source(primary, entry):
+            same_source.append(entry)
+        else:
+            different_source.append(entry)
+
+    # Deduplicate same-source entries using canonical helper
+    deduplicated_same = deduplicate_secondary_entries(same_source, primary=primary)
+
+    # Return deduplicated same-source + all different-source
+    return deduplicated_same + different_source
 
 
 def create_source_entry(
@@ -799,12 +975,36 @@ def create_source_entry(
 
     # Extract common fields
     entry.username = metadata.get("username", "")
-    entry.content = metadata.get("content", metadata.get("caption", ""))
-    entry.conversation = metadata.get("conversation", metadata.get("chat", ""))
-    entry.sender = metadata.get("sender", "")
+    entry.sender = metadata.get("sender", metadata.get("author", ""))
+
+    # Content: prefer canonical "content", fall back to common alternatives used by some processors
+    entry.content = metadata.get(
+        "content",
+        metadata.get("caption", metadata.get("text", metadata.get("message", ""))),
+    )
+
+    # Conversation: support both canonical "conversation" and processor-specific fields
+    conversation = metadata.get("conversation") or metadata.get("chat", "")
+    if not conversation:
+        # Common raw fields emitted by messaging preprocessors
+        conv_type = metadata.get("conversation_type") or metadata.get("channel_type")
+        conv_title = (
+            metadata.get("conversation_title")
+            or metadata.get("channel_title")
+            or metadata.get("chat_title")
+        )
+        conv_id = metadata.get("conversation_id") or metadata.get("channel_id")
+
+        display = conv_title or conv_id or ""
+        if conv_type == "dm":
+            conversation = f"DM with {display}" if display else "DM"
+        else:
+            conversation = display
+
+    entry.conversation = conversation
 
     # Parse timestamp
-    ts = metadata.get("timestamp")
+    ts = metadata.get("timestamp") or metadata.get("created")
     if isinstance(ts, datetime):
         entry.timestamp = ts
     elif isinstance(ts, str):

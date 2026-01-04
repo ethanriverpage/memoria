@@ -89,7 +89,6 @@ For all command-line options, see the [Usage Guide](Usage).
 - **[Parallel Processing](Parallel-Processing)** - Process multiple exports in parallel
 - **[Deduplication](Deduplication)** - Within-processor and cross-processor deduplication
 - **[Logging](Logging)** - Logging configuration and verbose mode
-- **[Standalone Tools](Standalone-Tools)** - Standalone utility scripts for analysis and comparison
 
 ### Reference
 

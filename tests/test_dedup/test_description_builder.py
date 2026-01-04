@@ -34,6 +34,7 @@ from common.dedup.description import (
     format_timestamp,
     format_primary_source,
     format_secondary_source,
+    filter_secondary_sources,
     create_source_entry,
 )
 
@@ -617,6 +618,65 @@ class TestBuildImageDescription:
         # Should NOT show ./mac as a separate source
         assert "+./mac" not in result
 
+    def test_imessage_consolidation_partial_context_match(self):
+        """Test iMessage partial context matches are considered duplicates.
+
+        When a secondary entry has less metadata than primary but what it has
+        matches, it should be skipped (not shown as unique). This handles the
+        case where the same message is in multiple device exports with varying
+        metadata completeness.
+        """
+        primary = SourceEntry(
+            processor=PLATFORM_IMESSAGE,
+            username="m3_mbp",
+            sender="Ansley Booth",
+            conversation="DM with Ansley Booth",
+        )
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_IMESSAGE,
+                username="iph17pm",  # Different device
+                sender="Ansley Booth",  # Same sender
+                # No conversation - partial context that should match
+            ),
+        ]
+        result = build_image_description(primary, secondary)
+
+        # Primary source line
+        assert "Source: iMessage/m3_mbp" in result
+        # Primary context
+        assert '  - Ansley Booth in "DM with Ansley Booth"' in result
+        # Should NOT show the secondary - it's a partial match of the same message
+        # The secondary has sender but no conversation, which is a subset of primary's context
+        assert "+iMessage/iph17pm" not in result
+        # "Ansley Booth" appears twice in primary (sender + conversation name), no secondary line
+        assert "+Ansley Booth" not in result  # No secondary context line
+
+    def test_imessage_consolidation_different_conversation_shown(self):
+        """Test iMessage entries with different conversations are shown."""
+        primary = SourceEntry(
+            processor=PLATFORM_IMESSAGE,
+            username="m3_mbp",
+            sender="Ansley Booth",
+            conversation="DM with Ansley Booth",
+        )
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_IMESSAGE,
+                username="iph17pm",
+                sender="Ansley Booth",
+                conversation="Group Chat",  # Different conversation - unique context
+            ),
+        ]
+        result = build_image_description(primary, secondary)
+
+        # Primary source line
+        assert "Source: iMessage/m3_mbp" in result
+        # Primary context
+        assert '  - Ansley Booth in "DM with Ansley Booth"' in result
+        # Secondary should be shown because it has different conversation
+        assert '+Ansley Booth in "Group Chat"' in result
+
     def test_same_message_details_skipped(self):
         """Test duplicate message details are skipped."""
         primary = SourceEntry(
@@ -935,3 +995,148 @@ class TestBuildDescription:
         result = build_description(entry)
         assert "Source: iMessage/mac" in result
         assert '  - John Doe in "DM with Jane": "Sending you that pic"' in result
+
+
+class TestFilterSecondarySources:
+    """Tests for filter_secondary_sources function."""
+
+    def test_different_sources_always_included(self):
+        """Test that different-source entries are always included."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+        )
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="user",
+                service=SERVICE_MESSAGES,
+            ),
+        ]
+        result = filter_secondary_sources(primary, secondary)
+        assert len(result) == 1
+
+    def test_same_source_unique_context_included(self):
+        """Test that same-source with unique context is included."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+            sender="me",
+            conversation="Family",
+        )
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_GOOGLE,
+                username="user",
+                service=SERVICE_PHOTOS,
+                sender="me",
+                conversation="Work",  # Different conversation
+            ),
+        ]
+        result = filter_secondary_sources(primary, secondary)
+        assert len(result) == 1
+
+    def test_same_source_duplicate_context_excluded(self):
+        """Test that same-source with identical context is excluded."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user",
+            service=SERVICE_PHOTOS,
+            sender="me",
+            conversation="Family",
+        )
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_GOOGLE,
+                username="user",
+                service=SERVICE_PHOTOS,
+                sender="me",
+                conversation="Family",  # Same context
+            ),
+        ]
+        result = filter_secondary_sources(primary, secondary)
+        assert len(result) == 0
+
+    def test_consolidating_partial_context_excluded(self):
+        """Test iMessage partial context match is excluded.
+
+        For consolidating processors, if the secondary's non-empty fields
+        match the primary's, it should be excluded.
+        """
+        primary = SourceEntry(
+            processor=PLATFORM_IMESSAGE,
+            username="m3_mbp",
+            sender="Ansley Booth",
+            conversation="DM with Ansley Booth",
+        )
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_IMESSAGE,
+                username="iph17pm",
+                sender="Ansley Booth",  # Same sender
+                # Missing conversation - partial context
+            ),
+        ]
+        result = filter_secondary_sources(primary, secondary)
+        # Should be excluded because sender matches (partial match)
+        assert len(result) == 0
+
+    def test_consolidating_different_sender_included(self):
+        """Test iMessage with different sender is included."""
+        primary = SourceEntry(
+            processor=PLATFORM_IMESSAGE,
+            username="m3_mbp",
+            sender="Ansley Booth",
+            conversation="Group Chat",
+        )
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_IMESSAGE,
+                username="iph17pm",
+                sender="John Doe",  # Different sender
+                conversation="Group Chat",
+            ),
+        ]
+        result = filter_secondary_sources(primary, secondary)
+        # Should be included because sender is different
+        assert len(result) == 1
+
+    def test_consolidating_different_conversation_included(self):
+        """Test iMessage with different conversation is included."""
+        primary = SourceEntry(
+            processor=PLATFORM_IMESSAGE,
+            username="m3_mbp",
+            sender="Ansley Booth",
+            conversation="DM with Ansley Booth",
+        )
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_IMESSAGE,
+                username="iph17pm",
+                sender="Ansley Booth",
+                conversation="Group Chat",  # Different conversation
+            ),
+        ]
+        result = filter_secondary_sources(primary, secondary)
+        # Should be included because conversation is different
+        assert len(result) == 1
+
+    def test_non_consolidating_different_username_not_same_source(self):
+        """Test non-consolidating processor with different username."""
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user1",
+            service=SERVICE_PHOTOS,
+        )
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_GOOGLE,
+                username="user2",  # Different username
+                service=SERVICE_PHOTOS,
+            ),
+        ]
+        result = filter_secondary_sources(primary, secondary)
+        # Different username = different source, should be included
+        assert len(result) == 1

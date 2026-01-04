@@ -207,14 +207,35 @@ class SnapchatMessagesProcessor(ProcessorBase):
         workers = kwargs.get("workers", 4)
 
         def extract_preprocessed_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
-            """Extract metadata from preprocessed entry."""
+            """Extract metadata from preprocessed entry.
+
+            Handles both single-occurrence entries (top-level fields) and
+            duplicate entries (fields nested in messages array).
+            """
             result: Dict[str, Any] = {}
-            if "sender" in entry:
-                result["sender"] = entry["sender"]
-            if "conversation_title" in entry:
-                result["conversation"] = entry["conversation_title"]
-            if "created" in entry:
-                result["timestamp"] = entry["created"]
+
+            # For duplicate entries, metadata is in the messages array
+            if "messages" in entry and isinstance(entry["messages"], list):
+                # Use first message for context (primary occurrence)
+                first_msg = entry["messages"][0] if entry["messages"] else {}
+                if "sender" in first_msg:
+                    result["sender"] = first_msg["sender"]
+                if "conversation_title" in first_msg:
+                    result["conversation"] = first_msg["conversation_title"]
+                # Use primary_created for timestamp (already merged)
+                if "primary_created" in entry:
+                    result["timestamp"] = entry["primary_created"]
+                elif "created" in first_msg:
+                    result["timestamp"] = first_msg["created"]
+            else:
+                # Single occurrence - fields at top level
+                if "sender" in entry:
+                    result["sender"] = entry["sender"]
+                if "conversation_title" in entry:
+                    result["conversation"] = entry["conversation_title"]
+                if "created" in entry:
+                    result["timestamp"] = entry["created"]
+
             return result
 
         catalog_iter = SnapchatMessagesProcessor.catalog_from_preprocessed_if_available(
@@ -559,7 +580,6 @@ def _create_file_worker(args_tuple):
                         overlay_path,
                         output_path,
                         video_metadata,
-                        export_username=export_username,
                         description=video_description,
                         original_filename=original_filename,
                     )

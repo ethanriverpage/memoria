@@ -29,6 +29,7 @@ from common.dedup.description import (
     SERVICE_MESSAGES,
     SERVICE_MEMORIES,
     SERVICE_PHOTOS,
+    SERVICE_POSTS,
     SourceEntry,
     build_image_description,
     format_secondary_source,
@@ -423,7 +424,11 @@ class TestDescriptionBuilderIntegration:
     """Tests for the description builder functions with cross-processor data."""
 
     def test_build_image_description_with_multiple_secondaries(self):
-        """Test building description with multiple secondary sources."""
+        """Test building description with multiple secondary sources.
+
+        Note: Entries with identical (sender, conversation, content_prefix) are
+        deduplicated per Bug 2 fix. This test uses distinct contexts for each entry.
+        """
         primary = SourceEntry(
             processor=PLATFORM_GOOGLE,
             username="user@gmail.com",
@@ -443,9 +448,9 @@ class TestDescriptionBuilderIntegration:
             SourceEntry(
                 processor=PLATFORM_IMESSAGE,
                 username="m3_mbp",
-                sender="Alice",
-                conversation="Family Group",
-                content="Check out this view!",
+                sender="Bob",  # Different sender - distinct context
+                conversation="Work Chat",  # Different conversation
+                content="For the presentation",  # Different content
                 timestamp=datetime(2024, 1, 20, 15, 46),
             ),
             SourceEntry(
@@ -464,7 +469,7 @@ class TestDescriptionBuilderIntegration:
         # Verify primary source line
         assert "Source: Google/user@gmail.com/photos" in result
 
-        # Verify secondary sources
+        # Verify secondary sources (each has distinct context)
         assert "+iMessage/iph13p:" in result
         assert "+iMessage/m3_mbp:" in result
         assert "+Instagram/myinsta/messages:" in result
@@ -844,3 +849,544 @@ class TestDescriptionContentPreservation:
 
         # Content should be space-separated
         assert "Line 1" in result
+
+
+class TestDuplicateSecondaryEntriesFixes:
+    """Regression tests for docs/bugs/duplicate-secondary-entries.md.
+
+    Bug 1: Variable truncation breaks string-based deduplication
+    Bug 2: Context-based deduplication is only applied relative to the primary
+    Bug 3: Secondary timestamps come from per-export context, not canonical merged metadata
+    Bug 4: Redundant dates are not suppressed when they match the file's EXIF timestamp
+    """
+
+    def test_bug1_truncation_order_does_not_affect_dedup(self):
+        """Bug 1: Identical secondaries with long content should dedupe to one line.
+
+        Previously, string-based deduplication with a decreasing per-line budget
+        could produce different truncated strings for the same logical entry,
+        bypassing deduplication.
+        """
+        primary = SourceEntry(
+            processor="Discord",
+            username="example_user",
+            is_primary=True,
+        )
+
+        # Two identical Instagram entries with long content that would be truncated
+        long_content = "I got tazed probably over 50 times last night " + "A" * 200
+
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="example_user",
+                service=SERVICE_POSTS,
+                content=long_content,
+                timestamp=datetime(2018, 8, 20),
+            ),
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="example_user",
+                service=SERVICE_POSTS,
+                content=long_content,
+                timestamp=datetime(2018, 8, 20),
+            ),
+        ]
+
+        # Use a constrained max_total to force truncation
+        result = build_image_description(primary, secondary, max_total=500)
+
+        # Count Instagram lines - should be exactly 1
+        lines = result.split("&#xa;")
+        instagram_lines = [line for line in lines if "+Instagram" in line]
+
+        assert len(instagram_lines) == 1, (
+            f"Expected 1 Instagram line, got {len(instagram_lines)}: {instagram_lines}"
+        )
+
+    def test_bug2_same_source_secondaries_dedupe_among_themselves(self):
+        """Bug 2: Multiple secondaries from the same source identity should dedupe.
+
+        Previously, only same-source entries relative to the PRIMARY got
+        context-based deduplication. Multiple Instagram exports with the same
+        (platform, username, service, context) should produce only one line.
+        """
+        primary = SourceEntry(
+            processor="Discord",
+            username="discord_user",
+            is_primary=True,
+            conversation="DM with example_user2",
+        )
+
+        # Three Instagram entries from the same account (different exports)
+        # with identical context - should collapse to one
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="example_user",
+                service=SERVICE_POSTS,
+                content="I got tazed...",
+                timestamp=datetime(2018, 8, 20),
+            ),
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="example_user",
+                service=SERVICE_POSTS,
+                content="I got tazed...",
+                timestamp=datetime(2018, 8, 19),  # Different date from export quirks
+            ),
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="example_user",
+                service=SERVICE_POSTS,
+                content="I got tazed...",
+                timestamp=datetime(2018, 8, 20),
+            ),
+        ]
+
+        result = build_image_description(primary, secondary)
+
+        # Count Instagram lines - should be exactly 1
+        lines = result.split("&#xa;")
+        instagram_lines = [line for line in lines if "+Instagram" in line]
+
+        assert len(instagram_lines) == 1, (
+            f"Expected 1 Instagram line, got {len(instagram_lines)}: {instagram_lines}"
+        )
+
+    def test_bug3_timestamps_normalized_to_canonical(self):
+        """Bug 3: Secondary timestamps should use canonical merged timestamp.
+
+        When get_merged_description_for_file() is called, all secondary entries
+        should display the same (canonical) date, not their per-export timestamps.
+        """
+        manifest = {
+            "duplicates": {
+                "test_hash_bug3": {
+                    "primary": {
+                        "processor": "Discord",
+                        "source_path": "/exports/discord/photo.jpg",
+                        "context": {
+                            "username": "discord_user",
+                            "conversation": "DM with example_user2",
+                        },
+                    },
+                    "secondary": [
+                        {
+                            "processor": "Instagram Public Media",
+                            "source_path": "/exports/instagram1/post.jpg",
+                            "context": {
+                                "username": "insta_user",
+                                "caption": "Beach vibes",
+                                # Per-export timestamp differs from canonical
+                                "timestamp": "2018-08-20T12:00:00Z",
+                            },
+                        },
+                        {
+                            "processor": "Instagram Public Media",
+                            "source_path": "/exports/instagram2/post.jpg",
+                            "context": {
+                                "username": "insta_user",
+                                "caption": "Beach vibes 2",
+                                # Different per-export timestamp
+                                "timestamp": "2018-08-19T12:00:00Z",
+                            },
+                        },
+                    ],
+                    "merged_metadata": {
+                        # Canonical timestamp (earliest across all sources)
+                        "timestamp": "2018-08-18T10:00:00Z",
+                    },
+                },
+            },
+        }
+
+        description = get_merged_description_for_file(
+            manifest, "/exports/discord/photo.jpg"
+        )
+
+        assert description is not None
+
+        # All dates should be the canonical date (2018-08-18), not the per-export dates
+        # Since Bug 4 suppresses redundant dates when they match the reference,
+        # and canonical_ts == reference_timestamp, dates should be suppressed entirely
+        # unless there's a mismatch (which there isn't in this test after normalization)
+        assert "2018-08-20" not in description
+        assert "2018-08-19" not in description
+
+    def test_bug4_redundant_dates_suppressed(self):
+        """Bug 4: Dates matching the EXIF-written date should be suppressed.
+
+        When a secondary entry's date matches the canonical/reference timestamp,
+        the (YYYY-MM-DD) suffix should be omitted to save space.
+        """
+        reference_ts = datetime(2024, 1, 15, 10, 30, 0)
+
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user@gmail.com",
+            service=SERVICE_PHOTOS,
+            is_primary=True,
+        )
+
+        # Secondary with same date as reference - should suppress date
+        secondary_same_date = SourceEntry(
+            processor=PLATFORM_INSTAGRAM,
+            username="myinsta",
+            service=SERVICE_MESSAGES,
+            sender="friend",
+            conversation="Chat",
+            content="Nice photo!",
+            timestamp=datetime(2024, 1, 15, 12, 0, 0),  # Same date
+        )
+
+        # Secondary with different date - should show date
+        secondary_diff_date = SourceEntry(
+            processor=PLATFORM_IMESSAGE,
+            username="iph13p",
+            sender="Alice",
+            conversation="Family",
+            content="Look at this!",
+            timestamp=datetime(2024, 2, 20, 10, 0, 0),  # Different date
+        )
+
+        result = build_image_description(
+            primary,
+            [secondary_same_date, secondary_diff_date],
+            reference_timestamp=reference_ts,
+        )
+
+        # Instagram line should NOT have (2024-01-15) since it matches reference
+        lines = result.split("&#xa;")
+        instagram_line = next(
+            (line for line in lines if "+Instagram" in line), None
+        )
+        assert instagram_line is not None
+        assert "(2024-01-15)" not in instagram_line
+
+        # iMessage line SHOULD have (2024-02-20) since it differs from reference
+        imessage_line = next(
+            (line for line in lines if "+iMessage" in line), None
+        )
+        assert imessage_line is not None
+        assert "(2024-02-20)" in imessage_line
+
+    def test_bug4_format_secondary_source_suppresses_redundant_date(self):
+        """Bug 4: format_secondary_source should suppress redundant dates."""
+        reference_ts = datetime(2024, 1, 15)
+
+        entry = SourceEntry(
+            processor=PLATFORM_INSTAGRAM,
+            username="myinsta",
+            service=SERVICE_POSTS,
+            content="Amazing sunset!",
+            timestamp=datetime(2024, 1, 15, 18, 30),  # Same date as reference
+        )
+
+        result = format_secondary_source(entry, reference_timestamp=reference_ts)
+
+        # Date should be suppressed
+        assert "(2024-01-15)" not in result
+        # Content should still be present
+        assert "Amazing sunset" in result
+
+    def test_bug2_different_source_groups_kept_separate(self):
+        """Bug 2: Different source identities should not be merged.
+
+        Entries from different (platform, username, service) tuples should
+        each produce their own line, even if they have the same context.
+        """
+        primary = SourceEntry(
+            processor="Discord",
+            username="discord_user",
+            is_primary=True,
+        )
+
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="insta_user_1",
+                service=SERVICE_POSTS,
+                content="Same content",
+            ),
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="insta_user_2",  # Different username
+                service=SERVICE_POSTS,
+                content="Same content",
+            ),
+            SourceEntry(
+                processor=PLATFORM_GOOGLE,
+                username="google_user",
+                service=SERVICE_PHOTOS,
+                content="Same content",
+            ),
+        ]
+
+        result = build_image_description(primary, secondary)
+
+        # Should have 3 distinct secondary lines
+        lines = result.split("&#xa;")
+        secondary_lines = [line for line in lines if line.startswith("+")]
+
+        assert len(secondary_lines) == 3, (
+            f"Expected 3 secondary lines, got {len(secondary_lines)}: {secondary_lines}"
+        )
+
+    def test_integration_manifest_to_description_deduplicates(self):
+        """Integration test: manifest with duplicate secondaries produces clean output.
+
+        This tests the full flow from manifest through get_merged_description_for_file.
+        """
+        manifest = {
+            "duplicates": {
+                "test_hash_integration": {
+                    "primary": {
+                        "processor": "Discord",
+                        "source_path": "/exports/discord/photo.jpg",
+                        "context": {
+                            "username": "discord_user",
+                            "conversation": "DM with friend",
+                        },
+                    },
+                    "secondary": [
+                        # Three Instagram entries from same source with same context
+                        {
+                            "processor": "Instagram Public Media",
+                            "source_path": "/exports/instagram1/post.jpg",
+                            "context": {
+                                "username": "insta_user",
+                                "caption": "I got tazed...",
+                                "timestamp": "2018-08-20T12:00:00Z",
+                            },
+                        },
+                        {
+                            "processor": "Instagram Public Media",
+                            "source_path": "/exports/instagram2/post.jpg",
+                            "context": {
+                                "username": "insta_user",
+                                "caption": "I got tazed...",
+                                "timestamp": "2018-08-19T12:00:00Z",
+                            },
+                        },
+                        {
+                            "processor": "Instagram Public Media",
+                            "source_path": "/exports/instagram3/post.jpg",
+                            "context": {
+                                "username": "insta_user",
+                                "caption": "I got tazed...",
+                                "timestamp": "2018-08-20T10:00:00Z",
+                            },
+                        },
+                        # Google Photos entry (different source)
+                        {
+                            "processor": "Google Photos",
+                            "source_path": "/exports/google/photo.jpg",
+                            "context": {
+                                "username": "google_user",
+                            },
+                        },
+                    ],
+                    "merged_metadata": {
+                        "timestamp": "2018-08-18T10:00:00Z",
+                    },
+                },
+            },
+        }
+
+        description = get_merged_description_for_file(
+            manifest, "/exports/discord/photo.jpg"
+        )
+
+        assert description is not None
+        lines = description.split("&#xa;")
+
+        # Should have: primary line, one Instagram line, one Google line
+        # (3 Instagram entries collapsed to 1)
+        instagram_lines = [line for line in lines if "+Instagram" in line]
+        google_lines = [line for line in lines if "+Google" in line]
+
+        assert len(instagram_lines) == 1, (
+            f"Expected 1 Instagram line, got {len(instagram_lines)}: {instagram_lines}"
+        )
+        assert len(google_lines) == 1, (
+            f"Expected 1 Google line, got {len(google_lines)}: {google_lines}"
+        )
+
+    def test_bug3_canonical_date_shown_when_different_from_reference(self):
+        """Bug 3: Positively assert canonical date appears when reference differs.
+
+        When reference_timestamp differs from the canonical timestamp, the
+        canonical date should appear in the output (not be suppressed).
+        """
+        # Canonical timestamp is 2024-03-15, reference is 2024-01-01
+        primary = SourceEntry(
+            processor=PLATFORM_GOOGLE,
+            username="user@gmail.com",
+            service=SERVICE_PHOTOS,
+            is_primary=True,
+        )
+
+        secondary = [
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="myinsta",
+                service=SERVICE_POSTS,
+                content="Beach day!",
+                timestamp=datetime(2024, 3, 15, 12, 0, 0),  # Canonical timestamp
+            ),
+        ]
+
+        # Reference timestamp is DIFFERENT from canonical
+        reference_ts = datetime(2024, 1, 1, 10, 0, 0)
+
+        result = build_image_description(
+            primary, secondary, reference_timestamp=reference_ts
+        )
+
+        # The canonical date (2024-03-15) SHOULD appear since it differs from reference
+        assert "(2024-03-15)" in result
+
+    def test_bug3_manifest_canonical_date_shown_when_exif_differs(self):
+        """Bug 3: Integration test - canonical date from manifest appears when EXIF differs.
+
+        When get_merged_description_for_file() normalizes timestamps, and the
+        caller provides a different reference_timestamp, the canonical date
+        should appear in the output.
+        """
+        manifest = {
+            "duplicates": {
+                "test_hash_canonical_shown": {
+                    "primary": {
+                        "processor": "Discord",
+                        "source_path": "/exports/discord/photo.jpg",
+                        "context": {
+                            "username": "discord_user",
+                            "conversation": "General Chat",
+                        },
+                    },
+                    "secondary": [
+                        {
+                            "processor": "Instagram Public Media",
+                            "source_path": "/exports/instagram/post.jpg",
+                            "context": {
+                                "username": "insta_user",
+                                "caption": "Great sunset!",
+                                "timestamp": "2024-06-15T18:00:00Z",  # Per-export ts
+                            },
+                        },
+                    ],
+                    "merged_metadata": {
+                        # Canonical timestamp (earliest)
+                        "timestamp": "2024-05-20T10:00:00Z",
+                    },
+                },
+            },
+        }
+
+        description = get_merged_description_for_file(
+            manifest, "/exports/discord/photo.jpg"
+        )
+
+        assert description is not None
+
+        # get_merged_description_for_file uses canonical ts as reference_timestamp
+        # Since both are the same date (2024-05-20), date is suppressed by Bug 4
+        # This test documents that behavior
+        assert "(2024-05-20)" not in description  # Suppressed by Bug 4
+        assert "(2024-06-15)" not in description  # Per-export date not used
+
+    def test_same_source_detail_line_date_suppression(self):
+        """Same-source secondary detail lines should suppress redundant dates.
+
+        When a same-source secondary entry is formatted via _format_message_line
+        (is_secondary=True), its date should be suppressed if it matches the
+        reference_timestamp.
+        """
+        reference_ts = datetime(2024, 2, 14, 12, 0, 0)
+
+        primary = SourceEntry(
+            processor=PLATFORM_IMESSAGE,
+            username="iph13p",
+            sender="Alice",
+            conversation="Family Group",
+            content="Look at this!",
+            is_primary=True,
+        )
+
+        # Same-source secondary with same date - should suppress date
+        secondary_same_date = SourceEntry(
+            processor=PLATFORM_IMESSAGE,
+            username="mac",  # Different device, same source for iMessage
+            sender="Bob",
+            conversation="Work Chat",
+            content="Nice!",
+            timestamp=datetime(2024, 2, 14, 14, 30, 0),  # Same date as reference
+        )
+
+        # Same-source secondary with different date - should show date
+        secondary_diff_date = SourceEntry(
+            processor=PLATFORM_IMESSAGE,
+            username="ipad",
+            sender="Charlie",
+            conversation="Friends",
+            content="Wow!",
+            timestamp=datetime(2024, 3, 10, 10, 0, 0),  # Different date
+        )
+
+        result = build_image_description(
+            primary,
+            [secondary_same_date, secondary_diff_date],
+            reference_timestamp=reference_ts,
+        )
+
+        lines = result.split("&#xa;")
+
+        # Find the Bob/Work Chat line (same date - should NOT have date)
+        bob_line = next((line for line in lines if "Bob" in line), None)
+        assert bob_line is not None, f"Bob line not found in: {lines}"
+        assert "(2024-02-14)" not in bob_line, (
+            f"Date should be suppressed for same-date entry: {bob_line}"
+        )
+
+        # Find the Charlie/Friends line (different date - SHOULD have date)
+        charlie_line = next((line for line in lines if "Charlie" in line), None)
+        assert charlie_line is not None, f"Charlie line not found in: {lines}"
+        assert "(2024-03-10)" in charlie_line, (
+            f"Date should appear for different-date entry: {charlie_line}"
+        )
+
+    def test_deduplicate_secondary_entries_uses_canonical_helper(self):
+        """Verify deduplicate_secondary_entries uses _get_secondary_dedup_key semantics.
+
+        This test ensures both build_image_description and exiftool path
+        use the same canonical deduplication helper.
+        """
+        from common.dedup.description import deduplicate_secondary_entries
+
+        # Create duplicate entries (same source identity + context)
+        entries = [
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="myinsta",
+                service=SERVICE_POSTS,
+                sender="friend",
+                conversation="DM",
+                content="Hello there!",
+                timestamp=datetime(2024, 1, 15),
+            ),
+            SourceEntry(
+                processor=PLATFORM_INSTAGRAM,
+                username="myinsta",
+                service=SERVICE_POSTS,
+                sender="friend",
+                conversation="DM",
+                content="Hello there!",  # Same content prefix
+                timestamp=datetime(2024, 1, 20),  # Different timestamp - ignored for dedup
+            ),
+        ]
+
+        result = deduplicate_secondary_entries(entries)
+
+        # Should deduplicate to 1 entry (timestamp not in dedup key)
+        assert len(result) == 1

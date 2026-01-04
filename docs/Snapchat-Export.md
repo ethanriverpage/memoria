@@ -210,6 +210,20 @@ The raw Snapchat export's `chat_history.json` contains message entries in a dict
 
 **Note**: Memoria automatically preprocesses the raw export to organize files and create a cleaned metadata structure for processing. The raw chat_history.json format is complex and varies - the preprocessor handles all these variations automatically.
 
+### Owner identity (`"me"`) and sender attribution
+
+Snapchat’s raw export includes enough information to consistently identify when a message was authored by the export owner:
+
+- `IsSender`: `true` when **you** (the export owner) sent the message
+- `From`: sender username string (often the Snapchat username)
+
+Memoria’s desired behavior is to normalize export-owner messages to `"me"` for consistent cross-processor attribution. When implemented, this should follow:
+
+- If `IsSender` is `true`, treat sender as `"me"`
+- Otherwise, treat sender as the `From` value
+
+See: `docs/bugs/snapchat-messages-me-attribution.md`.
+
 ### Embedded Metadata
 
 Memoria embeds rich contextual metadata into all processed Snapchat Messages files:

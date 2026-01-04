@@ -536,6 +536,8 @@ Source: iMessage/iph13p
 
 iMessage performs cross-device consolidation, so different device "usernames" (iph13p, mac) are treated as a single logical source. Secondary entries use `+details` without repeating the source path.
 
+When secondary entries have partial context (e.g., sender but no conversation), they are still recognized as duplicates if their non-empty fields match the primary. This handles cases where the same message appears in multiple device exports with varying metadata completeness.
+
 **True duplicates** (same source, same message details) - no secondary line:
 
 ```text

@@ -238,8 +238,8 @@ All logs are stored in the `logs/` directory, created automatically in the proje
 
 File logging is enabled when using `-v` or `-vv` flags:
 
-- Main log file: `logs/media_processor_YYYYMMDD_HHMMSS.log`
-- Per-export logs: `logs/log-{export-name}_YYYYMMDD_HHMMSS.log` (when using `--originals`)
+- Main log file: `logs/{run_id}_YYYYMMDD_HHMMSS.memoria.log`
+- Per-export logs: `logs/{export-name}_YYYYMMDD_HHMMSS.memoria.log` (when using `--originals`)
 
 ### File Log Level
 

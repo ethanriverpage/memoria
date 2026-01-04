@@ -10,7 +10,7 @@ Complete reference for using Memoria to process social media exports.
 | Process with custom output | `./memoria.py /path/to/export -o /output` |
 | Process multiple exports | `./memoria.py --originals /path/to/parent` |
 | Process without upload | `./memoria.py /path/to/export --skip-upload` |
-| Upload only (no processing) | `./memoria.py /original --upload-only /processed` |
+| Upload only (no processing) | `./memoria.py --upload-only /processed` |
 | See available processors | `./memoria.py --list-processors` |
 | Enable verbose logging | `./memoria.py /path/to/export --verbose` |
 | Control parallelism | `./memoria.py /path/to/export --workers 8` |
@@ -74,7 +74,7 @@ OR
 ### Output Options
 
 **`-o, --output PATH`**
-Specify output directory for processed files. If not provided, defaults to `./output`.
+Specify output directory for processed files. If not provided, output is created in `final_{platform}/` directories.
 
 ```bash
 ./memoria.py /path/to/export -o /path/to/output
@@ -83,7 +83,7 @@ Specify output directory for processed files. If not provided, defaults to `./ou
 ### Processing Options
 
 **`-v, --verbose`**
-Enable verbose logging with DEBUG output and log file creation.
+Enable verbose logging. Use `-v` for INFO level or `-vv` for DEBUG level with full details.
 
 ```bash
 ./memoria.py /path/to/export --verbose
@@ -114,6 +114,20 @@ List all available processors and exit.
 
 ```bash
 ./memoria.py --list-processors
+```
+
+**`--processor NAME`**
+Run only the specified processor (case-insensitive). Use `--list-processors` to see available names.
+
+```bash
+./memoria.py /path/to/export --processor google_photos
+```
+
+**`--file-log-level LEVEL`**
+Set the log file verbosity level. Choices: `debug`, `info`. Default: `debug`.
+
+```bash
+./memoria.py /path/to/export --file-log-level info
 ```
 
 ### Upload Options
@@ -429,6 +443,7 @@ DEDUP_PERCEPTUAL_THRESHOLD=0.92
 |----------|---------|-------------|
 | `PREPROCESSING_DIR` | `../pre` | Directory for preprocessing output |
 | `DISABLE_PREPROCESSING_CLEANUP` | `false` | Set to `true` to preserve preprocessing output |
+| `CONSOLIDATE_EXPORTS` | `true` | Consolidate multiple exports from the same platform before processing |
 
 **Cross-Processor Deduplication**
 

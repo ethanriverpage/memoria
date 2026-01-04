@@ -447,7 +447,7 @@ This approach is fast (header check takes <1ms per file) and accurate (ffprobe c
 Placeholder attachments are treated as **orphaned metadata** (database entry exists but media payload is missing):
 
 - The file is **skipped** during preprocessing (not included in `metadata.json`)
-- The metadata is **recorded** in `issues/orphaned-metadata/` via FailureTracker
+- The metadata is **recorded** in `issues/failed-matching/metadata/` via FailureTracker
 - The reason is logged as "Placeholder attachment (iCloud incomplete download)"
 
 ### Recovering Placeholder Content
@@ -468,7 +468,7 @@ When placeholders are detected during preprocessing, you'll see a log message li
 Detected 967 placeholder attachments (iCloud incomplete downloads)
 ```
 
-These are also included in the failure report under `issues/orphaned-metadata/`.
+These are also included in the failure report under `issues/failed-matching/metadata/`.
 
 ---
 

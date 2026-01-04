@@ -55,7 +55,9 @@ class GoogleChatPreprocessor(PreprocessorBase):
 
         # Export username (detected from user_info.json)
         self.export_username = None
-        self.export_email = None
+        # Export identity for DM partner detection
+        self.export_email: Optional[str] = None
+        self.export_display_name: Optional[str] = None
 
         # Statistics specific to this preprocessor (preserves shared keys from base)
         self.stats.update(
@@ -160,30 +162,138 @@ class GoogleChatPreprocessor(PreprocessorBase):
             ],
         )
 
+    def detect_export_identity(self) -> Tuple[Optional[str], Optional[str]]:
+        """Detect export user's email and display name for DM partner identification.
+
+        Detection sources (in priority order):
+        1. Profile/Profile.json - Google account profile (email + displayName)
+        2. Google Chat/Users/*/user_info.json - chat-specific user info (email + name)
+
+        Returns:
+            Tuple of (export_email, export_display_name), either may be None
+        """
+        export_email: Optional[str] = None
+        export_display_name: Optional[str] = None
+
+        # Try Profile/Profile.json first
+        profile_path = self.export_path / "Profile" / "Profile.json"
+        if profile_path.exists():
+            try:
+                with open(profile_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # Get first email
+                emails = data.get("emails", [])
+                if emails:
+                    export_email = emails[0].get("value", "")
+                # Get display name
+                export_display_name = data.get("displayName", "")
+            except Exception as e:
+                logger.debug("Failed to parse Profile.json for identity: %s", e)
+
+        # Try Google Chat/Users/*/user_info.json as fallback
+        if not export_email:
+            users_dir = self.export_path / "Google Chat" / "Users"
+            if users_dir.exists():
+                try:
+                    user_dirs = [d for d in users_dir.iterdir() if d.is_dir()]
+                    if user_dirs:
+                        user_info_path = user_dirs[0] / "user_info.json"
+                        if user_info_path.exists():
+                            with open(user_info_path, "r", encoding="utf-8") as f:
+                                user_data = json.load(f)
+                            user_obj = user_data.get("user", {})
+                            if not export_email:
+                                export_email = user_obj.get("email", "")
+                            if not export_display_name:
+                                export_display_name = user_obj.get("name", "")
+                except Exception as e:
+                    logger.debug("Failed to parse user_info.json for identity: %s", e)
+
+        # Normalize empty strings to None
+        if not export_email:
+            export_email = None
+        if not export_display_name:
+            export_display_name = None
+
+        if export_email:
+            logger.info("Export identity detected: email=%s", export_email)
+        else:
+            logger.warning("Could not detect export email for DM partner identification")
+
+        return (export_email, export_display_name)
+
+    def _normalize_name(self, name: str) -> str:
+        """Normalize a display name for comparison (lowercase, strip whitespace)."""
+        return name.lower().strip() if name else ""
+
     def extract_conversation_name(
         self, group_info: Dict, conversation_type: str, conversation_id: str
     ) -> str:
         """
         Extract conversation name from group_info
-        For DMs: name of the other participant
+        For DMs: "DM with <other participant>" (exactly 2 members expected)
         For Spaces: group name or constructed from members
         Returns the ORIGINAL name with spaces intact (sanitization happens at filename creation time)
         """
         members = group_info.get("members", [])
 
         if conversation_type == "DM":
-            # Find the member who isn't the export user
-            for member in members:
-                member_email = member.get("email", "")
-                member_name = member.get("name", "")
-                if member_email != self.export_email:
-                    return member_name  # Return original name, not sanitized
+            # DMs should have exactly 2 members (export user + other)
+            if len(members) != 2:
+                self.log_message(
+                    "CONVERSATION_NAME_ERROR",
+                    f"Unexpected DM member count ({len(members)}) for {conversation_id}",
+                )
+                return conversation_id
 
-            self.log_message(
-                "CONVERSATION_NAME_ERROR",
-                f"Could not determine DM partner for {conversation_id}",
-            )
-            return conversation_id
+            # Find the member who isn't the export user
+            other_member = None
+
+            if self.export_email:
+                # Prefer email-based identification (most reliable)
+                # Verify export email matches one member, then pick the other
+                export_member_found = False
+                for member in members:
+                    member_email = member.get("email", "")
+                    if member_email == self.export_email:
+                        export_member_found = True
+                    elif member_email:
+                        other_member = member
+                # Only use result if we found the export user
+                if not export_member_found:
+                    other_member = None
+            elif self.export_display_name:
+                # Fall back to display name matching if email unavailable
+                # Verify export display name matches one member, then pick the other
+                export_name_normalized = self._normalize_name(self.export_display_name)
+                export_member_found = False
+                for member in members:
+                    member_name = member.get("name", "")
+                    if self._normalize_name(member_name) == export_name_normalized:
+                        export_member_found = True
+                    else:
+                        other_member = member
+                # Only use result if we found the export user
+                if not export_member_found:
+                    other_member = None
+
+            if other_member is None:
+                # Could not reliably identify which member is the export user
+                self.log_message(
+                    "CONVERSATION_NAME_ERROR",
+                    f"Could not identify export user to determine DM partner for {conversation_id}",
+                )
+                return conversation_id
+
+            other_name = other_member.get("name", "")
+            if not other_name:
+                self.log_message(
+                    "CONVERSATION_NAME_ERROR",
+                    f"DM partner has no name for {conversation_id}",
+                )
+                return conversation_id
+
+            return f"DM with {other_name}"
 
         elif conversation_type == "Space":
             # Check if there's a custom name
@@ -970,6 +1080,9 @@ class GoogleChatPreprocessor(PreprocessorBase):
             logger.error("Could not detect export username")
             return False
         self.export_username = detection.username
+
+        # Detect export identity (email + display name) for DM partner identification
+        self.export_email, self.export_display_name = self.detect_export_identity()
 
         # Count total media files for statistics
         logger.info("Scanning media directories...")

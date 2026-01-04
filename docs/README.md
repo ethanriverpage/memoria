@@ -35,7 +35,6 @@ Each platform guide includes export instructions, processing details, and a tech
 
 ### Development
 
-- `Standalone-Tools.md` - Standalone utility scripts for analysis and maintenance
 - `Adding-Processors.md` - Guide to creating custom platform processors
 - `vCard-Schema.md` - Contact file format for iMessage handle matching
 

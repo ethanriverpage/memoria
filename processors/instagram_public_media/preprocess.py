@@ -11,7 +11,7 @@ Organizes Instagram export files and creates cleaned metadata:
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
@@ -31,6 +31,11 @@ log = get_processor_logger(__name__)
 
 class InstagramPreprocessor(PreprocessorBase):
     """Preprocesses Instagram export by organizing files and cleaning metadata"""
+
+    # Instagram official export (HTML) timestamps are timezone-less strings, but empirically
+    # behave like a fixed UTC−08:00 offset (not DST-aware). We interpret them as UTC−08:00
+    # and convert to canonical UTC '...Z' for consistent downstream processing.
+    _OFFICIAL_EXPORT_TZ = timezone(timedelta(hours=-8))
 
     # Media type mapping: HTML filename (without extension) -> output media_type
     MEDIA_TYPES = {
@@ -191,8 +196,11 @@ class InstagramPreprocessor(PreprocessorBase):
 
         for fmt in formats:
             try:
-                dt = datetime.strptime(timestamp_str, fmt)
-                return dt.strftime(CANONICAL_TIMESTAMP_FORMAT)
+                dt_local = datetime.strptime(timestamp_str, fmt)
+                dt_utc = dt_local.replace(tzinfo=self._OFFICIAL_EXPORT_TZ).astimezone(
+                    timezone.utc
+                )
+                return dt_utc.strftime(CANONICAL_TIMESTAMP_FORMAT)
             except ValueError:
                 continue
 

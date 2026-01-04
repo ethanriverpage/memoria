@@ -11,7 +11,7 @@ Organizes Instagram message export files and creates cleaned metadata:
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 
 from common.detection import resolve_username, detect_from_dirname, DetectionResult
@@ -30,6 +30,11 @@ log = get_processor_logger(__name__)
 
 class InstagramMessagesPreprocessor(PreprocessorBase):
     """Preprocesses Instagram message export by organizing files and cleaning metadata"""
+
+    # Instagram official export (HTML) timestamps are timezone-less strings, but empirically
+    # behave like a fixed UTC−08:00 offset (not DST-aware). We interpret them as UTC−08:00
+    # and convert to canonical UTC '...Z' for consistent downstream processing.
+    _OFFICIAL_EXPORT_TZ = timezone(timedelta(hours=-8))
 
     def __init__(
         self,
@@ -188,8 +193,11 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
 
         for fmt in formats:
             try:
-                dt = datetime.strptime(timestamp_str, fmt)
-                return dt.strftime(CANONICAL_TIMESTAMP_FORMAT)
+                dt_local = datetime.strptime(timestamp_str, fmt)
+                dt_utc = dt_local.replace(tzinfo=self._OFFICIAL_EXPORT_TZ).astimezone(
+                    timezone.utc
+                )
+                return dt_utc.strftime(CANONICAL_TIMESTAMP_FORMAT)
             except ValueError:
                 continue
 
@@ -247,18 +255,30 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
         media_paths = []
 
         try:
-            # Find all <a> tags with href containing "/photos/"
+            # Find all <a> tags with href containing photos/ or videos/
+            #
+            # Instagram exports commonly use relative paths like:
+            #   photos/photo_123.jpg
+            #   videos/video_456.mp4
+            # (no leading slash). Older code only matched "/photos/" which misses real exports.
             links = message_element.find_all("a", href=True)
             for link in links:
                 href = link.get("href", "")
-                if "/photos/" in href:
+                if "photos/" in href or "videos/" in href:
                     media_paths.append(href)
 
-            # Also check <img> tags with src containing "/photos/"
+            # Also check <img> tags with src containing photos/
             images = message_element.find_all("img", src=True)
             for img in images:
                 src = img.get("src", "")
-                if "/photos/" in src and src not in media_paths:
+                if "photos/" in src and src not in media_paths:
+                    media_paths.append(src)
+
+            # Also check <video> tags with src containing videos/
+            videos = message_element.find_all("video", src=True)
+            for video in videos:
+                src = video.get("src", "")
+                if "videos/" in src and src not in media_paths:
                     media_paths.append(src)
 
         except Exception as e:
@@ -448,30 +468,32 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
             banned_filter=self.banned_filter,
             skip_hidden=True,
         ):
-            photos_dir = conv_dir / "photos"
-            if not photos_dir.exists():
-                continue
+            # Instagram Messages exports store media under both photos/ and videos/
+            for media_subdir_name in ("photos", "videos"):
+                media_dir = conv_dir / media_subdir_name
+                if not media_dir.exists():
+                    continue
 
-            # Use iter_media_files for recursive media scanning
-            for file_path in iter_media_files(
-                photos_dir,
-                banned_filter=self.banned_filter,
-                skip_hidden=True,
-                skip_overlays=False,  # Instagram doesn't have overlay concept
-                skip_thumbnails=False,  # Instagram doesn't have thumbnail files
-                recursive=True,
-            ):
-                filename = file_path.name
+                # Use iter_media_files for recursive media scanning
+                for file_path in iter_media_files(
+                    media_dir,
+                    banned_filter=self.banned_filter,
+                    skip_hidden=True,
+                    skip_overlays=False,  # Instagram doesn't have overlay concept
+                    skip_thumbnails=False,  # Instagram doesn't have thumbnail files
+                    recursive=True,
+                ):
+                    filename = file_path.name
 
-                # Map filename to source path
-                if filename in catalog:
-                    self.log_message(
-                        "DUPLICATE_FILENAME",
-                        f"Duplicate filename found: {filename}",
-                        f"Previous: {catalog[filename]}, New: {file_path}",
-                    )
-                catalog[filename] = file_path
-                self.stats["total_media_files"] += 1
+                    # Map filename to source path
+                    if filename in catalog:
+                        self.log_message(
+                            "DUPLICATE_FILENAME",
+                            f"Duplicate filename found: {filename}",
+                            f"Previous: {catalog[filename]}, New: {file_path}",
+                        )
+                    catalog[filename] = file_path
+                    self.stats["total_media_files"] += 1
 
         log.found_files(len(catalog), "media")
 

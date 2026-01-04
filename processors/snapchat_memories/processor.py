@@ -467,12 +467,19 @@ def _create_memory_file(args_tuple):
             output_path = output_dir_path / output_filename_mkv
 
             try:
+                # Build description using unified format (same as non-MKV EXIF flow)
+                entry = SourceEntry(
+                    processor=PLATFORM_SNAPCHAT,
+                    username=export_username,
+                    service=SERVICE_MEMORIES,
+                )
+                video_description = build_description(entry)
                 success = create_video_with_overlay(
                     media_path,
                     overlay_path,
                     output_path,
                     media_data,
-                    export_username=export_username,
+                    description=video_description,
                     original_filename=original_filename,
                 )
                 if success:

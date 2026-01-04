@@ -33,7 +33,7 @@ For the reasoning behind these choices, see [Design Decisions](Design-Decisions)
 
 Memoria requires the following to be installed on your system:
 
-- **Python**: 3.7 or higher
+- **Python**: 3.10 or higher
 - **exiftool**: For embedding metadata in media files
 - **ffmpeg**: For video processing and re-encoding
 - **libmagic**: For file type detection

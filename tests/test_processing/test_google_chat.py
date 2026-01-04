@@ -261,3 +261,227 @@ class TestGoogleChatMediaTypes:
             / "Space Main"
             / "File-2024-01-15.jpg"
         ).exists()
+
+
+class TestGoogleChatDMConversationTitle:
+    """Tests for DM conversation title construction."""
+
+    def test_dm_title_excludes_export_user_when_listed_first(
+        self, temp_export_dir, temp_output_dir
+    ):
+        """
+        Regression test: DM title should be 'DM with <other>' even when the export
+        user is listed first in the members array.
+        """
+        from processors.google_chat.preprocess import GoogleChatPreprocessor
+
+        # Build minimal export tree with export identity
+        export_dir = temp_export_dir / "google-exportuser-20240101"
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        # Profile/Profile.json for export identity detection
+        profile_dir = export_dir / "Profile"
+        profile_dir.mkdir()
+        profile_data = {
+            "emails": [{"value": "export@example.com"}],
+            "displayName": "Export User",
+        }
+        (profile_dir / "Profile.json").write_text(json.dumps(profile_data))
+
+        # Google Chat structure
+        chat_dir = export_dir / "Google Chat"
+        groups_dir = chat_dir / "Groups"
+        users_dir = chat_dir / "Users"
+
+        # DM folder with export user FIRST in members (this is the regression trigger)
+        dm_dir = groups_dir / "DM 12345678"
+        dm_dir.mkdir(parents=True)
+
+        group_info = {
+            "members": [
+                # Export user listed first (regression case)
+                {"name": "Export User", "email": "export@example.com", "user_type": "Human"},
+                {"name": "Friend", "email": "friend@example.com", "user_type": "Human"},
+            ]
+        }
+        (dm_dir / "group_info.json").write_text(json.dumps(group_info))
+
+        messages = {
+            "messages": [
+                {
+                    "creator": {"name": "Friend", "email": "friend@example.com"},
+                    "created_date": "Thursday, November 3, 2016 at 11:59:50 AM UTC",
+                    "text": "Hello",
+                    "attached_files": [
+                        {"export_name": "photo.jpg", "original_name": "photo.jpg"}
+                    ],
+                }
+            ]
+        }
+        (dm_dir / "messages.json").write_text(json.dumps(messages))
+
+        # Create media file
+        write_media_file(dm_dir / "photo.jpg", "jpeg")
+
+        # Users directory (required for validation)
+        user_dir = users_dir / "User Friend"
+        user_dir.mkdir(parents=True)
+        (user_dir / "user_info.json").write_text(
+            json.dumps({"user": {"email": "friend@example.com", "name": "Friend"}})
+        )
+
+        # Run preprocessor
+        preprocessor = GoogleChatPreprocessor(
+            export_path=export_dir,
+            output_dir=temp_output_dir,
+        )
+        result = preprocessor.run()
+        assert result is True, "Preprocessing should succeed"
+
+        # Verify conversation_name is "DM with Friend" (not "DM with Export User")
+        metadata_file = temp_output_dir / "metadata.json"
+        with open(metadata_file) as f:
+            metadata = json.load(f)
+
+        conversations = metadata.get("conversations", [])
+        assert len(conversations) == 1, "Should have one conversation"
+        assert conversations[0]["conversation_name"] == "DM with Friend"
+
+    def test_dm_title_falls_back_to_id_with_unexpected_member_count(
+        self, temp_export_dir, temp_output_dir
+    ):
+        """
+        DMs should have exactly 2 members. If not, fall back to conversation_id.
+        """
+        from processors.google_chat.preprocess import GoogleChatPreprocessor
+
+        export_dir = temp_export_dir / "google-exportuser-20240101"
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        # Profile for identity detection
+        profile_dir = export_dir / "Profile"
+        profile_dir.mkdir()
+        (profile_dir / "Profile.json").write_text(
+            json.dumps({"emails": [{"value": "export@example.com"}]})
+        )
+
+        chat_dir = export_dir / "Google Chat"
+        groups_dir = chat_dir / "Groups"
+        users_dir = chat_dir / "Users"
+
+        # DM folder with unexpected member count (only 1 member)
+        dm_dir = groups_dir / "DM badmembercount"
+        dm_dir.mkdir(parents=True)
+
+        group_info = {
+            "members": [
+                {"name": "Only One", "email": "only@example.com", "user_type": "Human"},
+            ]
+        }
+        (dm_dir / "group_info.json").write_text(json.dumps(group_info))
+
+        messages = {
+            "messages": [
+                {
+                    "creator": {"name": "Only One", "email": "only@example.com"},
+                    "created_date": "Thursday, November 3, 2016 at 11:59:50 AM UTC",
+                    "text": "Hello",
+                    "attached_files": [
+                        {"export_name": "photo.jpg", "original_name": "photo.jpg"}
+                    ],
+                }
+            ]
+        }
+        (dm_dir / "messages.json").write_text(json.dumps(messages))
+        write_media_file(dm_dir / "photo.jpg", "jpeg")
+
+        # Users directory
+        user_dir = users_dir / "User Only"
+        user_dir.mkdir(parents=True)
+        (user_dir / "user_info.json").write_text(
+            json.dumps({"user": {"email": "only@example.com"}})
+        )
+
+        preprocessor = GoogleChatPreprocessor(
+            export_path=export_dir,
+            output_dir=temp_output_dir,
+        )
+        result = preprocessor.run()
+        assert result is True
+
+        metadata_file = temp_output_dir / "metadata.json"
+        with open(metadata_file) as f:
+            metadata = json.load(f)
+
+        conversations = metadata.get("conversations", [])
+        assert len(conversations) == 1
+        # Should fall back to conversation_id
+        assert conversations[0]["conversation_name"] == "badmembercount"
+
+    def test_dm_title_falls_back_to_id_when_export_identity_unknown(
+        self, temp_export_dir, temp_output_dir
+    ):
+        """
+        When export identity cannot be determined, DM title should fall back
+        to conversation_id rather than guessing wrong.
+        """
+        from processors.google_chat.preprocess import GoogleChatPreprocessor
+
+        # Use dirname-based username detection (no Profile.json or user_info with email)
+        export_dir = temp_export_dir / "google-exportuser-20240101"
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        chat_dir = export_dir / "Google Chat"
+        groups_dir = chat_dir / "Groups"
+        users_dir = chat_dir / "Users"
+
+        # DM folder with two members, but no way to identify export user
+        dm_dir = groups_dir / "DM unknownidentity"
+        dm_dir.mkdir(parents=True)
+
+        group_info = {
+            "members": [
+                {"name": "Person A", "email": "a@example.com", "user_type": "Human"},
+                {"name": "Person B", "email": "b@example.com", "user_type": "Human"},
+            ]
+        }
+        (dm_dir / "group_info.json").write_text(json.dumps(group_info))
+
+        messages = {
+            "messages": [
+                {
+                    "creator": {"name": "Person A", "email": "a@example.com"},
+                    "created_date": "Thursday, November 3, 2016 at 11:59:50 AM UTC",
+                    "text": "Hello",
+                    "attached_files": [
+                        {"export_name": "photo.jpg", "original_name": "photo.jpg"}
+                    ],
+                }
+            ]
+        }
+        (dm_dir / "messages.json").write_text(json.dumps(messages))
+        write_media_file(dm_dir / "photo.jpg", "jpeg")
+
+        # Users directory with no useful email for identity
+        user_dir = users_dir / "User Someone"
+        user_dir.mkdir(parents=True)
+        # user_info.json without matching email
+        (user_dir / "user_info.json").write_text(
+            json.dumps({"user": {"name": "Someone"}})
+        )
+
+        preprocessor = GoogleChatPreprocessor(
+            export_path=export_dir,
+            output_dir=temp_output_dir,
+        )
+        result = preprocessor.run()
+        assert result is True
+
+        metadata_file = temp_output_dir / "metadata.json"
+        with open(metadata_file) as f:
+            metadata = json.load(f)
+
+        conversations = metadata.get("conversations", [])
+        assert len(conversations) == 1
+        # Should fall back to conversation_id since we can't identify export user
+        assert conversations[0]["conversation_name"] == "unknownidentity"

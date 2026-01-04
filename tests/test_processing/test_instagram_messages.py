@@ -46,6 +46,22 @@ class TestInstagramMessagesPreprocessing:
 
         assert "export_info" in output_metadata
         assert output_metadata["export_info"]["platform"] == "Instagram"
+        assert "conversations" in output_metadata
+
+        # Verify timestamp normalization accounts for Instagram export timezone behavior:
+        # export strings are timezone-less, but treated as fixed UTC-08:00 and converted to UTC.
+        # Fixture timestamps:
+        #   "Sep 22, 2017 6:35 am" -> 2017-09-22T14:35:00Z
+        #   "Sep 22, 2017 6:40 am" -> 2017-09-22T14:40:00Z
+        all_ts = []
+        for conv in output_metadata.get("conversations", []):
+            for msg in conv.get("messages", []):
+                ts = msg.get("timestamp")
+                if ts:
+                    all_ts.append(ts)
+
+        assert "2017-09-22T14:35:00Z" in all_ts
+        assert "2017-09-22T14:40:00Z" in all_ts
 
     def test_legacy_format_preprocessing(
         self, instagram_messages_processor, temp_export_dir, temp_output_dir
@@ -65,6 +81,21 @@ class TestInstagramMessagesPreprocessing:
         )
         result = preprocessor.run()
         assert result is True
+
+        metadata_file = temp_output_dir / "metadata.json"
+        assert metadata_file.exists()
+        output_metadata = json.loads(metadata_file.read_text())
+
+        # Legacy fixture includes a media message at "Sep 22, 2017, 6:35 AM"
+        # -> 2017-09-22T14:35:00Z after UTC-08:00 -> UTC conversion.
+        all_ts = []
+        for conv in output_metadata.get("conversations", []):
+            for msg in conv.get("messages", []):
+                ts = msg.get("timestamp")
+                if ts:
+                    all_ts.append(ts)
+
+        assert "2017-09-22T14:35:00Z" in all_ts
 
 
 class TestInstagramMessagesFixtureStructure:

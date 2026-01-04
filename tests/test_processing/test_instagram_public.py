@@ -299,6 +299,39 @@ class TestInstagramPublicRealisticFixtures:
         # Verify archived_posts structure
         assert (media_dir / "archived_posts" / "202212").exists()
 
+    def test_preprocessing_timestamp_timezone_behavior(
+        self, instagram_public_processor, temp_export_dir, temp_output_dir
+    ):
+        """Should treat official-export HTML timestamps as UTC-08:00 and convert to canonical UTC Z."""
+        from tests.fixtures.export_tree import copy_export_fixture
+        from processors.instagram_public_media.preprocess import InstagramPreprocessor
+
+        copy_export_fixture(
+            "instagram_public", "posts_and_archived_posts", temp_export_dir
+        )
+
+        preprocessor = InstagramPreprocessor(
+            export_path=temp_export_dir,
+            output_dir=temp_output_dir,
+        )
+        assert preprocessor.run() is True
+
+        metadata_file = temp_output_dir / "metadata.json"
+        assert metadata_file.exists()
+        output_metadata = json.loads(metadata_file.read_text())
+        posts = output_metadata.get("media", [])
+
+        # Fixture HTML timestamps:
+        #   "Jan 15, 2023 5:30 pm" -> 2023-01-16T01:30:00Z
+        #   "Feb 20, 2023 2:15 pm" -> 2023-02-20T22:15:00Z
+        captions_to_ts = {p.get("caption"): p.get("timestamp") for p in posts}
+
+        assert (
+            captions_to_ts.get("Beautiful sunset #photography #nature")
+            == "2023-01-16T01:30:00Z"
+        )
+        assert captions_to_ts.get("Check out this video!") == "2023-02-20T22:15:00Z"
+
     def test_yyyymm_folder_organization(
         self, instagram_public_processor, temp_export_dir, temp_output_dir
     ):

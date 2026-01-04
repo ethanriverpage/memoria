@@ -57,6 +57,8 @@ from common.dedup.description import (
     format_timestamp,
     format_primary_source,
     format_secondary_source,
+    filter_secondary_sources,
+    deduplicate_secondary_entries,
 )
 from common.dedup.service import (
     DeduplicationService,
@@ -65,6 +67,7 @@ from common.dedup.service import (
     filter_primary_files,
     get_merged_description_for_file,
     get_merged_metadata_for_hash,
+    get_primary_source_for_hash,
     get_secondary_reference,
     build_dedup_references,
     save_dedup_metadata,
@@ -119,6 +122,8 @@ __all__ = [
     "format_timestamp",
     "format_primary_source",
     "format_secondary_source",
+    "filter_secondary_sources",
+    "deduplicate_secondary_entries",
     # Service
     "DeduplicationService",
     "save_manifest",
@@ -126,6 +131,7 @@ __all__ = [
     "filter_primary_files",
     "get_merged_description_for_file",
     "get_merged_metadata_for_hash",
+    "get_primary_source_for_hash",
     "get_secondary_reference",
     "build_dedup_references",
     "save_dedup_metadata",

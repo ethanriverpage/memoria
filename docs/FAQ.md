@@ -413,7 +413,6 @@ Check:
 ### Immich upload fails with "unauthorized"
 
 - Verify your API key is correct
-- Check that `IMMICH_INSTANCE_URL` includes `/api` at the end
 - Ensure your Immich server is accessible from your machine
 
 ### "Too many open files" error

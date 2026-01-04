@@ -49,6 +49,14 @@ For detailed technical comparison, see [Technical Reference: Export Format Compa
 > - 24-hour stories that weren't saved to archive
 >
 > This is a limitation of Instagram's export system, not Memoria. If you're missing media from conversations, this is likely why.
+>
+> **Timestamps: missing timezone marker (but not local time)**
+>
+> Instagram’s **official export** (Messages + Public Media) stores timestamps as “local-looking” strings like `Oct 02, 2025 2:39 pm` **without any explicit timezone** (`UTC`, `Z`, `+/-HH:MM`).
+>
+> However, spot-checking against Instagram’s in-app UTC timestamps indicates these export timestamps **behave like a fixed UTC−08:00 offset** (i.e., subtracting 8 hours from an in-app `...Z` timestamp yields the export’s wall-clock time), and they **do not appear to follow DST**.
+>
+> Practical implication: treat official-export timestamps as **timezone-less strings** that are *numerically consistent with UTC−08:00*, not necessarily your device’s local time.
 
 ---
 
@@ -118,6 +126,19 @@ instagram-username-YYYYMMDD/
   - Conversation names
   - Participant lists (for groups)
 
+### Owner identity (`"me"`) and display names
+
+Instagram’s HTML export for Messages often uses the **account display name** as the sender string inside `message_*.html`, not the `@username`.
+
+Memoria’s desired behavior is to treat the export owner as `"me"` consistently across processors. To do that robustly for Instagram Messages, we derive **owner aliases** from `personal_information.html`:
+
+- **Username**: the account `@handle` (without `@`)
+- **Name**: the account display name (used as sender in many message exports)
+
+When the parsed sender matches one of these aliases, it should be normalized to `"me"`.
+
+See: `docs/bugs/instagram-messages-me-display-name.md`.
+
 ### Required Elements
 
 - Messages inbox directory (either location):
@@ -148,11 +169,11 @@ For images, the following metadata is embedded:
 ```
 ImageDescription: Source: Instagram/username/messages
 Conversation: "Conversation Name"
-Sender: "Sender Name"
+Sender: "Sender Name"  (or `"me"` when the sender matches the export owner)
 
 IPTC:Caption-Abstract: Source: Instagram/username/messages
 Conversation: "Conversation Name"
-Sender: "Sender Name"
+Sender: "Sender Name"  (or `"me"` when the sender matches the export owner)
 ```
 
 For videos, equivalent metadata is embedded in the `Comment` and `Description` fields.
@@ -526,7 +547,7 @@ Instagram messages are stored as **HTML files** (not JSON). Each `message_N.html
 | Field | Extraction Method | Example |
 |-------|------------------|---------|
 | Conversation Title | `<title>` tag | `"John Doe"` or `"Family Group"` |
-| Sender | `<h2>` or `<div>` with class `_3-95 _2pim _a6-h _a6-i` | `"your_username"` |
+| Sender | `<h2>` or `<div>` with class `_3-95 _2pim _a6-h _a6-i` | `"Jane Doe"` (display name) or `"me"` after normalization |
 | Timestamp | `<div>` with class `_3-94 _a6-o` | `"Sep 22, 2017 6:33 am"` |
 | Message Text | `<div>` within `_3-95 _a6-p` container | `"Check this out!"` |
 | Photo Attachments | `<a>` and `<img>` tags with `href`/`src` | `photos/123456789.jpg` |
@@ -538,6 +559,12 @@ Instagram messages are stored as **HTML files** (not JSON). Each `message_N.html
 |---------|--------|---------|
 | Current (2023+) | `Mon DD, YYYY H:MM am/pm` | `Sep 22, 2017 6:33 am` |
 | Legacy (Pre-2023) | `Mon DD, YYYY, H:MM AM/PM` | `Sep 22, 2017, 6:33 AM` |
+
+### Timezone semantics (official export)
+
+- **Missing TZ marker**: the HTML timestamp strings contain no `UTC`, `Z`, or numeric offset.
+- **Empirically UTC−08:00**: comparing exports to in-app ISO timestamps (UTC) suggests the export uses a fixed UTC−08:00 wall-clock time.
+- **Memoria note**: preprocessors interpret these timezone-less strings as UTC−08:00 and convert them to canonical UTC `...Z`. If you have multiple Instagram exports (or compare to other sources), older runs produced different timestamps before this behavior was understood.
 
 ### Conversation Types
 
@@ -603,3 +630,11 @@ Memoria automatically detects which format is present and handles both:
   - Media structure (`media/posts/` or `media/archived_posts/` with YYYYMM subfolders)
   - HTML metadata directory (`your_instagram_activity/media/` or `content/`) with at least one `.html` file
 - Preprocessing parses HTML metadata files to extract captions, timestamps, and GPS coordinates
+
+### Timezone semantics (official export)
+
+Instagram’s official export for public media uses the same style of timezone-less timestamp strings as Messages.
+
+- **Missing TZ marker**: the HTML timestamp strings contain no `UTC`, `Z`, or numeric offset.
+- **Empirically UTC−08:00**: comparing exports to in-app ISO timestamps (UTC) suggests the export uses a fixed UTC−08:00 wall-clock time (not DST-aware).
+- **Memoria note**: preprocessors interpret these timezone-less strings as UTC−08:00 and convert them to canonical UTC `...Z`. If you see date differences between Instagram exports and other sources, this may be why.

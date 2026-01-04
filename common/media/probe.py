@@ -256,8 +256,10 @@ def _extract_rotation(stream: dict) -> Optional[int]:
                 try:
                     rot = side_data.get("rotation")
                     if rot is not None:
-                        # FFprobe reports negative rotation for displaymatrix
-                        rotation = (-int(float(rot))) % 360
+                        # Normalize rotation to 0-359 range
+                        # Negative values (e.g., -90) become positive equivalents
+                        # (e.g., 270) via modulo
+                        rotation = int(float(rot)) % 360
                         if rotation == 0:
                             rotation = None
                 except (ValueError, TypeError):

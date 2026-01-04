@@ -32,15 +32,15 @@ IMMICH_INSTANCE_URL=http://192.168.1.216:2283/api
 IMMICH_API_KEY=YOUR_API_KEY
 IMMICH_UPLOAD_CONCURRENCY=4
 IMMICH_SKIP_HASH=true
-IMMICH_IGNORE_PATTERNS=**/issues/**,**/needs matching/**
+IMMICH_IGNORE_PATTERNS=issues/**,**/*matching/**
 ```
 
 ### Default Ignore Patterns
 
 By default, the following folders are automatically excluded from uploads:
 
-- `**/issues/**` - Folders named "issues"
-- `**/needs matching/**` - Folders named "needs matching"
+- `issues/**` - The top-level "issues" folder
+- `**/*matching/**` - Folders ending with "matching" (e.g., "needs matching")
 
 You can override these defaults by setting `IMMICH_IGNORE_PATTERNS` in your `.env` file or environment variables.
 

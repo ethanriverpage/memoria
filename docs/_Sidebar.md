@@ -31,6 +31,5 @@
 
 ### Development
 
-- [Standalone Tools](Standalone-Tools)
 - [Adding Processors](Adding-Processors)
 - [vCard Schema](vCard-Schema)
