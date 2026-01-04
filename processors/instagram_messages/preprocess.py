@@ -40,14 +40,14 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
         self,
         export_path: Path,
         output_dir: Optional[Path] = None,
-        workers: Optional[int] = None,
+        threads: Optional[int] = None,
         final_output_dir: Optional[Path] = None,
     ):
         super().__init__(
             processor_name="Instagram Messages",
             export_path=export_path,
             output_dir=output_dir,
-            workers=workers,
+            threads=threads,
             final_output_dir=final_output_dir,
         )
 
@@ -547,9 +547,9 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
         log.found_items(len(conversation_list), "conversations")
 
         log.logger.info(
-            "Processing %d conversations (using %d workers)...",
+            "Processing %d conversations (using %d threads)...",
             len(conversation_list),
-            self.workers,
+            self.threads,
         )
 
         def on_conversation_error(tid: Any, e: Exception) -> None:
@@ -564,7 +564,7 @@ class InstagramMessagesPreprocessor(PreprocessorBase):
         all_conversations = process_parallel_threaded(
             tasks=conversation_list,
             worker_fn=self._process_single_conversation,
-            workers=self.workers,
+            threads=self.threads,
             phase=PHASE_PREPROCESS,
             description="Parsing conversations",
             task_id_fn=lambda t: t[0],  # conversation_id

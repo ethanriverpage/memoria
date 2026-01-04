@@ -318,8 +318,8 @@ See [Immich Upload](Immich-Upload) for configuration options.
 Google Photos libraries can be very large. Use parallel processing:
 
 ```bash
-# Process with 8 parallel workers
-./memoria.py /path/to/google-export -o /path/to/output --workers 8
+# Process with 8 parallel threads
+./memoria.py /path/to/google-export -o /path/to/output --threads 8
 ```
 
 See [Parallel Processing](Parallel-Processing) for optimization tips.

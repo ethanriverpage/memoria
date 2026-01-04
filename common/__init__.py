@@ -43,7 +43,7 @@ from .files.timestamps import update_file_timestamps
 # ============================================================================
 # Configuration (from config subpackage)
 # ============================================================================
-from .config.runtime import default_worker_count
+from .config.runtime import default_thread_count
 from .config.dependencies import (
     check_exiftool,
     check_ffmpeg,
@@ -76,7 +76,7 @@ from .output.summary import print_processing_summary, print_preprocessing_stats
 # ============================================================================
 # Processing utilities (from processing subpackage)
 # ============================================================================
-from .processing import temp_processing_directory, process_batches_parallel
+from .processing import temp_processing_directory
 
 # ============================================================================
 # Failure tracking (from failures subpackage)
@@ -110,7 +110,7 @@ __all__ = [
     # Username detection
     "detect_from_dirname",
     # Configuration
-    "default_worker_count",
+    "default_thread_count",
     # Dependencies
     "check_exiftool",
     "check_ffmpeg",
@@ -126,7 +126,6 @@ __all__ = [
     "PHASE_PROCESS",
     # Processing
     "temp_processing_directory",
-    "process_batches_parallel",
     # Summary
     "print_processing_summary",
     "print_preprocessing_stats",

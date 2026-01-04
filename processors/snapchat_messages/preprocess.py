@@ -37,7 +37,7 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
         self,
         export_path: Path,
         output_dir: Optional[Path] = None,
-        workers: Optional[int] = None,
+        threads: Optional[int] = None,
         final_output_dir: Optional[Path] = None,
         username_override: Optional[str] = None,
     ):
@@ -45,7 +45,7 @@ class SnapchatMessagesPreprocessor(PreprocessorBase):
             processor_name="Snapchat Messages",
             export_path=export_path,
             output_dir=output_dir,
-            workers=workers,
+            threads=threads,
             final_output_dir=final_output_dir,
         )
 

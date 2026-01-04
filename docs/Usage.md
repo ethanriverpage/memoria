@@ -13,8 +13,8 @@ Complete reference for using Memoria to process social media exports.
 | Upload only (no processing) | `./memoria.py --upload-only /processed` |
 | See available processors | `./memoria.py --list-processors` |
 | Enable verbose logging | `./memoria.py /path/to/export --verbose` |
-| Control parallelism | `./memoria.py /path/to/export --workers 8` |
-| Process exports in parallel | `./memoria.py --originals /exports --parallel-exports 4` |
+| Control thread count | `./memoria.py /path/to/export --threads 8` |
+| Process exports in parallel | `./memoria.py --originals /exports --parallel` |
 
 ## Table of Contents
 
@@ -91,20 +91,26 @@ Enable verbose logging. Use `-v` for INFO level or `-vv` for DEBUG level with fu
 
 See [Logging](Logging) for details.
 
-**`-w, --workers N`**
-Number of parallel workers for processing media files within a single export.
+**`-t, --threads N`**
+Number of threads for within-export processing.
 
-Default: CPU count - 1
+Default: auto-calculated based on mode (CPU count - 1 for single export, sqrt(CPU budget) for parallel mode).
 
 ```bash
-./memoria.py /path/to/export --workers 8
+./memoria.py /path/to/export --threads 8
 ```
 
-**`--parallel-exports N`**
-Process N exports simultaneously when using `--originals`.
+**`--parallel`**
+Enable parallel export processing when using `--originals`. Process count is auto-calculated based on CPU cores and thread count.
 
 ```bash
-./memoria.py --originals /path/to/exports --parallel-exports 2
+./memoria.py --originals /path/to/exports --parallel
+```
+
+Override process count via environment variable:
+
+```bash
+MEMORIA_PROCESSES=4 ./memoria.py --originals /path/to/exports --parallel
 ```
 
 See [Parallel Processing](Parallel-Processing) for details.
@@ -310,17 +316,17 @@ imessage-mac-John_Smith-20220426_183520.jpg    # iMessage
 
 ### Within-Export Parallelism
 
-Control workers processing files within a single export:
+Control threads processing files within a single export:
 
 ```bash
-./memoria.py /path/to/export --workers 8
+./memoria.py /path/to/export --threads 8
 ```
 
 Higher values = faster processing but more CPU/memory usage.
 
 **Recommendations**:
 
-- Default (CPU count - 1): Good for most cases
+- Default (auto): Good for most cases
 - Lower (2-4): For systems with limited resources or during other tasks
 - Higher (8-16): For powerful systems processing large exports
 
@@ -329,16 +335,22 @@ Higher values = faster processing but more CPU/memory usage.
 Process multiple exports simultaneously:
 
 ```bash
-./memoria.py --originals /path/to/exports --parallel-exports 2
+./memoria.py --originals /path/to/exports --parallel
 ```
 
-This processes 2 exports at once, each using its own worker pool.
+This enables parallel processing with an auto-calculated process count based on CPU cores and thread count.
+
+**Environment Variables**:
+
+- `MEMORIA_PROCESSES`: Override the auto-calculated process count
+- `MEMORIA_THREADS`: Set default thread count (overridden by `--threads`)
+- `MEMORIA_PARALLEL`: Enable parallel mode by default (`true`/`false`)
 
 **Recommendations**:
 
 - Sequential (default): Safest, lowest memory usage
-- 2-3 parallel: Good balance for most systems
-- 4+ parallel: Only for powerful systems with lots of RAM
+- `--parallel`: Good balance for most systems (auto-sizes)
+- `MEMORIA_PROCESSES=4`: Override for powerful systems with lots of RAM
 
 See [Parallel Processing](Parallel-Processing) for detailed guidance.
 
@@ -508,9 +520,9 @@ Process multiple exports with different settings:
 #!/bin/bash
 
 # Process each export with custom settings
-./memoria.py /exports/google-user1-20250526 -o /output --workers 8
-./memoria.py /exports/instagram-user2-20251007 -o /output --workers 4
-./memoria.py /exports/snapchat-user3-20251007 -o /output --workers 6
+./memoria.py /exports/google-user1-20250526 -o /output --threads 8
+./memoria.py /exports/instagram-user2-20251007 -o /output --threads 4
+./memoria.py /exports/snapchat-user3-20251007 -o /output --threads 6
 
 # Upload all at once
 ./memoria.py /exports --upload-only /output
@@ -532,10 +544,10 @@ While there's no formal dry-run mode, you can:
 
 ## Performance Tips
 
-1. **Workers**: Start with default, increase if CPU usage is low
+1. **Threads**: Start with default (auto), increase if CPU usage is low
 2. **Preprocessing Directory**: Use SSD storage for `PREPROCESSING_DIR` if available
 3. **Upload Concurrency**: Increase for faster uploads if network can handle it
-4. **Parallel Exports**: Only use if you have sufficient RAM (2-4 GB per export)
+4. **Parallel Mode**: Use `--parallel` if you have sufficient RAM (2-4 GB per export)
 5. **Disk Space**: Ensure 2x the export size is available for temporary files
 
 ## Common Workflows
@@ -557,8 +569,8 @@ cat logs/memoria_*.log
 ### Batch Processing Multiple Accounts
 
 ```bash
-# Process all exports in parallel
-./memoria.py --originals /all-exports -o /output --parallel-exports 2
+# Process all exports in parallel (auto-sized)
+./memoria.py --originals /all-exports -o /output --parallel
 ```
 
 ### Separate Processing and Uploading

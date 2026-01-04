@@ -142,14 +142,14 @@ class GoogleVoicePreprocessor(PreprocessorBase):
         self,
         export_path: Path,
         output_dir: Optional[Path] = None,
-        workers: Optional[int] = None,
+        threads: Optional[int] = None,
         final_output_dir: Optional[Path] = None,
     ):
         super().__init__(
             processor_name="Google Voice",
             export_path=export_path,
             output_dir=output_dir,
-            workers=workers,
+            threads=threads,
             final_output_dir=final_output_dir,
         )
 

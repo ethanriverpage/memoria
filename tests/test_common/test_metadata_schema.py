@@ -415,7 +415,7 @@ class TestCatalogFromPreprocessed:
             catalog_from_preprocessed(
                 processor_name="Test",
                 input_path=temp_media_files_export,
-                workers=1,
+                threads=1,
             )
         )
         assert len(entries) == 2
@@ -430,7 +430,7 @@ class TestCatalogFromPreprocessed:
             catalog_from_preprocessed(
                 processor_name="Test",
                 input_path=temp_conversations_export,
-                workers=1,
+                threads=1,
             )
         )
         assert len(entries) == 2
@@ -444,7 +444,7 @@ class TestCatalogFromPreprocessed:
         result = catalog_from_preprocessed(
             processor_name="Test",
             input_path=temp_media_files_export,
-            workers=1,
+            threads=1,
         )
         assert isinstance(result, types.GeneratorType)
 
@@ -467,7 +467,7 @@ class TestCatalogFromPreprocessed:
 
         entries = list(
             catalog_from_preprocessed(
-                processor_name="Test", input_path=tmp_path, workers=1
+                processor_name="Test", input_path=tmp_path, threads=1
             )
         )
         assert len(entries) == 0

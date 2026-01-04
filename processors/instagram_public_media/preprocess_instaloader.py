@@ -50,14 +50,14 @@ class InstaloaderFormatPreprocessor(PreprocessorBase):
         self,
         export_path: Path,
         output_dir: Optional[Path] = None,
-        workers: Optional[int] = None,
+        threads: Optional[int] = None,
         final_output_dir: Optional[Path] = None,
     ):
         super().__init__(
             processor_name="Instagram Public Media",
             export_path=export_path,
             output_dir=output_dir,
-            workers=workers,
+            threads=threads,
             final_output_dir=final_output_dir,
         )
 
@@ -454,7 +454,7 @@ class InstaloaderFormatPreprocessor(PreprocessorBase):
         """
         all_posts = []
 
-        logger.info("Processing posts (using %d workers)...", self.workers)
+        logger.info("Processing posts (using %d threads)...", self.threads)
 
         catalog_items = list(catalog.items())
 
@@ -470,7 +470,7 @@ class InstaloaderFormatPreprocessor(PreprocessorBase):
         all_posts = process_parallel_threaded(
             tasks=catalog_items,
             worker_fn=self._process_single_post,
-            workers=self.workers,
+            threads=self.threads,
             phase=PHASE_PREPROCESS,
             description="Parsing posts",
             task_id_fn=lambda t: t[0],  # post_name

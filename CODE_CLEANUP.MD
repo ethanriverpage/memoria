@@ -176,10 +176,10 @@ These findings have moderate impact on maintainability, performance, or code qua
     def preprocess(input_dir: str, cache_dir: str, **kwargs) -> Optional[str]:
         input_path = Path(input_dir)
         cache_path = Path(cache_dir)
-        workers = kwargs.get("workers")
+        threads = kwargs.get("threads")
         logger.info("Preprocessing X export to: %s", cache_path)
         cache_path.mkdir(parents=True, exist_ok=True)
-        preprocessor = XPreprocessor(export_path=input_path, output_dir=cache_path, workers=workers)
+        preprocessor = XPreprocessor(export_path=input_path, output_dir=cache_path, threads=threads)
         if preprocessor.run():
             return str(cache_path)
         return None
@@ -394,7 +394,7 @@ These findings have moderate impact on maintainability, performance, or code qua
 
     ```python
     # Current: inline in memoria.py
-    for entry in processor.build_catalog(catalog_dir, workers=workers):
+    for entry in processor.build_catalog(catalog_dir, threads=threads):
         if "_processor" not in entry:
             entry["_processor"] = processor_name
         batch.append(entry)

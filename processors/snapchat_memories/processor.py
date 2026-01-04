@@ -27,7 +27,7 @@ from common.media.exiftool import (
     MetadataWriteRequest,
     build_datetime_tags,
 )
-from common.config.runtime import default_worker_count
+from common.config.runtime import default_thread_count
 from common.dedup.service import get_canonical_timestamp, save_dedup_metadata
 from common.detection import detect_from_dirname
 from common.failures import FailureTracker
@@ -200,7 +200,7 @@ class SnapchatMemoriesProcessor(ProcessorBase):
         """Run preprocessing on raw Snapchat Memories export."""
         input_path = Path(input_dir)
         cache_path = Path(cache_dir)
-        workers = kwargs.get("workers")
+        threads = kwargs.get("threads")
 
         # Check for consolidated export structure (memories/ subdirectory)
         # Extract username from parent directory for consolidated exports
@@ -220,7 +220,7 @@ class SnapchatMemoriesProcessor(ProcessorBase):
         preprocessor = SnapchatMemoriesPreprocessor(
             export_path=input_path,
             output_dir=cache_path,
-            workers=workers,
+            threads=threads,
             username_override=username_override,
         )
 
@@ -236,13 +236,13 @@ class SnapchatMemoriesProcessor(ProcessorBase):
 
         Args:
             input_dir: Path to preprocessed input directory
-            **kwargs: Additional arguments (workers)
+            **kwargs: Additional arguments (threads)
 
         Yields:
             Catalog entries with processor name and file data.
         """
         input_path = Path(input_dir)
-        workers = kwargs.get("workers", 4)
+        threads = kwargs.get("threads", 4)
 
         def extract_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
             """Extract metadata from preprocessed entry."""
@@ -254,7 +254,7 @@ class SnapchatMemoriesProcessor(ProcessorBase):
         catalog_iter = SnapchatMemoriesProcessor.catalog_from_preprocessed_if_available(
             processor_name="Snapchat Memories",
             input_path=input_path,
-            workers=workers,
+            threads=threads,
             metadata_extractor=extract_metadata,
             media_files_key="media_files",
         )
@@ -290,7 +290,7 @@ class SnapchatMemoriesProcessor(ProcessorBase):
         return _process_preprocessed(
             input_path=input_path,
             output_dir=Path(output_dir),
-            workers=kwargs.get("workers"),
+            threads=kwargs.get("threads"),
             dedup_manifest=dedup_manifest,
         )
 
@@ -604,7 +604,7 @@ def _create_memory_file(args_tuple):
 def _process_preprocessed(
     input_path: Path,
     output_dir: Path,
-    workers: Optional[int] = None,
+    threads: Optional[int] = None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Process Snapchat Memories from preprocessed metadata.
@@ -612,7 +612,7 @@ def _process_preprocessed(
     Args:
         input_path: Path to preprocessed directory with metadata.json
         output_dir: Output directory for processed files
-        workers: Number of parallel workers (None = auto-detect)
+        threads: Number of parallel threads (None = auto-detect)
         dedup_manifest: Optional deduplication manifest
 
     Returns:
@@ -659,9 +659,9 @@ def _process_preprocessed(
     # Create output directory
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    # Determine number of workers
-    num_workers = workers if workers is not None else default_worker_count()
-    log.using_workers(num_workers)
+    # Determine number of threads
+    num_threads = threads if threads is not None else default_thread_count()
+    log.using_threads(num_threads)
 
     # Build hash lookup from dedup_manifest
     hash_lookup: Dict[str, str] = {}
@@ -756,10 +756,10 @@ def _process_preprocessed(
     # Phase 1: Create all files with overlays in parallel
     log.processing_start(str(output_dir))
 
-    results = SnapchatMemoriesProcessor.process_items_parallel(
+    results = SnapchatMemoriesProcessor.process_items_threaded(
         tasks=processing_tasks,
         worker_fn=_create_memory_file,
-        num_workers=num_workers,
+        num_threads=num_threads,
         description="Creating files",
     )
 

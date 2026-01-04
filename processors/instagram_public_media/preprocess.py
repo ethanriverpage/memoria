@@ -52,14 +52,14 @@ class InstagramPreprocessor(PreprocessorBase):
         self,
         export_path: Path,
         output_dir: Optional[Path] = None,
-        workers: Optional[int] = None,
+        threads: Optional[int] = None,
         final_output_dir: Optional[Path] = None,
     ):
         super().__init__(
             processor_name="Instagram Public Media",
             export_path=export_path,
             output_dir=output_dir,
-            workers=workers,
+            threads=threads,
             final_output_dir=final_output_dir,
         )
 
@@ -612,7 +612,7 @@ class InstagramPreprocessor(PreprocessorBase):
         """
         all_posts = []
 
-        logger.info("Processing HTML files (using %d workers)...", self.workers)
+        logger.info("Processing HTML files (using %d threads)...", self.threads)
 
         html_files = list(self.MEDIA_TYPES.items())
 
@@ -628,7 +628,7 @@ class InstagramPreprocessor(PreprocessorBase):
         results = process_parallel_threaded(
             tasks=html_files,
             worker_fn=self._process_single_html_file,
-            workers=self.workers,
+            threads=self.threads,
             phase=PHASE_PREPROCESS,
             description="Parsing HTML files",
             task_id_fn=lambda t: t[0],  # html_basename

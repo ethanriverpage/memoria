@@ -434,7 +434,8 @@ class TestCreateVideoWithOverlay:
             test_overlay,
             output_path,
             metadata=metadata,
-            export_username="testuser",
+            # Description construction is handled by the calling processor; overlay only embeds it.
+            description="testuser",
         )
 
         assert result is True
@@ -456,7 +457,9 @@ class TestCreateVideoWithOverlay:
             test_overlay,
             output_path,
             metadata=metadata,
-            export_username="testuser",
+            # Previously overlay constructed a description using export context.
+            # Now callers provide the pre-built description for embedding.
+            description="memories/testuser",
         )
 
         assert result is True
@@ -488,7 +491,7 @@ class TestCreateVideoWithOverlay:
             test_overlay,
             output_path,
             metadata=metadata,
-            export_username="testuser",
+            description="messages/friend_user\nsender=Friend User\ncontent=Check this out",
         )
 
         assert result is True

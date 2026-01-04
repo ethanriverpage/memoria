@@ -449,12 +449,12 @@ class TestProcessorLogger:
         assert "TestProcessor" in caplog.text
         assert caplog.records[0].levelno == logging.DEBUG
 
-    def test_using_workers_debug_level(
+    def test_using_threads_debug_level(
         self, proc_logger: ProcessorLogger, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Should log worker count at DEBUG level."""
+        """Should log thread count at DEBUG level."""
         with caplog.at_level(logging.DEBUG):
-            proc_logger.using_workers(8)
+            proc_logger.using_threads(8)
 
         assert "8" in caplog.text
         assert caplog.records[0].levelno == logging.DEBUG

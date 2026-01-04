@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 import json
 
-from common.config.runtime import default_worker_count, parse_bool_env
+from common.config.runtime import default_thread_count, parse_bool_env
 from common.dedup.config import get_dedup_config
 from common.dedup.database import get_thread_db
 from common.dedup.hashing import compute_content_hash
@@ -258,7 +258,7 @@ class PreprocessorBase(ABC):
         processor_name: str,
         export_path: Path,
         output_dir: Optional[Path],
-        workers: Optional[int] = None,
+        threads: Optional[int] = None,
         final_output_dir: Optional[Path] = None,
     ):
         """Initialize preprocessor with common setup.
@@ -267,7 +267,7 @@ class PreprocessorBase(ABC):
             processor_name: Human-readable name for logging and tracking
             export_path: Path to export directory to process
             output_dir: Output directory for processed files (required)
-            workers: Number of parallel workers (default: CPU count - 1)
+            threads: Number of parallel threads (default: auto)
             final_output_dir: Final output directory for failure tracking
         """
         self.processor_name = processor_name
@@ -307,7 +307,7 @@ class PreprocessorBase(ABC):
         )
 
         # Threading configuration
-        self.workers = workers if workers is not None else default_worker_count()
+        self.threads = threads if threads is not None else default_thread_count()
 
         # Thread-safe locks for shared data structures
         self.stats_lock = Lock()
@@ -663,7 +663,7 @@ class PreprocessorBase(ABC):
     def hash_with_dedup(
         self,
         tasks: List[CopyTask],
-        workers: Optional[int] = None,
+        threads: Optional[int] = None,
         show_progress: bool = True,
     ) -> Dict[Path, HashResult]:
         """Parallel batch hashing with deduplication (no file copying).
@@ -675,7 +675,7 @@ class PreprocessorBase(ABC):
 
         Args:
             tasks: List of CopyTask objects describing files to process.
-            workers: Number of parallel workers (default: self.workers).
+            threads: Number of parallel threads (default: self.threads).
             show_progress: Whether to show progress bar.
 
         Returns:
@@ -684,8 +684,8 @@ class PreprocessorBase(ABC):
         if not tasks:
             return {}
 
-        if workers is None:
-            workers = self.workers
+        if threads is None:
+            threads = self.threads
 
         # Get database path for hash caching
         config = get_dedup_config()
@@ -701,7 +701,7 @@ class PreprocessorBase(ABC):
         cache_entries_to_write: List[Dict[str, Any]] = []
         cache_hits = 0
 
-        with ThreadPoolExecutor(max_workers=workers) as executor:
+        with ThreadPoolExecutor(max_workers=threads) as executor:
             futures = {
                 executor.submit(_hash_single_file, task, db_path): task
                 for task in tasks

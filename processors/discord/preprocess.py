@@ -112,7 +112,7 @@ class DiscordPreprocessor(PreprocessorBase):
         self,
         export_path: Path,
         output_dir: Optional[Path] = None,
-        workers: Optional[int] = None,
+        threads: Optional[int] = None,
         final_output_dir: Optional[Path] = None,
     ):
         """Initialize Discord preprocessor.
@@ -120,14 +120,14 @@ class DiscordPreprocessor(PreprocessorBase):
         Args:
             export_path: Path to Discord export directory
             output_dir: Output directory for processed files
-            workers: Number of parallel workers for downloads
+            threads: Number of parallel threads for downloads
             final_output_dir: Final output directory for failure tracking
         """
         super().__init__(
             processor_name="Discord",
             export_path=export_path,
             output_dir=output_dir,
-            workers=workers,
+            threads=threads,
             final_output_dir=final_output_dir,
         )
 
@@ -735,7 +735,7 @@ class DiscordPreprocessor(PreprocessorBase):
         results = process_parallel_threaded(
             tasks=download_tasks,
             worker_fn=self._download_single_attachment,
-            workers=self.workers,
+            threads=self.threads,
             phase=PHASE_PREPROCESS,
             description="Downloading attachments",
         )

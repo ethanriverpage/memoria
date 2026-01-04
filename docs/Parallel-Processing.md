@@ -4,60 +4,75 @@
 
 The `memoria.py` script supports parallel processing when using the `--originals` flag, allowing you to process multiple export directories simultaneously for significant performance improvements.
 
-**New in this version:** Automatic upload queuing ensures Immich uploads happen sequentially while processing continues in parallel. See [Immich Upload](Immich-Upload#upload-queuing-in-parallel-mode) for details.
+**Key concepts:**
+
+- **Threads** (`--threads`): Control within-export parallelism (how many threads work on a single export)
+- **Parallel mode** (`--parallel`): Enable multi-export parallelism (process multiple exports simultaneously)
+- **Process count**: Auto-calculated based on CPU cores and thread count, or override via `MEMORIA_PROCESSES`
+
+**Automatic upload queuing** ensures Immich uploads happen sequentially while processing continues in parallel. See [Immich Upload](Immich-Upload#upload-queuing-in-parallel-mode) for details.
 
 ## Usage
 
 ### Basic Parallel Processing
 
 ```bash
-# Process 2 exports in parallel
-./memoria.py --originals /path/to/exports -o /path/to/output --parallel-exports 2
-
-# Process 4 exports in parallel
-./memoria.py --originals /path/to/exports -o /path/to/output --parallel-exports 4
+# Enable parallel processing (auto-sizes based on CPU and threads)
+./memoria.py --originals /path/to/exports -o /path/to/output --parallel
 ```
 
-### With Worker Adjustment
+### With Thread Adjustment
 
 ```bash
-# 2 exports with 7 workers each = 16 total processes (good for 16-core CPU)
-./memoria.py --originals /path/to/exports -o /path/to/output --parallel-exports 2 --workers 7
-
-# 4 exports with 3 workers each = 16 total processes (balanced)
-./memoria.py --originals /path/to/exports -o /path/to/output --parallel-exports 4 --workers 3
+# Parallel with custom thread count per export
+./memoria.py --originals /path/to/exports -o /path/to/output --parallel --threads 4
 ```
 
-## Performance Considerations
+### With Process Count Override
 
-### CPU Core Allocation
-
-The script automatically calculates total process count and warns if you're over-subscribing:
-
-```
-Total Processes = parallel_exports × (workers_per_export + 1)
+```bash
+# Override auto-calculated process count via environment variable
+MEMORIA_PROCESSES=4 ./memoria.py --originals /path/to/exports -o /path/to/output --parallel
 ```
 
-**Example on 16-core system:**
+## How Auto-Sizing Works
 
-- `--parallel-exports 2 --workers 7` → 2 × 8 = 16 processes ✓ Good
-- `--parallel-exports 4 --workers 3` → 4 × 4 = 16 processes ✓ Good
-- `--parallel-exports 4 --workers 15` → 4 × 16 = 64 processes ✗ Over-subscribed
+### Thread Count (`--threads`)
 
-### Over-Subscription Warnings
+When `--threads` is not specified:
 
-If you exceed CPU cores by 50%, the script will display:
+- **Single export mode**: `threads = CPU_COUNT - 1` (maximize throughput)
+- **Parallel mode** (`--parallel`): `threads = sqrt(CPU_COUNT - 1)` (balance with processes)
+
+### Process Count (parallel mode)
+
+Auto-calculated as:
 
 ```
-WARNING: Running 4 exports with 15 workers each
-         will create ~64 processes on 16 CPU cores
-         This may cause performance degradation due to over-subscription.
-
-SUGGESTION: Try --parallel-exports 4 --workers 3
-            or reduce --parallel-exports to 1
+cpu_budget = CPU_COUNT - 1
+auto_procs = cpu_budget // threads
+procs = min(auto_procs, num_exports, 8)
 ```
 
-### When to Use Parallel Processing
+The cap at 8 prevents excessive process creation on large export sets.
+
+**Example on 16-core system with 4 exports:**
+
+| Threads | Auto Processes | Total Concurrent Work |
+|---------|----------------|----------------------|
+| Auto (4) | 3 | 3 exports x 4 threads |
+| 2 | 7 | 7 exports x 2 threads (capped at 4) |
+| 8 | 1 | 1 export x 8 threads |
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MEMORIA_THREADS` | Default thread count (overridden by `--threads`) | Auto |
+| `MEMORIA_PARALLEL` | Enable parallel mode by default (`true`/`false`) | `false` |
+| `MEMORIA_PROCESSES` | Override auto-calculated process count | Auto |
+
+## When to Use Parallel Processing
 
 **Good use cases:**
 
@@ -68,32 +83,32 @@ SUGGESTION: Try --parallel-exports 4 --workers 3
 
 **When sequential is better:**
 
-- Single export directory (use `--workers` for internal parallelism)
+- Single export directory (use `--threads` for internal parallelism)
 - Limited RAM (each process needs 100MB-1GB depending on export size)
 - HDD storage (parallel I/O can cause thrashing)
 - Network storage (bandwidth limitations)
 
 ## Recommended Configurations
 
-### Conservative (safest)
+### Auto (simplest)
 
 ```bash
-# 2 exports in parallel, moderate workers per export
-./memoria.py --originals /exports -o /output --parallel-exports 2 --workers 7
+# Let Memoria auto-size everything
+./memoria.py --originals /exports -o /output --parallel
 ```
 
-### Balanced (recommended)
+### Custom Thread Count
 
 ```bash
-# 4 exports in parallel, fewer workers per export
-./memoria.py --originals /exports -o /output --parallel-exports 4 --workers 3
+# More threads per export, fewer parallel exports
+./memoria.py --originals /exports -o /output --parallel --threads 8
 ```
 
-### Aggressive (I/O-heavy workloads)
+### Override Process Count
 
 ```bash
-# 4 exports with 4 workers (mild over-subscription is OK for I/O bound work)
-./memoria.py --originals /exports -o /output --parallel-exports 4 --workers 4
+# Force specific process count
+MEMORIA_PROCESSES=2 ./memoria.py --originals /exports -o /output --parallel
 ```
 
 ## Expected Performance Gains
@@ -103,9 +118,8 @@ SUGGESTION: Try --parallel-exports 4 --workers 3
 | Configuration | Total Time | Speedup |
 |--------------|------------|---------|
 | Sequential (default) | 50 minutes | 1.0x |
-| `--parallel-exports 2` | ~25-28 minutes | 1.8-2.0x |
-| `--parallel-exports 4` | ~15-18 minutes | 2.8-3.3x |
-| `--parallel-exports 5` | ~12-15 minutes | 3.3-4.2x |
+| `--parallel` (auto) | ~15-20 minutes | 2.5-3.3x |
+| `--parallel` + `MEMORIA_PROCESSES=4` | ~15-18 minutes | 2.8-3.3x |
 
 Actual speedup depends on:
 
@@ -128,7 +142,7 @@ Actual speedup depends on:
 ### Memory Usage
 
 - Each parallel export process: ~100MB-1GB base + export data
-- Example: 4 parallel exports ≈ 0.4-4GB additional RAM
+- Example: 4 parallel exports ~ 0.4-4GB additional RAM
 
 ### Output Handling
 
@@ -140,8 +154,8 @@ Actual speedup depends on:
 
 ### Performance is worse with parallel processing
 
-- Reduce `--parallel-exports` (try 2 instead of 4)
-- Increase `--workers` per export
+- Reduce `MEMORIA_PROCESSES` (try 2)
+- Increase `--threads` per export
 - Check disk I/O utilization (might be saturated)
 - Check RAM usage (might be swapping)
 
@@ -159,25 +173,17 @@ This is normal with parallel processing. Each export's output is still grouped t
 
 ### Out of memory
 
-- Reduce `--parallel-exports`
-- Reduce `--workers`
-- Process exports sequentially
+- Reduce `MEMORIA_PROCESSES`
+- Reduce `--threads`
+- Process exports sequentially (omit `--parallel`)
 
 ## Additional Examples
-
-### Auto-calculate workers
-
-```bash
-# Script automatically uses (CPU_COUNT - 1) workers per export
-./memoria.py --originals /exports -o /output --parallel-exports 2
-```
 
 ### With Immich upload
 
 ```bash
 # Parallel processing with automatic Immich uploads
-./memoria.py --originals /exports -o /output \
-  --parallel-exports 2 --workers 7 \
+./memoria.py --originals /exports -o /output --parallel \
   --immich-url http://localhost:2283 \
   --immich-key YOUR_API_KEY
 ```
@@ -186,8 +192,19 @@ This is normal with parallel processing. Each export's output is still grouped t
 
 ```bash
 # Parallel processing with verbose logs
-./memoria.py --originals /exports -o /output \
-  --parallel-exports 2 --verbose
+./memoria.py --originals /exports -o /output --parallel --verbose
+```
+
+### Environment-based configuration
+
+```bash
+# Set defaults in .env or environment
+export MEMORIA_PARALLEL=true
+export MEMORIA_PROCESSES=4
+export MEMORIA_THREADS=4
+
+# Then just run
+./memoria.py --originals /exports -o /output
 ```
 
 ## Related Documentation
@@ -195,4 +212,3 @@ This is normal with parallel processing. Each export's output is still grouped t
 - [Usage](Usage) - Command-line options
 - [Immich Upload](Immich-Upload) - Immich configuration and upload queuing
 - [Logging](Logging) - Logging configuration
-

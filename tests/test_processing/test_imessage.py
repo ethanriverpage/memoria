@@ -1170,7 +1170,7 @@ class TestMixedConsolidatedProcessing:
         result = IMessageProcessor.process_consolidated(
             input_dirs=[str(sqlite_export), str(imazing_export)],
             output_dir=str(output_dir),
-            workers=1,
+            threads=1,
             temp_dir=str(tmp_path / "temp"),
         )
 
@@ -1239,7 +1239,7 @@ class TestMixedConsolidatedProcessing:
         result = IMessageProcessor.process_consolidated(
             input_dirs=[str(imazing1), str(imazing2)],
             output_dir=str(output_dir),
-            workers=1,
+            threads=1,
             temp_dir=str(tmp_path / "temp"),
         )
 
@@ -1273,7 +1273,7 @@ class TestMixedConsolidatedProcessing:
         result = IMessageProcessor.process_consolidated(
             input_dirs=[str(unknown_dir)],
             output_dir=str(output_dir),
-            workers=1,
+            threads=1,
         )
 
         assert result is False, "Processing should fail for unknown input type"
@@ -1300,7 +1300,7 @@ class TestMixedConsolidatedProcessing:
         result = IMessageProcessor.process_consolidated(
             input_dirs=[str(valid_export), str(unknown_dir)],
             output_dir=str(output_dir),
-            workers=1,
+            threads=1,
         )
 
         assert result is False, "Processing should fail when any input is unknown"

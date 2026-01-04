@@ -12,7 +12,7 @@ Yes, but re-processing will recreate all output files from scratch. If you only 
 
 ### Why is processing so slow?
 
-Large exports (10,000+ files) involve copying gigabytes of data and embedding metadata into each file using exiftool. This is inherently I/O and CPU intensive. Use `--workers N` to parallelize processing across multiple CPU cores for better performance.
+Large exports (10,000+ files) involve copying gigabytes of data and embedding metadata into each file using exiftool. This is inherently I/O and CPU intensive. Use `--threads N` to parallelize processing across multiple CPU cores for better performance.
 
 ### How do I know if processing is working?
 
@@ -147,7 +147,7 @@ Discord preprocessing involves downloading attachments from the internet, which 
 - Your internet connection speed
 - Discord CDN response times
 
-Large exports with hundreds of attachments may take 30 minutes to several hours. Use `--workers N` to parallelize downloads and speed up the process.
+Large exports with hundreds of attachments may take 30 minutes to several hours. Use `--threads N` to parallelize downloads and speed up the process.
 
 ### What happens to non-media attachments?
 
@@ -272,7 +272,7 @@ Yes. Immich has its own deduplication system based on content hashing. If you up
 
 ### Why are uploads so slow in parallel mode?
 
-This is intentional. When processing multiple exports in parallel (`--parallel-exports`), uploads happen sequentially to prevent network saturation and reduce server load. Processing continues in parallel, but uploads queue up one export at a time.
+This is intentional. When processing multiple exports in parallel (`--parallel`), uploads happen sequentially to prevent network saturation and reduce server load. Processing continues in parallel, but uploads queue up one export at a time.
 
 See: [Immich Upload](Immich-Upload)
 
@@ -333,7 +333,7 @@ No. Memoria preserves original timestamps exactly as they appear in the export. 
 
 ## Performance
 
-### How many workers should I use?
+### How many threads should I use?
 
 The default is `CPU cores - 1`, which works well for most cases. If you have fast storage (NVMe SSD) and large exports, you can experiment with higher values, but avoid over-subscribing your CPU.
 
@@ -341,24 +341,24 @@ See: [Parallel Processing](Parallel-Processing)
 
 ### Can I process multiple exports faster?
 
-Yes. Use `--originals /path/to/exports --parallel-exports N` to process N exports simultaneously. Balance this with `--workers` to avoid over-subscribing your CPU.
+Yes. Use `--originals /path/to/exports --parallel` to process exports simultaneously. The process count is auto-calculated based on CPU cores and thread count. Override with `MEMORIA_PROCESSES=N` if needed.
 
 Example for 16-core system:
 
-- `--parallel-exports 2 --workers 7` (good)
-- `--parallel-exports 4 --workers 3` (good)
+- `--parallel --threads 4` (auto-sized, good)
+- `MEMORIA_PROCESSES=2 --parallel --threads 7` (good)
 
 ### Processing is using too much RAM. What can I do?
 
 Reduce parallelism:
 
-- Lower `--workers` count
-- Lower `--parallel-exports` count
-- Process one export at a time
+- Lower `--threads` count
+- Lower `MEMORIA_PROCESSES` count
+- Process one export at a time (omit `--parallel`)
 
 ### My disk is slow. Will parallel processing help?
 
-Probably not. Parallel processing is best for fast NVMe SSDs. On HDDs or network storage, parallel I/O can cause thrashing and actually slow things down. Use sequential processing with moderate `--workers`.
+Probably not. Parallel processing is best for fast NVMe SSDs. On HDDs or network storage, parallel I/O can cause thrashing and actually slow things down. Use sequential processing with moderate `--threads`.
 
 ## Troubleshooting
 

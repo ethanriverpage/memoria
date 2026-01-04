@@ -1640,11 +1640,11 @@ def main():
         help="Random seed for reproducible sampling (default: random)",
     )
     parser.add_argument(
-        "--workers",
-        "-w",
+        "--threads",
+        "-t",
         type=int,
         default=cpu_count,
-        help=f"Number of parallel worker threads (default: {cpu_count})",
+        help=f"Number of parallel threads (default: {cpu_count})",
     )
     parser.add_argument(
         "--verbose",
@@ -1694,7 +1694,7 @@ def main():
         output_dir=args.output,
         dry_run=args.dry_run,
         seed=args.seed,
-        max_workers=args.workers,
+        max_workers=args.threads,
     )
 
     # Print summary

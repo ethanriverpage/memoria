@@ -15,7 +15,7 @@ from common.dedup.service import (
     get_live_photo_base_for_hash,
     save_dedup_metadata,
 )
-from common.config.runtime import default_worker_count
+from common.config.runtime import default_thread_count
 from common.dedup.description import (
     SourceEntry,
     build_source_line,
@@ -283,7 +283,7 @@ class IMessageProcessor(ProcessorBase):
         """
         input_path = Path(input_dir)
         cache_path = Path(cache_dir)
-        workers = kwargs.get("workers")
+        threads = kwargs.get("threads")
 
         cache_path.mkdir(parents=True, exist_ok=True)
 
@@ -293,14 +293,14 @@ class IMessageProcessor(ProcessorBase):
             preprocessor = ImazingPreprocessor(
                 export_path=input_path,
                 output_dir=cache_path,
-                workers=workers,
+                threads=threads,
             )
         else:
             logger.info("Preprocessing iMessage SQLite export to: %s", cache_path)
             preprocessor = IMessagePreprocessor(
                 export_paths=input_path,
                 output_dir=cache_path,
-                workers=workers,
+                threads=threads,
             )
 
         if preprocessor.run():
@@ -315,13 +315,13 @@ class IMessageProcessor(ProcessorBase):
 
         Args:
             input_dir: Path to preprocessed input directory
-            **kwargs: Additional arguments (workers)
+            **kwargs: Additional arguments (threads)
 
         Yields:
             Catalog entries with processor name and file data.
         """
         input_path = Path(input_dir)
-        workers = kwargs.get("workers", 4)
+        threads = kwargs.get("threads", 4)
 
         def extract_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
             """Extract metadata from preprocessed entry."""
@@ -339,7 +339,7 @@ class IMessageProcessor(ProcessorBase):
         catalog_iter = IMessageProcessor.catalog_from_preprocessed_if_available(
             processor_name="iMessage",
             input_path=input_path,
-            workers=workers,
+            threads=threads,
             metadata_extractor=extract_metadata,
             container_key="conversations",
         )
@@ -371,7 +371,7 @@ class IMessageProcessor(ProcessorBase):
             input_dirs: List of paths to iMessage export directories
             output_dir: Base output directory
             dedup_manifest: Optional deduplication manifest
-            **kwargs: Additional arguments (workers, temp_dir)
+            **kwargs: Additional arguments (threads, temp_dir)
 
         Returns:
             True if processing succeeded, False otherwise
@@ -388,7 +388,7 @@ class IMessageProcessor(ProcessorBase):
                     kwargs.pop("output", None) or cls.get_default_output()
                 )
 
-            workers = kwargs.get("workers")
+            threads = kwargs.get("threads")
             temp_dir = kwargs.get("temp_dir")
 
             # Categorize inputs by type
@@ -434,7 +434,7 @@ class IMessageProcessor(ProcessorBase):
                 preprocessor = IMessagePreprocessor(
                     export_paths=sqlite_raw,
                     output_dir=consolidated_cache,
-                    workers=workers,
+                    threads=threads,
                 )
 
                 if preprocessor.run():
@@ -459,7 +459,7 @@ class IMessageProcessor(ProcessorBase):
                 preprocessor = ImazingPreprocessor(
                     export_path=imazing_path,
                     output_dir=imazing_cache,
-                    workers=workers,
+                    threads=threads,
                 )
 
                 if preprocessor.run():
@@ -484,7 +484,7 @@ class IMessageProcessor(ProcessorBase):
                 result = process_logic(
                     input_dirs=[str(preprocessed_dir)],
                     output_dir=str(processor_output),
-                    workers=workers,
+                    threads=threads,
                     dedup_manifest=dedup_manifest,
                     export_namespace=export_namespace,
                 )
@@ -529,7 +529,7 @@ class IMessageProcessor(ProcessorBase):
         return process_logic(
             input_dirs=[input_dir],
             output_dir=output_dir,
-            workers=kwargs.get("workers"),
+            threads=kwargs.get("threads"),
             dedup_manifest=dedup_manifest,
         )
 
@@ -867,7 +867,7 @@ def _process_file_worker(args_tuple):
 def process_logic(
     input_dirs: List[str],
     output_dir: Optional[str] = None,
-    workers: Optional[int] = None,
+    threads: Optional[int] = None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
     export_namespace: Optional[str] = None,
 ) -> bool:
@@ -879,7 +879,7 @@ def process_logic(
     Args:
         input_dirs: List containing a single preprocessed input directory
         output_dir: Output directory for processed files (final path, no subdirs created)
-        workers: Number of parallel workers
+        threads: Number of parallel threads
         dedup_manifest: Optional deduplication manifest for filtering secondary files
         export_namespace: Optional namespace for artifact filenames when processing
             multiple exports into the same output directory.
@@ -930,7 +930,7 @@ def process_logic(
     return _process_working_directory(
         working_dir,
         messages_output_dir,
-        workers,
+        threads,
         dedup_manifest,
         export_namespace=export_namespace,
     )
@@ -939,7 +939,7 @@ def process_logic(
 def _process_working_directory(
     working_dir: Path,
     output_dir: Path,
-    workers: Optional[int],
+    threads: Optional[int],
     dedup_manifest: Optional[Dict[str, Any]] = None,
     export_namespace: Optional[str] = None,
 ) -> bool:
@@ -948,7 +948,7 @@ def _process_working_directory(
     Args:
         working_dir: Path to preprocessed directory with metadata.json
         output_dir: Output directory for processed files
-        workers: Number of parallel workers
+        threads: Number of parallel threads
         dedup_manifest: Optional deduplication manifest for filtering secondary files
         export_namespace: Optional namespace for artifact filenames (dedup refs, failure reports).
             Used when processing multiple exports into the same output directory.
@@ -1164,8 +1164,8 @@ def _process_working_directory(
     # Process files
     log.processing_start(str(output_dir))
 
-    num_workers = workers if workers is not None else default_worker_count()
-    log.using_workers(num_workers)
+    num_threads = threads if threads is not None else default_thread_count()
+    log.using_threads(num_threads)
 
     # Prepare arguments (include content_hash and original_filename for EXIF)
     process_args = [
@@ -1182,10 +1182,10 @@ def _process_working_directory(
     ]
 
     # Phase 1: Copy and rename files
-    results = IMessageProcessor.process_items_parallel(
+    results = IMessageProcessor.process_items_threaded(
         tasks=process_args,
         worker_fn=_process_file_worker,
-        num_workers=num_workers,
+        num_threads=num_threads,
         description="Copying files",
     )
 

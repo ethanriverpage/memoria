@@ -210,7 +210,7 @@ During preprocessing, Memoria:
 ### Download Process
 
 - Downloads happen automatically during preprocessing
-- Uses parallel workers (configurable with `--workers`)
+- Uses parallel threads (configurable with `--threads`)
 - Retries failed downloads up to 3 times
 - Skips non-media files (PDFs, archives, etc.)
 
@@ -275,7 +275,7 @@ If many downloads fail:
 
 1. **Check internet connection**: Downloads require active internet
 2. **URLs may be expired**: Discord CDN URLs can expire; process export soon after receiving it
-3. **Rate limiting**: Discord may rate-limit rapid downloads; reduce `--workers` count
+3. **Rate limiting**: Discord may rate-limit rapid downloads; reduce `--threads` count
 4. **Check preprocessing.log**: Detailed error messages for each failed download
 
 ### "Failed to download: File not found (404)"
@@ -296,7 +296,7 @@ Discord preprocessing involves:
 
 To speed up:
 
-- Use `--workers N` to parallelize downloads (default: CPU count - 1)
+- Use `--threads N` to parallelize downloads (default: auto-calculated)
 - Ensure stable internet connection
 - Process on a machine with good network bandwidth
 

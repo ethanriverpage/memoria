@@ -647,7 +647,7 @@ class TestIMessageProcessorWithImazingFormat:
         }
         (imazing_export_dir / "metadata.json").write_text(json.dumps(metadata))
 
-        result = IMessageProcessor.build_catalog(str(imazing_export_dir), workers=1)
+        result = IMessageProcessor.build_catalog(str(imazing_export_dir), threads=1)
 
         assert isinstance(result, types.GeneratorType)
 
@@ -698,7 +698,7 @@ class TestImazingLivePhotos:
 
         # Build catalog - should group video with image
         entries = list(
-            IMessageProcessor.build_catalog(str(imazing_export_dir), workers=1)
+            IMessageProcessor.build_catalog(str(imazing_export_dir), threads=1)
         )
 
         # Video should not be in entries if grouped with image

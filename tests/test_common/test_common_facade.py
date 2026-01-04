@@ -16,7 +16,6 @@ def test_common_facade_exports_and_all():
         "FilenameGenerator",
         "sanitize_filename",
         # Processing
-        "process_batches_parallel",
         "temp_processing_directory",
         # Output / summary
         "print_processing_summary",

@@ -279,7 +279,7 @@ Rich automatically detects non-TTY environments (CI pipelines, redirected output
 ./memoria.py /path/to/export -vv
 
 # Verbose with parallel processing (creates per-export logs)
-./memoria.py --originals /exports -o /output --parallel-exports 2 -v
+./memoria.py --originals /exports -o /output --parallel -v
 ```
 
 ## Related Documentation

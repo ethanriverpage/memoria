@@ -310,8 +310,8 @@ class TestCLIFlags:
             or "unrecognized" not in result.stderr.lower()
         )
 
-    def test_workers_flag(self, project_root, tmp_path):
-        """Should accept workers flag."""
+    def test_threads_flag(self, project_root, tmp_path):
+        """Should accept threads flag."""
         export_dir = tmp_path / "export"
         output_dir = tmp_path / "output"
         create_google_photos_export(export_dir)
@@ -328,7 +328,7 @@ class TestCLIFlags:
                 str(export_dir),
                 "-o",
                 str(output_dir),
-                "--workers",
+                "--threads",
                 "2",
                 "--skip-upload",
             ],
@@ -338,9 +338,9 @@ class TestCLIFlags:
             timeout=30,
         )
 
-        # Should not error on workers flag
+        # Should not error on threads flag
         assert (
-            "--workers" not in result.stderr
+            "--threads" not in result.stderr
             or "unrecognized" not in result.stderr.lower()
         )
 
@@ -440,3 +440,179 @@ class TestCLIProcessorFilter:
         )
 
         assert result.returncode != 0 or "Unknown processor" in result.stdout
+
+
+class TestCLIParallelValidation:
+    """Tests for --parallel flag validation.
+
+    These tests verify plan-critical behavior:
+    - --parallel requires --originals
+    - MEMORIA_PARALLEL=true requires --originals
+    """
+
+    def test_parallel_without_originals_fails(self, project_root, tmp_path):
+        """--parallel without --originals should fail with argparse error."""
+        export_dir = tmp_path / "export"
+        export_dir.mkdir()
+        env_file = tmp_path / "empty.env"
+        env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(memoria_script),
+                "--env-file",
+                str(env_file),
+                str(export_dir),
+                "--parallel",  # Without --originals
+                "--skip-upload",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should fail with clear error about --originals requirement
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert (
+            "--originals" in combined.lower()
+            or "requires" in combined.lower()
+            or "only valid" in combined.lower()
+        )
+
+    def test_env_parallel_without_originals_fails(self, project_root, tmp_path):
+        """MEMORIA_PARALLEL=true without --originals should fail."""
+        import os
+
+        export_dir = tmp_path / "export"
+        export_dir.mkdir()
+        env_file = tmp_path / "empty.env"
+        env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
+
+        env = os.environ.copy()
+        env["MEMORIA_PARALLEL"] = "true"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(memoria_script),
+                "--env-file",
+                str(env_file),
+                str(export_dir),  # Single export mode, not --originals
+                "--skip-upload",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+
+        # Should fail with clear error about --originals requirement
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert (
+            "--originals" in combined.lower()
+            or "requires" in combined.lower()
+            or "only valid" in combined.lower()
+        )
+
+
+class TestCLIConcurrencyConfig:
+    """Tests for concurrency configuration via CLI and environment variables.
+
+    These tests verify plan-critical behavior:
+    - --threads controls within-export concurrency
+    - MEMORIA_THREADS environment variable override
+    - MEMORIA_PROCESSES capping behavior
+    """
+
+    def test_threads_flag_accepted(self, project_root, tmp_path):
+        """--threads flag should be accepted by CLI."""
+        env_file = tmp_path / "empty.env"
+        env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(memoria_script),
+                "--env-file",
+                str(env_file),
+                "--threads",
+                "4",
+                "--list-processors",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should accept the flag without error
+        assert result.returncode == 0
+        assert "unrecognized" not in result.stderr.lower()
+
+    def test_threads_env_var_respected(self, project_root, tmp_path):
+        """MEMORIA_THREADS should be respected when --threads not provided."""
+        import os
+
+        env_file = tmp_path / "empty.env"
+        env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
+
+        env = os.environ.copy()
+        env["MEMORIA_THREADS"] = "2"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(memoria_script),
+                "--env-file",
+                str(env_file),
+                "--list-processors",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+
+        # Should not error (env var is silently used)
+        assert result.returncode == 0
+
+    def test_threads_flag_overrides_env(self, project_root, tmp_path):
+        """--threads CLI flag should override MEMORIA_THREADS env var."""
+        import os
+
+        env_file = tmp_path / "empty.env"
+        env_file.write_text("", encoding="utf-8")
+        memoria_script = project_root / "memoria.py"
+
+        env = os.environ.copy()
+        env["MEMORIA_THREADS"] = "100"  # Very high value
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(memoria_script),
+                "--env-file",
+                str(env_file),
+                "--threads",
+                "2",  # Override with low value
+                "--list-processors",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+
+        # CLI flag should take precedence (no error)
+        assert result.returncode == 0

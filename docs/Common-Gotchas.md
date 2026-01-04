@@ -87,7 +87,7 @@ snapchat-username-20251122/
 **What to do**:
 
 - Use `--verbose` to monitor progress
-- Use `--workers` to parallelize (default is CPU count - 1)
+- Use `--threads` to parallelize (default is auto-calculated)
 - Run processing overnight for very large exports
 - Consider processing in batches if time-constrained
 
@@ -176,13 +176,13 @@ snapchat-username-20251122/
 
 ## Parallel Processing Can Over-Subscribe Your System
 
-**Gotcha**: Using `--parallel-exports 4 --workers 15` on an 8-core system will create ~64 competing processes.
+**Gotcha**: Overriding `MEMORIA_PROCESSES=4` with `--threads 15` on an 8-core system will create ~64 competing threads, leading to context switching overhead.
 
 **Why it matters**: Over-subscription causes context switching overhead, making processing slower than sequential mode.
 
 **What to do**:
 
-- Follow the formula: `parallel_exports × (workers + 1) ≈ CPU cores`
+- Follow the formula: `parallel_exports × (threads + 1) ≈ CPU cores`
 - Memoria warns you when you exceed cores by 50%
 - See [Parallel Processing](Parallel-Processing) for optimal configurations
 

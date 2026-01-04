@@ -3,13 +3,13 @@ Configuration utilities for media processors.
 
 This package provides:
 - Environment variable loading from .env files
-- Runtime configuration (worker count, boolean env parsing)
+- Runtime configuration (thread count, boolean env parsing)
 - System dependency checking (exiftool, ffmpeg, etc.)
 """
 
 from common.config.env import load_dotenv_file
 from common.config.runtime import (
-    default_worker_count,
+    default_thread_count,
     parse_bool_env,
     should_cleanup_preprocessing,
 )
@@ -28,7 +28,7 @@ __all__ = [
     # Environment
     "load_dotenv_file",
     # Runtime
-    "default_worker_count",
+    "default_thread_count",
     "parse_bool_env",
     "should_cleanup_preprocessing",
     # Dependencies

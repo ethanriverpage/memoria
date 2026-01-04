@@ -1,8 +1,12 @@
-"""Processing utilities for parallel execution, caching, and temp directories."""
+"""Processing utilities for parallel execution, caching, and temp directories.
+
+All batch processing functions use threading (ThreadPoolExecutor) for within-export
+parallelism. Cross-export parallelism uses ProcessPoolExecutor directly in memoria.py.
+"""
 
 from common.processing.batch import (
-    process_batches_parallel,
-    process_items_parallel,
+    process_batches_threaded,
+    process_items_threaded,
     process_parallel_threaded,
 )
 from common.processing.cache import (
@@ -13,9 +17,9 @@ from common.processing.cache import (
 from common.processing.temp import temp_processing_directory
 
 __all__ = [
-    # Batch processing
-    "process_batches_parallel",
-    "process_items_parallel",
+    # Batch processing (threading - for within-export work)
+    "process_batches_threaded",
+    "process_items_threaded",
     "process_parallel_threaded",
     # Cache management
     "get_preprocessing_cache_path",

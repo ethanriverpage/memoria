@@ -406,11 +406,11 @@ def main():
         help="Disable checkpoint/resume functionality",
     )
     parser.add_argument(
-        "--workers",
-        "-w",
+        "--threads",
+        "-t",
         type=int,
         default=None,
-        help="Number of worker processes (default: auto-detect based on CPU count)",
+        help="Number of parallel threads (default: auto-detect based on CPU count)",
     )
     parser.add_argument(
         "--skip-banned",

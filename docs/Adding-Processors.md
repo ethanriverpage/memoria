@@ -251,7 +251,7 @@ def build_catalog(input_dir: str, **kwargs) -> Iterator[Dict[str, Any]]:
     
     Args:
         input_dir: Path to input directory
-        **kwargs: Additional arguments (verbose, workers)
+        **kwargs: Additional arguments (verbose, threads)
     
     Yields:
         Catalog entry dictionaries with structure:

@@ -232,7 +232,7 @@ class IMessagePreprocessor(PreprocessorBase):
         self,
         export_paths: Union[Path, List[Path]],
         output_dir: Optional[Path] = None,
-        workers: Optional[int] = None,
+        threads: Optional[int] = None,
         owner_name: Optional[str] = None,
         final_output_dir: Optional[Path] = None,
     ):
@@ -241,7 +241,7 @@ class IMessagePreprocessor(PreprocessorBase):
         Args:
             export_paths: Single path or list of paths to iMessage exports
             output_dir: Output directory for processed files
-            workers: Number of parallel workers for hashing/copying (default: 8)
+            threads: Number of parallel threads for hashing/copying (default: auto)
             owner_name: Override for device owner name
             final_output_dir: Final output directory for failure tracking
         """
@@ -259,7 +259,7 @@ class IMessagePreprocessor(PreprocessorBase):
             processor_name="iMessage",
             export_path=export_paths_list[0],
             output_dir=output_dir,
-            workers=workers,
+            threads=threads,
             final_output_dir=final_output_dir,
         )
 
@@ -1137,9 +1137,9 @@ class IMessagePreprocessor(PreprocessorBase):
 
         # Phase 2: Query all databases in parallel
         logger.info(
-            "Querying %d databases (using %d workers)...",
+            "Querying %d databases (using %d threads)...",
             len(self.export_paths),
-            self.workers,
+            self.threads,
         )
 
         def query_with_path(export_path: Path) -> Tuple[Path, List[Dict]]:
@@ -1150,7 +1150,7 @@ class IMessagePreprocessor(PreprocessorBase):
         results = process_parallel_threaded(
             tasks=list(self.export_paths),
             worker_fn=query_with_path,
-            workers=self.workers,
+            threads=self.threads,
             phase=PHASE_PREPROCESS,
             description="Querying databases",
             task_id_fn=lambda p: p.name,

@@ -157,7 +157,7 @@ processed_output/
 
 ## Upload Queuing in Parallel Mode
 
-When using `--parallel-exports` with Immich uploads enabled, upload queuing automatically ensures:
+When using `--parallel` with Immich uploads enabled, upload queuing automatically ensures:
 
 - **Processing happens in parallel** - Multiple exports processed simultaneously
 - **Uploads happen sequentially** - One export uploads at a time
@@ -187,12 +187,12 @@ This maximizes efficiency while preventing network saturation and maintaining up
 
 ### How to Use
 
-Upload queuing is **automatically enabled** with `--parallel-exports`:
+Upload queuing is **automatically enabled** with `--parallel`:
 
 ```bash
 ./memoria.py --originals /path/to/exports \
   -o /output \
-  --parallel-exports 4 \
+  --parallel \
   --immich-url http://localhost:2283 \
   --immich-key YOUR_API_KEY
 ```
@@ -219,7 +219,7 @@ Control files uploaded simultaneously within each export:
 
 ```bash
 ./memoria.py --originals /exports -o /output \
-  --parallel-exports 4 \
+  --parallel \
   --immich-concurrency 8  # More concurrent uploads per export
 ```
 
@@ -231,21 +231,21 @@ If processing is faster than uploads:
 
 ```bash
 # More parallel exports to keep queue fed
-./memoria.py --originals /exports -o /output \
-  --parallel-exports 6 --workers 2
+MEMORIA_PROCESSES=6 ./memoria.py --originals /exports -o /output \
+  --parallel --threads 2
 ```
 
 If uploads are faster than processing:
 
 ```bash
-# Fewer parallel exports with more workers each
-./memoria.py --originals /exports -o /output \
-  --parallel-exports 2 --workers 7
+# Fewer parallel exports with more threads each
+MEMORIA_PROCESSES=2 ./memoria.py --originals /exports -o /output \
+  --parallel --threads 7
 ```
 
 ### Disabling Upload Queuing
 
-Use sequential mode (without `--parallel-exports`), or skip uploads entirely:
+Use sequential mode (without `--parallel`), or skip uploads entirely:
 
 ```bash
 ./memoria.py --originals /exports -o /output --skip-upload

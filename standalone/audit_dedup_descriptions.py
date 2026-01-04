@@ -170,7 +170,7 @@ def audit(
     extensions: Optional[set[str]],
     limit: Optional[int],
     chunk_size: int,
-    workers: int,
+    threads: int,
 ) -> List[MatchResult]:
     files = _collect_files(base, extensions, limit)
     results: List[MatchResult] = []
@@ -183,9 +183,9 @@ def audit(
 
     # ExifTool is an external process; parallelizing chunks speeds up large scans.
     # Use threads (I/O bound; low overhead) rather than multiprocessing.
-    effective_workers = max(1, int(workers))
-    if effective_workers > len(chunks):
-        effective_workers = len(chunks)
+    effective_threads = max(1, int(threads))
+    if effective_threads > len(chunks):
+        effective_threads = len(chunks)
 
     def process_chunk(chunk_paths: List[str]) -> List[MatchResult]:
         items = _run_exiftool_json([Path(p) for p in chunk_paths])
@@ -208,11 +208,11 @@ def audit(
             )
         return chunk_results
 
-    if effective_workers == 1:
+    if effective_threads == 1:
         for chunk in chunks:
             results.extend(process_chunk(chunk))
     else:
-        with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+        with ThreadPoolExecutor(max_workers=effective_threads) as executor:
             futures = [executor.submit(process_chunk, c) for c in chunks]
             for fut in as_completed(futures):
                 results.extend(fut.result())
@@ -260,10 +260,10 @@ def main() -> int:
         help="Files per exiftool invocation (default: 200)",
     )
     parser.add_argument(
-        "--workers",
+        "--threads",
         type=int,
         default=4,
-        help="Number of parallel exiftool workers (default: 4)",
+        help="Number of parallel threads (default: 4)",
     )
     parser.add_argument(
         "--extensions",
@@ -300,7 +300,7 @@ def main() -> int:
         extensions=exts,
         limit=args.limit,
         chunk_size=args.chunk_size,
-        workers=args.workers,
+        threads=args.threads,
     )
 
     scanned = len(results)

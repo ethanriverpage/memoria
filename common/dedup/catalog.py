@@ -47,7 +47,7 @@ def _extract_media_entries(metadata: Dict[str, Any]) -> Iterator[Dict[str, Any]]
 def catalog_from_preprocessed(
     processor_name: str,
     input_path: Path,
-    workers: int = 4,
+    threads: int = 4,
     metadata_extractor: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
 ) -> Iterator[Dict[str, Any]]:
     """Build catalog from preprocessed metadata.json.
@@ -62,7 +62,7 @@ def catalog_from_preprocessed(
     Args:
         processor_name: Name for the catalog (e.g., "Google Photos").
         input_path: Path to preprocessed directory containing metadata.json.
-        workers: Number of parallel workers for computing missing hashes.
+        threads: Number of parallel threads for computing missing hashes.
         metadata_extractor: Optional function to transform metadata from each
             media_files entry. Signature: (entry: Dict) -> Dict[str, Any].
             If not provided, uses entry's existing metadata fields.
@@ -174,7 +174,7 @@ def catalog_from_preprocessed(
         )
         cache_entries_to_write: List[Dict[str, Any]] = []
 
-        with ThreadPoolExecutor(max_workers=workers) as executor:
+        with ThreadPoolExecutor(max_workers=threads) as executor:
             futures = {
                 executor.submit(
                     _compute_missing_hashes,
@@ -455,7 +455,7 @@ def catalog_media_files(
     processor_name: str,
     input_path: Path,
     media_files: List[Path],
-    workers: int = 4,
+    threads: int = 4,
     metadata_extractor: Optional[Callable[[Path], Dict[str, Any]]] = None,
     db_path: Optional[Path] = None,
 ) -> Iterator[Dict[str, Any]]:
@@ -484,7 +484,7 @@ def catalog_media_files(
             paths in the catalog will be stored relative to this path.
         media_files: List of media file paths to catalog. These should be
             absolute paths or paths that can be resolved.
-        workers: Number of parallel workers for hashing (default: 4).
+        threads: Number of parallel threads for hashing (default: 4).
         metadata_extractor: Optional function to extract additional metadata
             from each file. Signature: (file_path: Path) -> Dict[str, Any].
             The returned dict is stored in the entry's "metadata" field.
@@ -513,7 +513,7 @@ def catalog_media_files(
         ...     processor_name="Google Photos",
         ...     input_path=input_path,
         ...     media_files=media_files,
-        ...     workers=8,
+        ...     threads=8,
         ...     db_path=Path("./dedup.db"),
         ... ):
         ...     db.write_catalog_entry(run_id, export_name, entry)
@@ -527,16 +527,16 @@ def catalog_media_files(
 
     logger.info(f"Cataloging {len(media_files)} files: {export_name}")
 
-    # Allow environment variable to override workers for memory-constrained systems
+    # Allow environment variable to override threads for memory-constrained systems
     # Large HEIC images can use 36-50MB each during perceptual hashing
-    env_workers = os.environ.get(CATALOG_WORKERS_ENV)
-    if env_workers:
+    env_threads = os.environ.get(CATALOG_WORKERS_ENV)
+    if env_threads:
         try:
-            workers = int(env_workers)
-            logger.debug(f"Using {workers} catalog workers from {CATALOG_WORKERS_ENV}")
+            threads = int(env_threads)
+            logger.debug(f"Using {threads} catalog threads from {CATALOG_WORKERS_ENV}")
         except ValueError:
             logger.warning(
-                f"Invalid {CATALOG_WORKERS_ENV}={env_workers}, using {workers}"
+                f"Invalid {CATALOG_WORKERS_ENV}={env_threads}, using {threads}"
             )
 
     # Check if hash caching is disabled
@@ -556,7 +556,7 @@ def catalog_media_files(
     cache_hits = 0
     cache_entries_to_write: List[Dict[str, Any]] = []
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    with ThreadPoolExecutor(max_workers=threads) as executor:
         futures = {
             executor.submit(
                 _process_single_file,

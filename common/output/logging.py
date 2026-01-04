@@ -519,13 +519,13 @@ class ProcessorLogger:
         self._logger.info("Processing files to %s/", output_dir)
         self._logger.info("=" * SEPARATOR_WIDTH)
 
-    def using_workers(self, count: int) -> None:
-        """Log worker count for parallel processing.
+    def using_threads(self, count: int) -> None:
+        """Log thread count for parallel processing.
 
         Args:
-            count: Number of parallel workers
+            count: Number of parallel threads
         """
-        self._logger.debug("Using %d parallel workers", count)
+        self._logger.debug("Using %d parallel threads", count)
 
     def copied_files(self, success: int, failed: int = 0) -> None:
         """Log file copy results.

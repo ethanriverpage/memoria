@@ -33,13 +33,13 @@ class ConcretePreprocessor(PreprocessorBase):
         self,
         export_path: Path,
         output_dir: Optional[Path],
-        workers: Optional[int] = None,
+        threads: Optional[int] = None,
     ):
         super().__init__(
             processor_name="TestProcessor",
             export_path=export_path,
             output_dir=output_dir,
-            workers=workers,
+            threads=threads,
         )
         self.validated = False
         self.processed = False
@@ -119,8 +119,8 @@ class TestPreprocessorBaseInit:
         assert preprocessor.failure_tracker is not None
         assert preprocessor.failure_tracker.processor_name == "TestProcessor"
 
-    def test_custom_worker_count(self, tmp_path: Path) -> None:
-        """Should use custom worker count when specified."""
+    def test_custom_thread_count(self, tmp_path: Path) -> None:
+        """Should use custom thread count when specified."""
         export_dir = tmp_path / "export"
         output_dir = tmp_path / "output"
         export_dir.mkdir()
@@ -128,10 +128,10 @@ class TestPreprocessorBaseInit:
         preprocessor = ConcretePreprocessor(
             export_path=export_dir,
             output_dir=output_dir,
-            workers=4,
+            threads=4,
         )
 
-        assert preprocessor.workers == 4
+        assert preprocessor.threads == 4
 
 
 class TestPreprocessorBaseRun:
@@ -193,7 +193,7 @@ class TestHashWithDedup:
         preprocessor = ConcretePreprocessor(
             export_path=export_dir,
             output_dir=output_dir,
-            workers=1,
+            threads=1,
         )
 
         tasks = [
@@ -238,7 +238,7 @@ class TestHashWithDedup:
         preprocessor = ConcretePreprocessor(
             export_path=export_dir,
             output_dir=output_dir,
-            workers=1,
+            threads=1,
         )
 
         tasks = [
@@ -271,7 +271,7 @@ class TestHashWithDedup:
         preprocessor = ConcretePreprocessor(
             export_path=export_dir,
             output_dir=output_dir,
-            workers=1,
+            threads=1,
         )
 
         tasks = [
@@ -304,7 +304,7 @@ class TestHashWithDedup:
         preprocessor = ConcretePreprocessor(
             export_path=export_dir,
             output_dir=output_dir,
-            workers=1,
+            threads=1,
         )
 
         # Custom merger that accumulates albums
@@ -371,7 +371,7 @@ class TestHashWithDedup:
         preprocessor = ConcretePreprocessor(
             export_path=export_dir,
             output_dir=output_dir,
-            workers=1,
+            threads=1,
         )
 
         tasks = [
@@ -413,7 +413,7 @@ class TestFilenameCollision:
         preprocessor = ConcretePreprocessor(
             export_path=export_dir,
             output_dir=output_dir,
-            workers=1,
+            threads=1,
         )
 
         tasks = [

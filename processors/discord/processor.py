@@ -16,7 +16,7 @@ from common.dedup.description import (
     build_description,
     PLATFORM_DISCORD,
 )
-from common.config.runtime import default_worker_count
+from common.config.runtime import default_thread_count
 from common.dedup.service import (
     get_canonical_timestamp,
     save_dedup_metadata,
@@ -132,7 +132,7 @@ class DiscordProcessor(ProcessorBase):
         """Run preprocessing on raw Discord export."""
         input_path = Path(input_dir)
         cache_path = Path(cache_dir)
-        workers = kwargs.get("workers")
+        threads = kwargs.get("threads")
 
         log.logger.info("Preprocessing Discord export to: %s", cache_path)
 
@@ -141,7 +141,7 @@ class DiscordProcessor(ProcessorBase):
         preprocessor = DiscordPreprocessor(
             export_path=input_path,
             output_dir=cache_path,
-            workers=workers,
+            threads=threads,
         )
 
         if preprocessor.run():
@@ -155,7 +155,7 @@ class DiscordProcessor(ProcessorBase):
         Requires preprocessed directories (with metadata.json and source_path).
         """
         input_path = Path(input_dir)
-        workers = kwargs.get("workers", 4)
+        threads = kwargs.get("threads", 4)
 
         def extract_preprocessed_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
             """Extract metadata from preprocessed entry."""
@@ -178,7 +178,7 @@ class DiscordProcessor(ProcessorBase):
         catalog_iter = DiscordProcessor.catalog_from_preprocessed_if_available(
             processor_name="Discord",
             input_path=input_path,
-            workers=workers,
+            threads=threads,
             metadata_extractor=extract_preprocessed_metadata,
             container_key="conversations",
         )
@@ -201,7 +201,7 @@ class DiscordProcessor(ProcessorBase):
         process_logic(
             input_dir=input_dir,
             output_dir=output_dir,
-            workers=kwargs.get("workers"),
+            threads=kwargs.get("threads"),
             dedup_manifest=dedup_manifest,
         )
         return True
@@ -367,7 +367,7 @@ def _process_file_worker(args_tuple):
 def process_logic(
     input_dir: str,
     output_dir: str = "processed_discord",
-    workers: Optional[int] = None,
+    threads: Optional[int] = None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Core processing logic for Discord exports.
@@ -404,13 +404,13 @@ def process_logic(
         return False
 
     log.already_preprocessed(str(input_path))
-    return _process_working_directory(input_path, output_path, workers, dedup_manifest)
+    return _process_working_directory(input_path, output_path, threads, dedup_manifest)
 
 
 def _process_working_directory(
     working_dir: Path,
     output_dir: Path,
-    workers: Optional[int],
+    threads: Optional[int],
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Process a working directory (preprocessed export).
@@ -541,9 +541,9 @@ def _process_working_directory(
     log.logger.info("Processing %d files to %s/", len(matched_files), output_dir)
     log.phase_separator()
 
-    # Determine number of workers
-    num_workers = workers if workers is not None else default_worker_count()
-    log.using_workers(num_workers)
+    # Determine number of threads
+    num_threads = threads if threads is not None else default_thread_count()
+    log.using_threads(num_threads)
 
     # Prepare arguments for parallel processing
     process_args = []
@@ -563,11 +563,11 @@ def _process_working_directory(
             )
         )
 
-    # Process files (multiprocess or sequential depending on worker count)
-    results = DiscordProcessor.process_items_parallel(
+    # Process files (threaded or sequential depending on worker count)
+    results = DiscordProcessor.process_items_threaded(
         tasks=process_args,
         worker_fn=_process_file_worker,
-        num_workers=num_workers,
+        num_threads=num_threads,
         description="Processing files",
     )
 

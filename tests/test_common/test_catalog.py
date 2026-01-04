@@ -17,7 +17,7 @@ def build_catalog_dict(
     processor_name: str,
     input_path: Path,
     media_files: List[Path],
-    workers: int = 4,
+    threads: int = 4,
     metadata_extractor: Optional[Callable[[Path], Dict[str, Any]]] = None,
     db_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
@@ -34,7 +34,7 @@ def build_catalog_dict(
         processor_name=processor_name,
         input_path=input_path,
         media_files=media_files,
-        workers=workers,
+        threads=threads,
         metadata_extractor=metadata_extractor,
         db_path=db_path,
     ):
@@ -66,7 +66,7 @@ class TestCatalogMediaFiles:
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
-            workers=2,
+            threads=2,
         )
 
         assert "processor" in catalog
@@ -85,7 +85,7 @@ class TestCatalogMediaFiles:
                 processor_name="Test Processor",
                 input_path=temp_media_dir,
                 media_files=media_files,
-                workers=2,
+                threads=2,
             )
         )
 
@@ -104,7 +104,7 @@ class TestCatalogMediaFiles:
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
-            workers=2,
+            threads=2,
         )
 
         required_fields = [
@@ -130,7 +130,7 @@ class TestCatalogMediaFiles:
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
-            workers=2,
+            threads=2,
         )
 
         for entry in catalog["files"]:
@@ -145,7 +145,7 @@ class TestCatalogMediaFiles:
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
-            workers=2,
+            threads=2,
         )
 
         hashes = [entry["content_hash"] for entry in catalog["files"]]
@@ -159,7 +159,7 @@ class TestCatalogMediaFiles:
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
-            workers=2,
+            threads=2,
         )
 
         for entry in catalog["files"]:
@@ -174,7 +174,7 @@ class TestCatalogMediaFiles:
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
-            workers=2,
+            threads=2,
         )
 
         for entry in catalog["files"]:
@@ -190,7 +190,7 @@ class TestCatalogMediaFiles:
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=[],
-            workers=2,
+            threads=2,
         )
 
         assert catalog["files"] == []
@@ -203,7 +203,7 @@ class TestCatalogMediaFiles:
                 processor_name="Test Processor",
                 input_path=temp_media_dir,
                 media_files=[],
-                workers=2,
+                threads=2,
             )
         )
         assert entries == []
@@ -219,7 +219,7 @@ class TestCatalogMediaFiles:
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
-            workers=2,
+            threads=2,
             metadata_extractor=extract_metadata,
         )
 
@@ -241,7 +241,7 @@ class TestCatalogMediaFiles:
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
-            workers=2,
+            threads=2,
             metadata_extractor=failing_extractor,
         )
 
@@ -262,7 +262,7 @@ class TestCatalogMediaFiles:
                 processor_name="Test Processor",
                 input_path=temp_media_dir,
                 media_files=media_files,
-                workers=2,
+                threads=2,
             )
 
         # Perceptual hash should be None when disabled
@@ -278,7 +278,7 @@ class TestCatalogMediaFiles:
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=[existing_file, missing_file],
-            workers=2,
+            threads=2,
         )
 
         # Should only have the existing file
@@ -299,7 +299,7 @@ class TestCatalogMediaFiles:
             processor_name="Test Processor",
             input_path=temp_media_dir,
             media_files=media_files,
-            workers=2,
+            threads=2,
         )
 
         assert len(catalog["files"]) == 1
@@ -370,7 +370,7 @@ class TestProcessorBuildCatalogStreaming:
         """Test that build_catalog returns a generator, not a dict."""
         from processors.google_voice.processor import GoogleVoiceProcessor
 
-        result = GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=2)
+        result = GoogleVoiceProcessor.build_catalog(str(temp_export_dir), threads=2)
 
         # Result should be a generator, not a dict
         assert isinstance(result, types.GeneratorType), (
@@ -381,7 +381,7 @@ class TestProcessorBuildCatalogStreaming:
         """Test that entries are yielded one at a time (lazy evaluation)."""
         from processors.google_voice.processor import GoogleVoiceProcessor
 
-        generator = GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=1)
+        generator = GoogleVoiceProcessor.build_catalog(str(temp_export_dir), threads=1)
 
         # Get first entry
         first_entry = next(generator)
@@ -403,7 +403,7 @@ class TestProcessorBuildCatalogStreaming:
         from processors.google_voice.processor import GoogleVoiceProcessor
 
         entries = list(
-            GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=2)
+            GoogleVoiceProcessor.build_catalog(str(temp_export_dir), threads=2)
         )
 
         required_fields = [
@@ -435,7 +435,7 @@ class TestProcessorBuildCatalogStreaming:
         metadata_file = tmp_path / "metadata.json"
         metadata_file.write_text(json.dumps(metadata))
 
-        result = GoogleVoiceProcessor.build_catalog(str(tmp_path), workers=2)
+        result = GoogleVoiceProcessor.build_catalog(str(tmp_path), threads=2)
 
         # Should be a generator
         assert isinstance(result, types.GeneratorType)
@@ -450,12 +450,12 @@ class TestProcessorBuildCatalogStreaming:
 
         # First iteration
         entries1 = list(
-            GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=2)
+            GoogleVoiceProcessor.build_catalog(str(temp_export_dir), threads=2)
         )
 
         # Second iteration (fresh call)
         entries2 = list(
-            GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=2)
+            GoogleVoiceProcessor.build_catalog(str(temp_export_dir), threads=2)
         )
 
         assert len(entries1) == len(entries2) == 2
@@ -469,7 +469,7 @@ class TestProcessorBuildCatalogStreaming:
         from processors.google_voice.processor import GoogleVoiceProcessor
 
         entries = list(
-            GoogleVoiceProcessor.build_catalog(str(temp_export_dir), workers=2)
+            GoogleVoiceProcessor.build_catalog(str(temp_export_dir), threads=2)
         )
 
         assert len(entries) == 2
@@ -518,7 +518,7 @@ class TestProcessorBuildCatalogStreaming:
         metadata_file = tmp_path / "metadata.json"
         metadata_file.write_text(json.dumps(metadata))
 
-        generator = GoogleVoiceProcessor.build_catalog(str(tmp_path), workers=1)
+        generator = GoogleVoiceProcessor.build_catalog(str(tmp_path), threads=1)
 
         # Consume entries one by one, tracking what we've seen
         seen_paths = []
@@ -629,7 +629,7 @@ class TestMultipleProcessorStreaming:
         """Test Discord processor returns generator."""
         from processors.discord.processor import DiscordProcessor
 
-        result = DiscordProcessor.build_catalog(str(temp_discord_export), workers=2)
+        result = DiscordProcessor.build_catalog(str(temp_discord_export), threads=2)
         assert isinstance(result, types.GeneratorType)
 
         entries = list(result)
@@ -641,7 +641,7 @@ class TestMultipleProcessorStreaming:
         """Test iMessage processor returns generator."""
         from processors.imessage.processor import IMessageProcessor
 
-        result = IMessageProcessor.build_catalog(str(temp_imessage_export), workers=2)
+        result = IMessageProcessor.build_catalog(str(temp_imessage_export), threads=2)
         assert isinstance(result, types.GeneratorType)
 
         entries = list(result)
@@ -679,7 +679,7 @@ class TestMultipleProcessorStreaming:
                 proc_dir = tmp_path / f"proc_{idx}"
                 proc_dir.mkdir()
 
-                result = processor.build_catalog(str(proc_dir), workers=1)
+                result = processor.build_catalog(str(proc_dir), threads=1)
 
                 # Should be a generator type
                 assert isinstance(result, types.GeneratorType), (
@@ -709,7 +709,7 @@ class TestStreamingMemoryBehavior:
             8 workers x 36MB = 288MB peak just for image decoding
 
         Mitigations:
-        1. Use --workers 2 for low-memory systems
+        1. Use --threads 2 for low-memory systems
         2. Disable perceptual hashing: DEDUP_USE_PERCEPTUAL=false
         3. The early-downsampling optimization reduces memory after initial load
     """
@@ -751,7 +751,7 @@ class TestStreamingMemoryBehavior:
             processor_name="Test",
             input_path=large_temp_dir,
             media_files=media_files,
-            workers=1,  # Single worker for predictable behavior
+            threads=1,  # Single worker for predictable behavior
         ):
             entries_processed += 1
             # Sample memory at intervals
@@ -789,7 +789,7 @@ class TestStreamingMemoryBehavior:
             processor_name="Test",
             input_path=large_temp_dir,
             media_files=media_files,
-            workers=1,
+            threads=1,
         ):
             # Verify we get a fresh entry each time
             assert entry is not current_entry, (
@@ -817,7 +817,7 @@ class TestStreamingMemoryBehavior:
             processor_name="Test",
             input_path=large_temp_dir,
             media_files=media_files,
-            workers=1,
+            threads=1,
         )
 
         # collect_catalog should have all entries in memory at once
@@ -891,7 +891,7 @@ class TestStreamingMemoryBehavior:
 
         # Process using the actual generator
         batch = []
-        for entry in DiscordProcessor.build_catalog(str(tmp_path), workers=1):
+        for entry in DiscordProcessor.build_catalog(str(tmp_path), threads=1):
             batch.append(entry)
             if len(batch) >= 100:
                 mock_db.write_catalog_entries_batch("test_run", "test_export", batch)
@@ -934,7 +934,7 @@ class TestStreamingMemoryBehavior:
                     processor_name="Test",
                     input_path=large_temp_dir,
                     media_files=media_files,
-                    workers=8,  # This should be overridden by env var
+                    threads=8,  # This should be overridden by env var
                 )
             )
 
@@ -965,7 +965,7 @@ class TestStreamingMemoryBehavior:
         Mitigations for memory-constrained systems:
         1. CATALOG_WORKERS=2 - Limit parallel file processing
         2. DEDUP_USE_PERCEPTUAL=false - Skip perceptual hashing entirely
-        3. --workers 2 - Reduce global worker count
+        3. --threads 2 - Reduce global thread count
 
         The streaming catalog architecture ensures catalog ENTRIES don't
         accumulate, but file processing memory is still bounded by worker count.

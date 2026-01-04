@@ -35,13 +35,13 @@ class ValidPreprocessor(PreprocessorBase):
         self,
         export_path: Path,
         output_dir: Optional[Path],
-        workers: Optional[int] = None,
+        threads: Optional[int] = None,
     ):
         super().__init__(
             processor_name="ValidTest",
             export_path=export_path,
             output_dir=output_dir,
-            workers=workers,
+            threads=threads,
         )
         self.detect_count = 0
 

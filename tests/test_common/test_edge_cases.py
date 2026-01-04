@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from common.config.runtime import default_worker_count
+from common.config.runtime import default_thread_count
 from common.dedup.hashing import compute_content_hash
 from common.detection import detect_from_dirname
 from common.failures import FailureTracker
@@ -335,9 +335,9 @@ class TestTimestampEdgeCases:
 class TestResourceLimits:
     """Tests for resource limit handling."""
 
-    def test_default_worker_count_valid(self) -> None:
-        """Should return reasonable worker count."""
-        count = default_worker_count()
+    def test_default_thread_count_valid(self) -> None:
+        """Should return reasonable thread count."""
+        count = default_thread_count()
         assert count >= 1
         assert count <= (os.cpu_count() or 1)
 

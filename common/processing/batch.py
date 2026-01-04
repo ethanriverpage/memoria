@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Batch parallel processing utilities."""
+"""Batch parallel processing utilities.
 
-import multiprocessing
+All functions in this module use threading (ThreadPoolExecutor) for within-export
+parallelism. Cross-export parallelism uses ProcessPoolExecutor directly in memoria.py.
+"""
+
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, List, Optional, TypeVar
 
 from common.output.progress import (
     PHASE_PREPROCESS,
@@ -16,15 +19,31 @@ T = TypeVar("T")
 R = TypeVar("R")
 
 
-def process_batches_parallel(
+def process_batches_threaded(
     tasks: List[T],
     worker_fn: Callable[[List[T]], List[R]],
-    num_workers: int,
+    num_threads: int,
     batch_size: int = 100,
     phase: str = PHASE_PROCESS,
     description: str = "Processing",
 ) -> List[R]:
-    """Process tasks in batches using multiprocessing pool with progress bar."""
+    """Process tasks in batches using ThreadPoolExecutor with progress bar.
+
+    Use this for I/O-bound operations or when calling native libraries that release
+    the GIL.
+
+    Args:
+        tasks: List of tasks to process.
+        worker_fn: Function to call for each batch. Should accept a list of tasks
+            and return a list of results.
+        num_threads: Number of parallel threads.
+        batch_size: Number of tasks per batch (default 100).
+        phase: Phase name for progress bar (use PHASE_* constants).
+        description: Action description for progress bar.
+
+    Returns:
+        Flattened list of results from all batches.
+    """
     if not tasks:
         return []
 
@@ -33,8 +52,8 @@ def process_batches_parallel(
     for i in range(0, len(tasks), batch_size):
         batched_tasks.append(tasks[i : i + batch_size])
 
-    # Process batches in parallel (or sequentially when num_workers <= 1)
-    if num_workers <= 1:
+    # Process batches (sequentially when num_threads <= 1)
+    if num_threads <= 1:
         batch_results = [
             worker_fn(batch)
             for batch in progress_bar(
@@ -45,15 +64,13 @@ def process_batches_parallel(
             )
         ]
     else:
-        with multiprocessing.Pool(processes=num_workers) as pool:
-            batch_results = list(
-                progress_bar(
-                    pool.imap(worker_fn, batched_tasks),
-                    phase,
-                    description,
-                    total=len(batched_tasks),
-                )
-            )
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+            future_to_batch = {
+                executor.submit(worker_fn, batch): batch for batch in batched_tasks
+            }
+            batch_results = []
+            for future in futures_progress(future_to_batch, phase, description):
+                batch_results.append(future.result())
 
     # Flatten results
     results: List[R] = []
@@ -63,46 +80,47 @@ def process_batches_parallel(
     return results
 
 
-def process_items_parallel(
+def process_items_threaded(
     tasks: List[T],
     worker_fn: Callable[[T], R],
-    num_workers: int,
+    num_threads: int,
     phase: str = PHASE_PROCESS,
     description: str = "Processing",
-    initializer: Optional[Callable[..., None]] = None,
-    initargs: Tuple[Any, ...] = (),
 ) -> List[R]:
-    """Process tasks in parallel using a multiprocessing pool with progress bar.
+    """Process tasks using ThreadPoolExecutor with progress bar.
 
-    Unlike process_batches_parallel(), this maps a worker function over individual
-    tasks (no batching), and supports an optional pool initializer for worker
-    process setup (e.g., logging configuration).
+    Use this for I/O-bound operations or when calling native libraries that release
+    the GIL.
+
+    Args:
+        tasks: List of tasks to process.
+        worker_fn: Function to call for each task. Should accept a single task
+            and return a result.
+        num_threads: Number of parallel threads.
+        phase: Phase name for progress bar (use PHASE_* constants).
+        description: Action description for progress bar.
+
+    Returns:
+        List of results from all tasks (in completion order).
     """
     if not tasks:
         return []
 
-    if num_workers <= 1:
+    if num_threads <= 1:
         return [worker_fn(task) for task in progress_bar(tasks, phase, description)]
 
-    with multiprocessing.Pool(
-        processes=num_workers,
-        initializer=initializer,
-        initargs=initargs,
-    ) as pool:
-        return list(
-            progress_bar(
-                pool.imap(worker_fn, tasks),
-                phase,
-                description,
-                total=len(tasks),
-            )
-        )
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        future_to_task = {executor.submit(worker_fn, task): task for task in tasks}
+        results = []
+        for future in futures_progress(future_to_task, phase, description):
+            results.append(future.result())
+        return results
 
 
 def process_parallel_threaded(
     tasks: List[T],
     worker_fn: Callable[[T], R],
-    workers: int,
+    threads: int,
     phase: str = PHASE_PREPROCESS,
     description: str = "Processing",
     task_id_fn: Optional[Callable[[T], Any]] = None,
@@ -120,7 +138,7 @@ def process_parallel_threaded(
         tasks: List of tasks to process.
         worker_fn: Function to call for each task. Should accept a single task
             and return a result (or None to skip).
-        workers: Number of parallel workers.
+        threads: Number of parallel threads.
         phase: Phase name for progress bar (use PHASE_* constants).
         description: Action description for progress bar.
         task_id_fn: Optional function to extract task ID for error messages.
@@ -140,7 +158,7 @@ def process_parallel_threaded(
         results = process_parallel_threaded(
             tasks=conversation_list,
             worker_fn=self._process_single_conversation,
-            workers=self.workers,
+            threads=self.threads,
             phase=PHASE_PREPROCESS,
             description="Parsing conversations",
             task_id_fn=lambda t: t[1],  # Extract conversation ID
@@ -154,7 +172,7 @@ def process_parallel_threaded(
 
     results: List[R] = []
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    with ThreadPoolExecutor(max_workers=threads) as executor:
         future_to_task = {executor.submit(worker_fn, task): task for task in tasks}
 
         for future in futures_progress(future_to_task, phase, description):

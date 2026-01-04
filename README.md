@@ -361,7 +361,7 @@ Before processing, export your data from the platforms:
 | **First Time?** | Start with the [Getting Started Guide](../../wiki/Getting-Started) for setup instructions |
 | **Important Behaviors** | Read [Common Gotchas](../../wiki/Common-Gotchas) to avoid surprises |
 | **Export Setup** | See platform-specific guides for export preparation |
-| **Performance** | Use `--workers N` to control parallelism |
+| **Performance** | Use `--threads N` to control parallelism |
 | **Multiple Exports** | Use `--originals` to batch process everything at once |
 | **Cross-Platform Dedup** | Set `CROSS_PROCESSOR_DEDUP=true` to deduplicate across platforms |
 | **Debugging** | Enable `--verbose` for detailed logs |

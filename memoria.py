@@ -8,7 +8,8 @@ a single export can contain multiple types of data (e.g., Google export with
 Photos + Chat + Voice).
 
 Usage:
-    memoria.py <input_dir> [-o output_dir] [-v] [--workers N]
+    memoria.py <input_dir> [-o output_dir] [-v] [--threads N]
+    memoria.py --originals <dir> --parallel
     memoria.py --list-processors
 """
 
@@ -46,7 +47,12 @@ from common.config.dependencies import (  # noqa: E402
     print_immich_error,
 )
 from common.config.env import load_dotenv_file  # noqa: E402
-from common.config.runtime import parse_bool_env  # noqa: E402
+from common.config.runtime import (  # noqa: E402
+    auto_process_count,
+    default_thread_count,
+    parse_bool_env,
+    parse_int_env,
+)
 from common.dedup.config import is_dedup_enabled, get_dedup_config  # noqa: E402
 from common.dedup.database import HashDatabase  # noqa: E402
 from common.dedup.service import DeduplicationService, save_manifest  # noqa: E402
@@ -286,7 +292,7 @@ def load_all_processors(registry: ProcessorRegistry, quiet: bool = False) -> Non
 
 def _build_catalog_worker(
     export_dir_str: str,
-    workers: int,
+    threads: int,
     log_file: Optional[str],
     db_path: str,
     run_id: str,
@@ -303,7 +309,7 @@ def _build_catalog_worker(
 
     Args:
         export_dir_str: Path to the export directory as a string.
-        workers: Number of worker threads for hashing within this process.
+        threads: Number of threads for hashing within this process.
         log_file: Path to log file for worker output, or None.
         db_path: Path to SQLite database for streaming writes.
         run_id: Unique identifier for this processing run.
@@ -369,7 +375,7 @@ def _build_catalog_worker(
 
             # Stream entries directly to database (never accumulates all in memory)
             batch = []
-            for entry in processor.build_catalog(catalog_dir, workers=workers):
+            for entry in processor.build_catalog(catalog_dir, threads=threads):
                 # Ensure _processor is set
                 if "_processor" not in entry:
                     entry["_processor"] = processor_name
@@ -517,7 +523,7 @@ def run_phased_dedup_processing(
                         working_dir = processor.preprocess(
                             str(export_dir),
                             str(cache_path),
-                            workers=args.workers,
+                            threads=args.threads,
                         )
                         if working_dir:
                             preprocessed_dirs[(export_dir, processor_name)] = Path(
@@ -552,7 +558,7 @@ def run_phased_dedup_processing(
         os.environ.get("PARALLEL_CATALOG"), default=True
     )
 
-    # Convert preprocessed_dirs to JSON-serializable format for workers
+    # Convert preprocessed_dirs to JSON-serializable format for subprocess workers
     # Key format: "export_dir|processor_name" -> "working_dir"
     import json as json_module
 
@@ -565,7 +571,7 @@ def run_phased_dedup_processing(
         # Parallel catalog building across exports with streaming to DB
         max_catalog_workers = min(len(dirs_to_process), 8)
         logger.info(
-            "Building catalogs in parallel (%d workers, streaming to DB)...",
+            "Building catalogs in parallel (%d processes, streaming to DB)...",
             max_catalog_workers,
         )
 
@@ -582,7 +588,7 @@ def run_phased_dedup_processing(
                 executor.submit(
                     _build_catalog_worker,
                     str(export_dir),
-                    args.workers,
+                    args.threads,
                     str(log_file) if log_file else None,
                     str(config.database_path),  # Pass DB path for streaming
                     run_id,  # Pass run_id for streaming
@@ -652,7 +658,7 @@ def run_phased_dedup_processing(
                     processor_file_count = 0
                     for entry in processor.build_catalog(
                         str(catalog_dir),
-                        workers=args.workers,
+                        threads=args.threads,
                     ):
                         if "_processor" not in entry:
                             entry["_processor"] = processor_name
@@ -763,7 +769,7 @@ def run_phased_dedup_processing(
             status = "ERROR"
             try:
                 kwargs = {
-                    "workers": args.workers,
+                    "threads": args.threads,
                     "temp_dir": temp_dir,
                 }
 
@@ -883,7 +889,7 @@ def _process_export_worker(
     export_dir: Path,
     output_base: str | None,
     verbosity: int,
-    workers: int,
+    threads: int,
     immich_enabled: bool,
     immich_url: str | None,
     immich_key: str | None,
@@ -904,7 +910,7 @@ def _process_export_worker(
         export_dir: Path to the export directory
         output_base: Base output directory (or None)
         verbosity: Console/file verbosity level (-v/-vv)
-        workers: Number of workers for internal processing
+        threads: Number of threads for internal processing
         immich_enabled: Whether Immich uploads are enabled
         immich_url: Immich server URL
         immich_key: Immich API key
@@ -939,17 +945,17 @@ def _process_export_worker(
         # Create a simple args namespace
         class Args:
             output: Optional[str]
-            workers: Optional[int]
+            threads: Optional[int]
             processor: Optional[str]
 
             def __init__(self):
                 self.output = None
-                self.workers = None
+                self.threads = None
                 self.processor = None
 
         args = Args()
         args.output = output_base
-        args.workers = workers
+        args.threads = threads  # threads param from main process
         args.processor = processor_filter
 
         # Adjust output path for multi-export mode
@@ -1100,8 +1106,8 @@ def process_single_export(
         try:
             # Prepare kwargs for processor
             kwargs = {}
-            if args.workers:
-                kwargs["workers"] = args.workers
+            if args.threads:
+                kwargs["threads"] = args.threads
 
             # Pass temp_dir to processors
             kwargs["temp_dir"] = temp_dir
@@ -1565,8 +1571,8 @@ Examples:
   # Process multiple exports sequentially
   %(prog)s --originals /path/to/originals_folder -o /path/to/output
   
-  # Process multiple exports in parallel (2 at a time)
-  %(prog)s --originals /path/to/originals_folder -o /path/to/output --parallel-exports 2
+  # Process multiple exports in parallel (auto-sized)
+  %(prog)s --originals /path/to/originals_folder -o /path/to/output --parallel
   
   # List all available processors
   %(prog)s --list-processors
@@ -1588,11 +1594,9 @@ Examples:
         help="Only run the specified processor (case-insensitive). Use --list-processors to see available names.",
     )
     parser.add_argument(
-        "--parallel-exports",
-        type=int,
-        default=None,
-        metavar="N",
-        help="Process N exports in parallel when using --originals (default: 1 for sequential; recommended: 2-4)",
+        "--parallel",
+        action="store_true",
+        help="Enable parallel export processing when using --originals (auto-sizes process count)",
     )
     parser.add_argument(
         "-o",
@@ -1608,10 +1612,10 @@ Examples:
         help="Set verbosity (-v for summaries, -vv for file-level details)",
     )
     parser.add_argument(
-        "--workers",
-        "-w",
+        "--threads",
+        "-t",
         type=int,
-        help="Number of parallel workers for processing (default: CPU count - 1)",
+        help="Number of threads for within-export processing (default: auto based on mode)",
     )
     parser.add_argument(
         "--list-processors",
@@ -1679,6 +1683,17 @@ Examples:
 
     # Load .env early (CLI > env > .env precedence is enforced later when reading values)
     load_dotenv_file(args.env_file)
+
+    # Resolve parallel enabled: CLI > env > default false
+    parallel_enabled = args.parallel
+    if not parallel_enabled:
+        env_parallel = os.environ.get("MEMORIA_PARALLEL")
+        parallel_enabled = parse_bool_env(env_parallel) if env_parallel else False
+
+    # Validate --parallel requires --originals
+    if parallel_enabled and not args.originals:
+        parser.error("--parallel (or MEMORIA_PARALLEL=true) requires --originals")
+        return 1
 
     # Generate unique run_id for this processing session
     run_id = f"run_{uuid.uuid4().hex[:12]}"
@@ -1794,51 +1809,36 @@ Examples:
         dirs_to_process = [input_path]
 
     # Resolve Immich configuration
-    cpu_count = multiprocessing.cpu_count()
+    system_cpu_count = multiprocessing.cpu_count()
 
-    # Validate and set parallel_exports
-    parallel_exports = args.parallel_exports if args.parallel_exports else 1
+    # Resolve threads: CLI > env > auto
+    if args.threads is not None:
+        threads = args.threads
+    else:
+        env_threads = parse_int_env(os.environ.get("MEMORIA_THREADS"))
+        if env_threads is not None:
+            threads = env_threads
+        else:
+            threads = default_thread_count(parallel_enabled=parallel_enabled)
 
-    # Validate parallel_exports for --originals mode
-    if args.parallel_exports and not args.originals:
-        logger.warning("--parallel-exports is only used with --originals; ignoring")
+    # Resolve parallel_exports (process count): env override > auto
+    if parallel_enabled:
+        exports_count = len(dirs_to_process)
+        env_processes = parse_int_env(os.environ.get("MEMORIA_PROCESSES"))
+        if env_processes is not None:
+            parallel_exports = min(env_processes, exports_count)
+        else:
+            # Auto-calculate based on CPU budget and threads
+            parallel_exports = auto_process_count(threads, exports_count)
+    else:
         parallel_exports = 1
 
-    # Smart defaults and warnings for parallel processing
-    if parallel_exports > 1 and args.originals:
-        # Calculate total processes that will be spawned
-        workers_per_export = args.workers if args.workers else max(1, cpu_count - 1)
-        total_processes = parallel_exports * (
-            workers_per_export + 1
-        )  # +1 for main process per export
-
-        # Warn if over-subscribing significantly
-        if total_processes > cpu_count * 1.5:
-            logger.warning(
-                "Running %d exports with %d workers each",
-                parallel_exports,
-                workers_per_export,
-            )
-            logger.warning(
-                "         will create ~%d processes on %d CPU cores",
-                total_processes,
-                cpu_count,
-            )
-            logger.warning(
-                "         This may cause performance degradation due to over-subscription."
-            )
-
-            # Suggest better configuration
-            suggested_workers = max(1, (cpu_count // parallel_exports) - 1)
-            logger.info(
-                "SUGGESTION: Try --parallel-exports %d --workers %d",
-                parallel_exports,
-                suggested_workers,
-            )
-            logger.info(
-                "            or reduce --parallel-exports to %d",
-                max(1, cpu_count // (workers_per_export + 1)),
-            )
+    logger.debug(
+        "Concurrency config: threads=%d, parallel_exports=%d, parallel_enabled=%s",
+        threads,
+        parallel_exports,
+        parallel_enabled,
+    )
 
     immich_url = args.immich_url or os.environ.get("IMMICH_INSTANCE_URL")
     immich_key = args.immich_key or os.environ.get("IMMICH_API_KEY")
@@ -1849,8 +1849,6 @@ Examples:
     )
 
     # Read skip_hash from environment variable (default to True for speed)
-    from common.config.runtime import parse_bool_env
-
     env_skip_hash = os.environ.get("IMMICH_SKIP_HASH")
     immich_skip_hash = (
         parse_bool_env(env_skip_hash) if env_skip_hash is not None else True
@@ -2007,7 +2005,7 @@ Examples:
                 success = processor.process_consolidated(
                     [str(p) for p in paths],
                     consolidated_output,
-                    workers=args.workers,
+                    threads=threads,
                     temp_dir=temp_dir,
                 )
 
@@ -2078,7 +2076,7 @@ Examples:
                         export_dir,
                         output_base_str,
                         args.verbosity,
-                        args.workers,
+                        threads,
                         immich_enabled,
                         immich_url,
                         immich_key,

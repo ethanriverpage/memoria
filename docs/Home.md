@@ -106,7 +106,7 @@ For all command-line options, see the [Usage Guide](Usage).
 2. **Important Behaviors**: Read [Common Gotchas](Common-Gotchas) to avoid surprises
 3. **Export Setup**: See platform-specific guides ([Discord](Discord-Export), [Google](Google-Export), [iMessage](iMessage-Export), [Instagram](Instagram-Export), [Snapchat](Snapchat-Export)) for export preparation
 4. **Questions?** Check the [FAQ](FAQ) for common questions and answers
-5. **Performance**: Use `--workers` to control parallelism (see [Usage Guide](Usage))
+5. **Performance**: Use `--threads` to control parallelism (see [Usage Guide](Usage))
 6. **Multiple Exports**: Use `--originals` to batch process (see [Parallel Processing](Parallel-Processing))
 7. **Debugging**: Use `--verbose` for detailed logs (see [Logging](Logging))
 8. **Immich Upload**: Configure automatic upload to Immich (see [Immich Upload](Immich-Upload))

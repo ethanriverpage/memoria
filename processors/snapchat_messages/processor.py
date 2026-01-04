@@ -9,7 +9,7 @@ from common.dedup.service import (
     get_canonical_timestamp,
     save_dedup_metadata,
 )
-from common.config.runtime import default_worker_count
+from common.config.runtime import default_thread_count
 from common.dedup.description import (
     SourceEntry,
     build_description,
@@ -35,7 +35,7 @@ from common.media.overlay import (
     create_video_with_overlay,
     OverlayProcessingError,
 )
-from common.output.logging import get_processor_logger, init_worker_logging
+from common.output.logging import get_processor_logger
 from common.output.paths import OutputInfo
 from common.output.summary import print_processing_summary
 from processors.base import ProcessorBase
@@ -157,7 +157,7 @@ class SnapchatMessagesProcessor(ProcessorBase):
         """Run preprocessing on raw Snapchat Messages export."""
         input_path = Path(input_dir)
         cache_path = Path(cache_dir)
-        workers = kwargs.get("workers")
+        threads = kwargs.get("threads")
         username_override = None
 
         # Check for consolidated export structure (messages/chat_media/)
@@ -182,7 +182,7 @@ class SnapchatMessagesProcessor(ProcessorBase):
         preprocessor = SnapchatMessagesPreprocessor(
             export_path=input_path,
             output_dir=cache_path,
-            workers=workers,
+            threads=threads,
             username_override=username_override,
         )
 
@@ -198,13 +198,13 @@ class SnapchatMessagesProcessor(ProcessorBase):
 
         Args:
             input_dir: Path to preprocessed input directory
-            **kwargs: Additional arguments (workers)
+            **kwargs: Additional arguments (threads)
 
         Yields:
             Catalog entries with processor name and file data.
         """
         input_path = Path(input_dir)
-        workers = kwargs.get("workers", 4)
+        threads = kwargs.get("threads", 4)
 
         def extract_preprocessed_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
             """Extract metadata from preprocessed entry.
@@ -241,7 +241,7 @@ class SnapchatMessagesProcessor(ProcessorBase):
         catalog_iter = SnapchatMessagesProcessor.catalog_from_preprocessed_if_available(
             processor_name="Snapchat Messages",
             input_path=input_path,
-            workers=workers,
+            threads=threads,
             metadata_extractor=extract_preprocessed_metadata,
             container_key="conversations",
         )
@@ -286,7 +286,7 @@ class SnapchatMessagesProcessor(ProcessorBase):
         process_logic(
             input_dir=actual_input_dir,
             output_dir=output_dir,
-            workers=kwargs.get("workers"),
+            threads=kwargs.get("threads"),
             dedup_manifest=dedup_manifest,
         )
         return True
@@ -734,7 +734,7 @@ def _create_file_worker(args_tuple):
 def process_logic(
     input_dir,
     output_dir="processed_messages",
-    workers=None,
+    threads=None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Core processing logic for Snapchat Messages exports.
@@ -745,8 +745,6 @@ def process_logic(
     Returns:
         True if processing succeeded, False otherwise.
     """
-    log_filename = None
-
     # Validate input directory exists
     input_dir = Path(input_dir)
     if not input_dir.exists():
@@ -774,15 +772,14 @@ def process_logic(
 
     logger.info("Processing preprocessed directory: %s", short_path(input_dir))
     return _process_snapchat_working_directory(
-        input_dir, output_dir, workers, log_filename, dedup_manifest
+        input_dir, output_dir, threads, dedup_manifest
     )
 
 
 def _process_snapchat_working_directory(
     working_dir,
     output_dir,
-    workers,
-    log_filename,
+    threads,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Process a working directory (preprocessed Snapchat Messages export).
@@ -981,9 +978,9 @@ def _process_snapchat_working_directory(
         short_path(output_dir),
     )
 
-    # Determine number of parallel workers
-    num_workers = workers if workers is not None else default_worker_count()
-    logger.info("Using %d parallel workers", num_workers)
+    # Determine number of parallel threads
+    num_threads = threads if threads is not None else default_thread_count()
+    logger.info("Using %d parallel threads", num_threads)
 
     # Prepare arguments for parallel processing
     process_args = []
@@ -1005,21 +1002,13 @@ def _process_snapchat_working_directory(
             )
         )
 
-    # Process files in parallel (supports worker logging initializer)
-    # Specify app modules for DEBUG level in workers
-    worker_app_modules = [
-        __name__,
-        "common.media.overlay",
-        "common.media.encoder",
-        "processors.snapchat_messages.preprocess",
-    ]
-    results = SnapchatMessagesProcessor.process_items_parallel(
+    # Process files in parallel using threads
+    # Note: Logging is configured in-process, no initializer needed for threads
+    results = SnapchatMessagesProcessor.process_items_threaded(
         tasks=process_args,
         worker_fn=_create_file_worker,
-        num_workers=num_workers,
+        num_threads=num_threads,
         description="Creating files",
-        initializer=init_worker_logging,
-        initargs=(log_filename, worker_app_modules),
     )
 
     # Phase 2: Track overlay failures and collect non-MKV files for batch EXIF processing

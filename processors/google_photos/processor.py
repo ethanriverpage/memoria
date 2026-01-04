@@ -11,7 +11,7 @@ from common.dedup.description import (
     PLATFORM_GOOGLE,
     SERVICE_PHOTOS,
 )
-from common.config.runtime import default_worker_count
+from common.config.runtime import default_thread_count
 from common.dedup.service import (
     get_canonical_timestamp,
     save_dedup_metadata,
@@ -29,7 +29,7 @@ from common.output.logging import get_processor_logger
 from common.output.paths import OutputInfo
 from common.output.summary import print_processing_summary
 from common.output.progress import PHASE_PROCESS, progress_bar
-from common.processing import process_batches_parallel
+from common.processing import process_batches_threaded
 from processors.base import MediaCopyTask, ProcessorBase
 from processors.google_photos.preprocess import GooglePhotosPreprocessor
 
@@ -120,7 +120,7 @@ class GooglePhotosProcessor(ProcessorBase):
         """Run preprocessing on raw Google Photos export."""
         input_path = Path(input_dir)
         cache_path = Path(cache_dir)
-        workers = kwargs.get("workers")
+        threads = kwargs.get("threads")
 
         log.logger.info("Preprocessing Google Photos export to: %s", cache_path)
 
@@ -129,7 +129,7 @@ class GooglePhotosProcessor(ProcessorBase):
         preprocessor = GooglePhotosPreprocessor(
             export_path=input_path,
             output_dir=cache_path,
-            workers=workers,
+            threads=threads,
         )
 
         if preprocessor.run():
@@ -144,13 +144,13 @@ class GooglePhotosProcessor(ProcessorBase):
 
         Args:
             input_dir: Path to preprocessed input directory
-            **kwargs: Additional arguments (workers)
+            **kwargs: Additional arguments (threads)
 
         Yields:
             Catalog entries with processor name and file data.
         """
         input_path = Path(input_dir)
-        workers = kwargs.get("workers", 4)
+        threads = kwargs.get("threads", 4)
 
         def extract_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
             """Extract metadata from preprocessed entry."""
@@ -163,7 +163,7 @@ class GooglePhotosProcessor(ProcessorBase):
         catalog_iter = GooglePhotosProcessor.catalog_from_preprocessed_if_available(
             processor_name="Google Photos",
             input_path=input_path,
-            workers=workers,
+            threads=threads,
             metadata_extractor=extract_metadata,
         )
         if catalog_iter is not None:
@@ -184,7 +184,7 @@ class GooglePhotosProcessor(ProcessorBase):
         process_logic(
             input_dir=input_dir,
             output_dir=output_dir,
-            workers=kwargs.get("workers"),
+            threads=kwargs.get("threads"),
             dedup_manifest=dedup_manifest,
         )
         return True
@@ -270,7 +270,7 @@ def _build_metadata_requests(
 def process_logic(
     input_dir,
     output_dir="final_googlephotos",
-    workers=None,
+    threads=None,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Core processing logic for Google Photos exports.
@@ -300,13 +300,13 @@ def process_logic(
         return False
 
     log.already_preprocessed(input_dir)
-    return _process_working_directory(input_dir, output_dir, workers, dedup_manifest)
+    return _process_working_directory(input_dir, output_dir, threads, dedup_manifest)
 
 
 def _process_working_directory(
     working_dir,
     output_dir,
-    workers,
+    threads,
     dedup_manifest: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Process a working directory (preprocessed export).
@@ -379,9 +379,9 @@ def _process_working_directory(
     # Create output directory
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    # Determine number of workers
-    num_workers = workers if workers is not None else default_worker_count()
-    log.using_workers(num_workers)
+    # Determine number of threads
+    num_threads = threads if threads is not None else default_thread_count()
+    log.using_threads(num_threads)
 
     # Pre-generate all output filenames to avoid race conditions
     log.generating_filenames()
@@ -509,10 +509,10 @@ def _process_working_directory(
     log.processing_start(output_dir)
 
     # Use shared batch processing utility (copy files only)
-    results = process_batches_parallel(
+    results = process_batches_threaded(
         tasks=processing_tasks,
         worker_fn=ProcessorBase.process_media_copy_batch,
-        num_workers=num_workers,
+        num_threads=num_threads,
         batch_size=100,
         description="Copying files",
     )

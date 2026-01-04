@@ -36,9 +36,6 @@ from common.files.utils import short_path
 from common.metadata.schema import PreprocessedMetadata, validate_metadata
 from common.output.paths import OutputInfo
 from common.output.progress import PHASE_PROCESS
-from common.processing import (
-    process_items_parallel as _process_items_parallel,
-)
 from common.validation.invariants import (
     require_non_unknown_username,
 )
@@ -48,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class MediaCopyTask:
-    """A single media copy task for multiprocessing workers.
+    """A single media copy task for parallel processing.
 
     This task format is processor-agnostic and supports the common 3-phase pipeline:
     1) Copy source file to destination
@@ -293,7 +290,7 @@ class ProcessorBase(ABC):
             input_dir: Path to input directory.
             output_dir: Final output directory path (includes subdirectory).
             dedup_manifest: Optional deduplication manifest.
-            **kwargs: Additional arguments (workers, etc.).
+            **kwargs: Additional arguments (threads, etc.).
 
         Returns:
             True if processing succeeded, False otherwise.
@@ -330,7 +327,7 @@ class ProcessorBase(ABC):
 
         Args:
             input_dir: Path to input directory.
-            **kwargs: Additional arguments (workers).
+            **kwargs: Additional arguments (threads).
 
         Yields:
             Catalog entry dictionaries with hashes and metadata.
@@ -368,7 +365,7 @@ class ProcessorBase(ABC):
         Args:
             input_dir: Path to the raw export directory.
             cache_dir: Path to the cache directory for storing preprocessed output.
-            **kwargs: Additional arguments (workers).
+            **kwargs: Additional arguments (threads).
 
         Returns:
             Path to the working directory (preprocessed output) on success,
@@ -475,7 +472,7 @@ class ProcessorBase(ABC):
     def catalog_from_preprocessed_if_available(
         processor_name: str,
         input_path: Path,
-        workers: int = 4,
+        threads: int = 4,
         metadata_extractor: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
         media_files_key: str = "media_files",
         container_key: Optional[str] = None,
@@ -489,7 +486,7 @@ class ProcessorBase(ABC):
         Args:
             processor_name: Name for the catalog (e.g., "Google Photos").
             input_path: Path to the directory to check.
-            workers: Number of parallel workers for computing missing hashes.
+            threads: Number of parallel threads for computing missing hashes.
             metadata_extractor: Optional function to transform metadata from each
                 media_files entry. Signature: (entry: Dict) -> Dict[str, Any].
             media_files_key: Key containing media file entries in metadata.
@@ -504,13 +501,13 @@ class ProcessorBase(ABC):
             @staticmethod
             def build_catalog(input_dir: str, **kwargs):
                 input_path = Path(input_dir)
-                workers = kwargs.get("workers", 4)
+                threads = kwargs.get("threads", 4)
 
                 # Check for preprocessed format first
                 catalog_iter = ProcessorBase.catalog_from_preprocessed_if_available(
                     processor_name="Google Photos",
                     input_path=input_path,
-                    workers=workers,
+                    threads=threads,
                     metadata_extractor=lambda e: {"albums": e.get("albums", [])},
                 )
                 if catalog_iter is not None:
@@ -537,7 +534,7 @@ class ProcessorBase(ABC):
         return catalog_from_preprocessed(
             processor_name=processor_name,
             input_path=input_path,
-            workers=workers,
+            threads=threads,
             metadata_extractor=metadata_extractor,
         )
 
@@ -546,31 +543,39 @@ class ProcessorBase(ABC):
     # =========================================================================
 
     @classmethod
-    def process_items_parallel(
+    def process_items_threaded(
         cls,
         tasks: List[Any],
         worker_fn: Callable[[Any], Any],
-        num_workers: int,
+        num_threads: int,
         *,
         phase: str = PHASE_PROCESS,
         description: str = "Processing",
-        initializer: Optional[Callable[..., None]] = None,
-        initargs: tuple[Any, ...] = (),
     ) -> List[Any]:
-        """Process tasks with a multiprocessing pool and shared progress handling.
+        """Process tasks with ThreadPoolExecutor and shared progress handling.
 
-        This is the standardized multiprocess mapping primitive for processors.
-        It supports a pool initializer (e.g., worker logging setup) and also
-        runs sequentially when num_workers <= 1.
+        This is the standardized threading primitive for within-export processing.
+        Use this for I/O-bound operations or when calling native libraries that
+        release the GIL.
+
+        Args:
+            tasks: List of tasks to process.
+            worker_fn: Function to call for each task.
+            num_threads: Number of parallel threads.
+            phase: Phase name for progress bar.
+            description: Action description for progress bar.
+
+        Returns:
+            List of results from all tasks.
         """
-        return _process_items_parallel(
+        from common.processing import process_items_threaded as _process_items_threaded
+
+        return _process_items_threaded(
             tasks=tasks,
             worker_fn=worker_fn,
-            num_workers=num_workers,
+            num_threads=num_threads,
             phase=phase,
             description=description,
-            initializer=initializer,
-            initargs=initargs,
         )
 
     @classmethod

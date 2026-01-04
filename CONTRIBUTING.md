@@ -263,12 +263,12 @@ class MyPlatformProcessor(ProcessorBase):
         Args:
             input_dir: Path to input directory
             output_dir: Platform/User output directory (from get_output_info)
-            **kwargs: Additional args (workers, temp_dir, etc.)
+            **kwargs: Additional args (threads, temp_dir, etc.)
             
         Returns:
             True if processing succeeded, False otherwise
         """
-        workers = kwargs.get("workers", 4)
+        threads = kwargs.get("threads", 4)
         
         # Build effective output: output_dir/service
         output_info = MyPlatformProcessor.get_output_info()

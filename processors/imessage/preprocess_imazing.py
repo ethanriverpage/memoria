@@ -131,7 +131,7 @@ class ImazingPreprocessor(PreprocessorBase):
         self,
         export_path: Path,
         output_dir: Optional[Path] = None,
-        workers: Optional[int] = None,
+        threads: Optional[int] = None,
         owner_name: Optional[str] = None,
         final_output_dir: Optional[Path] = None,
     ):
@@ -140,7 +140,7 @@ class ImazingPreprocessor(PreprocessorBase):
         Args:
             export_path: Path to iMazing export directory
             output_dir: Output directory for processed files
-            workers: Number of parallel workers for hashing/copying (default: 8)
+            threads: Number of parallel threads for hashing/copying (default: auto)
             owner_name: Override for device owner name
             final_output_dir: Final output directory for failure tracking
         """
@@ -153,7 +153,7 @@ class ImazingPreprocessor(PreprocessorBase):
             processor_name="iMessage",
             export_path=export_path,
             output_dir=output_dir,
-            workers=workers,
+            threads=threads,
             final_output_dir=final_output_dir,
         )
 

@@ -51,14 +51,14 @@ class GooglePhotosPreprocessor(PreprocessorBase):
         self,
         export_path: Path,
         output_dir: Optional[Path] = None,
-        workers: Optional[int] = None,
+        threads: Optional[int] = None,
         final_output_dir: Optional[Path] = None,
     ):
         super().__init__(
             processor_name="Google Photos",
             export_path=export_path,
             output_dir=output_dir,
-            workers=workers,
+            threads=threads,
             final_output_dir=final_output_dir,
         )
 
@@ -1069,7 +1069,7 @@ class GooglePhotosPreprocessor(PreprocessorBase):
         logger.info("   Found %d albums", len(album_list))
 
         logger.info(
-            "Processing albums and media files (using %d workers)...", self.workers
+            "Processing albums and media files (using %d threads)...", self.threads
         )
 
         # Phase 1: Collect all copy tasks from all albums in parallel
@@ -1092,7 +1092,7 @@ class GooglePhotosPreprocessor(PreprocessorBase):
         results = process_parallel_threaded(
             tasks=album_list,
             worker_fn=process_album_with_context,
-            workers=self.workers,
+            threads=self.threads,
             phase=PHASE_PREPROCESS,
             description="Parsing albums",
             task_id_fn=lambda t: t[0],  # album_name

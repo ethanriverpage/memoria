@@ -259,7 +259,7 @@ If you see import errors, try installing in development mode: `pip install -e .`
 
 ### Performance issues
 
-- Reduce `--workers` count if system is overloaded
+- Reduce `--threads` count if system is overloaded
 - Process smaller batches of exports at a time
 - Ensure sufficient disk space for temporary files and output
 

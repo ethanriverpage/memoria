@@ -542,11 +542,11 @@ See [Immich Upload](Immich-Upload) for configuration options.
 
 ## Processing Performance
 
-Use `--workers` to control parallelism:
+Use `--threads` to control parallelism:
 
 ```bash
-# Process with 8 parallel workers
-./memoria.py /path/to/snapchat-export -o /path/to/output --workers 8
+# Process with 8 parallel threads
+./memoria.py /path/to/snapchat-export -o /path/to/output --threads 8
 ```
 
 For details on overlay embedding performance, see the [Overlay Embedding](#overlay-embedding) section.
@@ -560,7 +560,7 @@ For details on overlay embedding performance, see the [Overlay Embedding](#overl
 3. **Processing Time**:
    - Photos process quickly (< 1 second each)
    - Videos with overlays require multi-pass encoding and take significantly longer
-   - Use `--workers` to parallelize processing across multiple CPU cores
+   - Use `--threads` to parallelize processing across multiple CPU cores
    - Hardware acceleration (if available) speeds up video processing considerably
 
 4. **Temporary Files**: Video overlay embedding creates temporary files during processing - these are automatically cleaned up after successful processing.

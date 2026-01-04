@@ -87,7 +87,7 @@ from common import (
     get_media_type,
     
     # Configuration
-    default_worker_count,
+    default_thread_count,
     check_exiftool,
     check_ffmpeg,
     
@@ -103,7 +103,6 @@ from common import (
     
     # Processing
     temp_processing_directory,
-    process_batches_parallel,
     print_processing_summary,
     print_preprocessing_stats,
     
@@ -124,7 +123,7 @@ from common.files.types import IMAGE_EXTENSIONS, get_media_type
 from common.files.naming import FilenameGenerator, sanitize_filename
 
 # Runtime configuration
-from common.config.runtime import default_worker_count, parse_bool_env
+from common.config.runtime import default_thread_count, parse_bool_env
 
 # Text normalization
 from common.text.normalize import normalize_text
@@ -133,7 +132,7 @@ from common.text.normalize import normalize_text
 from common.failures import FailureTracker
 
 # Processing utilities
-from common.processing import process_batches_parallel, temp_processing_directory
+from common.processing import process_batches_threaded, temp_processing_directory
 
 # Summary display
 from common.output.summary import print_processing_summary
