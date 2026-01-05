@@ -444,13 +444,13 @@ class ProcessorLogger:
         """
         self._logger.info("Loading metadata from %s...", path)
 
-    def export_username(self, username: str) -> None:
+    def export_username(self, username: Optional[str]) -> None:
         """Log detected export username/identifier.
 
         Args:
-            username: Detected username or identifier
+            username: Detected username or identifier (or None if not detected)
         """
-        self._logger.info("Export username: %s", username)
+        self._logger.info("Export username: %s", username or "(not detected)")
 
     def scanning_directory(self, path: str) -> None:
         """Log directory scan start.

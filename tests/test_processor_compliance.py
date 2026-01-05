@@ -83,7 +83,9 @@ def test_processor_contract(processor_registry, tmp_path: Path) -> None:
         # ---------------------------------------------------------------------
         output_info = cls.get_output_info()
         assert isinstance(output_info, OutputInfo)
-        assert isinstance(output_info.platform, str) and output_info.platform.strip() != ""
+        assert (
+            isinstance(output_info.platform, str) and output_info.platform.strip() != ""
+        )
         assert (
             isinstance(output_info.username_prefix, str)
             and output_info.username_prefix.strip() != ""
@@ -118,5 +120,3 @@ def test_processor_contract(processor_registry, tmp_path: Path) -> None:
         # ---------------------------------------------------------------------
         detect_sig = inspect.signature(cls.detect)
         assert len(detect_sig.parameters) == 1  # input_path
-
-

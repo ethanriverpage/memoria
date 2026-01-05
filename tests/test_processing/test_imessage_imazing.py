@@ -725,7 +725,9 @@ class TestImazingLivePhotos:
         # but SAME original filename stem (IMG_1234)
         # Note: iMazing filename format is "YYYY-MM-DD HH MM SS - Contact - originalfile.ext"
         heic_filename = "2021-01-15 14 30 00 - John Doe - IMG_1234.HEIC"
-        mov_filename = "2021-01-15 14 30 02 - John Doe - IMG_1234.MOV"  # 2 seconds later
+        mov_filename = (
+            "2021-01-15 14 30 02 - John Doe - IMG_1234.MOV"  # 2 seconds later
+        )
 
         heic_path = imazing_export_dir / heic_filename
         mov_path = imazing_export_dir / mov_filename
@@ -757,7 +759,9 @@ class TestImazingLivePhotos:
 
         # Find HEIC and MOV messages
         heic_messages = [
-            m for m in all_messages if any("HEIC" in f for f in m.get("media_files", []))
+            m
+            for m in all_messages
+            if any("HEIC" in f for f in m.get("media_files", []))
         ]
         mov_messages = [
             m for m in all_messages if any("MOV" in f for f in m.get("media_files", []))
@@ -777,21 +781,27 @@ class TestImazingLivePhotos:
         assert len(mov_pair_keys) > 0, "MOV should have live_photo_pair_keys"
 
         # The pair keys should overlap (same key present in both)
-        assert set(heic_pair_keys) & set(
-            mov_pair_keys
-        ), f"HEIC and MOV should share a pair key: {heic_pair_keys} vs {mov_pair_keys}"
+        assert set(heic_pair_keys) & set(mov_pair_keys), (
+            f"HEIC and MOV should share a pair key: {heic_pair_keys} vs {mov_pair_keys}"
+        )
 
         # MOV should be marked as live photo video
-        assert mov_msg.get("is_live_photo_video") is True, "MOV should be marked as live photo video"
+        assert mov_msg.get("is_live_photo_video") is True, (
+            "MOV should be marked as live photo video"
+        )
 
         # Both should have live_photo_image_hash populated
         heic_hash = heic_msg.get("live_photo_image_hash")
         mov_hash = mov_msg.get("live_photo_image_hash")
         assert heic_hash is not None, "HEIC should have live_photo_image_hash"
-        assert mov_hash is not None, "MOV should have live_photo_image_hash (carrying HEIC hash)"
+        assert mov_hash is not None, (
+            "MOV should have live_photo_image_hash (carrying HEIC hash)"
+        )
 
         # They should share the same hash (MOV carries HEIC hash for cross-export pairing)
-        assert heic_hash == mov_hash, f"Both should share same image hash: {heic_hash} vs {mov_hash}"
+        assert heic_hash == mov_hash, (
+            f"Both should share same image hash: {heic_hash} vs {mov_hash}"
+        )
 
 
 class TestImazingEmptyExport:

@@ -180,3 +180,65 @@ class TestFilenameGenerator:
         assert gen.platform == "discord"
         assert gen.username == "ethans_iphone"
         assert gen.service == "messages"
+
+    # ========================================================================
+    # Content Hash Suffix Tests (for cross-process uniqueness in dedup mode)
+    # ========================================================================
+
+    def test_content_hash_disabled_by_default(self):
+        """Content hash should not be included by default."""
+        gen = FilenameGenerator("discord", "ethriverpage")
+        result = gen.generate(
+            "2024-01-15 10:30:00", ".jpg", content_hash="abc123def456"
+        )
+        assert result == "discord-ethriverpage-20240115.jpg"
+        assert "abc123de" not in result
+
+    def test_content_hash_enabled(self):
+        """Content hash should be included when enabled."""
+        gen = FilenameGenerator("discord", "ethriverpage", include_content_hash=True)
+        result = gen.generate(
+            "2024-01-15 10:30:00", ".jpg", content_hash="abc123def456"
+        )
+        assert result == "discord-ethriverpage-20240115-abc123de.jpg"
+
+    def test_content_hash_with_service(self):
+        """Content hash should work with multi-service filenames."""
+        gen = FilenameGenerator(
+            "google", "ethriverpage", service="photos", include_content_hash=True
+        )
+        result = gen.generate(
+            "2024-01-15 10:30:00", ".jpg", content_hash="deadbeef12345678"
+        )
+        assert result == "google-ethriverpage-photos-20240115-deadbeef.jpg"
+
+    def test_content_hash_enabled_but_none_provided(self):
+        """When enabled but no hash provided, should not add suffix."""
+        gen = FilenameGenerator("discord", "ethriverpage", include_content_hash=True)
+        result = gen.generate("2024-01-15 10:30:00", ".jpg")
+        assert result == "discord-ethriverpage-20240115.jpg"
+
+    def test_content_hash_provides_uniqueness(self):
+        """Different content hashes should produce different filenames."""
+        gen = FilenameGenerator("snap", "ethriverpage", include_content_hash=True)
+        r1 = gen.generate(
+            "2024-01-15 10:30:00", ".jpg", content_hash="hash1111aaaaaaaa"
+        )
+        r2 = gen.generate(
+            "2024-01-15 10:30:00", ".jpg", content_hash="hash2222bbbbbbbb"
+        )
+        assert r1 == "snap-ethriverpage-20240115-hash1111.jpg"
+        assert r2 == "snap-ethriverpage-20240115-hash2222.jpg"
+        assert r1 != r2
+
+    def test_content_hash_same_hash_same_time_gets_sequence(self):
+        """Same content hash and timestamp should still get sequence numbers."""
+        gen = FilenameGenerator("snap", "ethriverpage", include_content_hash=True)
+        r1 = gen.generate(
+            "2024-01-15 10:30:00", ".jpg", content_hash="samehash12345678"
+        )
+        r2 = gen.generate(
+            "2024-01-15 10:30:00", ".jpg", content_hash="samehash12345678"
+        )
+        assert r1 == "snap-ethriverpage-20240115-samehash.jpg"
+        assert r2 == "snap-ethriverpage-20240115-samehash_2.jpg"

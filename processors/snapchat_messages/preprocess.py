@@ -22,7 +22,7 @@ from common.files.types import get_media_type, MediaType
 from common.output.logging import get_processor_logger
 from common.output.summary import print_preprocessing_stats
 from common.preprocess.context_mergers import merge_snapchat_context
-from processors.preprocess_base import CopyTask, HashResult, PreprocessorBase
+from processors.preprocess_base import CopyTask, PreprocessorBase
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)

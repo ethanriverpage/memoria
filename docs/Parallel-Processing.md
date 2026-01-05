@@ -129,6 +129,30 @@ Actual speedup depends on:
 - Export sizes and types
 - Network speed (if uploading to Immich)
 
+## Cross-Processor Deduplication Mode
+
+When `CROSS_PROCESSOR_DEDUP=true`, parallel processing works across all three execution phases:
+
+| Phase | Description | Parallelism |
+|-------|-------------|-------------|
+| Phase 0 | Preprocessing | Parallel across exports |
+| Phase 1 | Catalog building | Parallel across exports |
+| Phase 2 | Dedup analysis | Global barrier (single-threaded) |
+| Phase 3 | Processing | Parallel across exports |
+
+**Key differences from normal parallel mode:**
+
+- Phase 2 (dedup analysis) runs globally after all Phase 1 cataloging completes
+- Output filenames include a content hash suffix (`-{hash[:8]}`) to ensure uniqueness across parallel workers
+- `PARALLEL_DEDUP` (env var) independently controls perceptual hash comparisons within Phase 2
+
+**Example:**
+
+```bash
+# Parallel dedup processing
+CROSS_PROCESSOR_DEDUP=true ./memoria.py --originals /exports -o /output --parallel
+```
+
 ## Technical Details
 
 ### Implementation
@@ -138,6 +162,7 @@ Actual speedup depends on:
 - Processors are reloaded in each worker process
 - Output is organized per-export to avoid conflicts
 - Detection cache is disabled in parallel mode
+- In dedup mode, output filenames include content hash prefix for cross-process uniqueness
 
 ### Memory Usage
 
@@ -212,3 +237,4 @@ export MEMORIA_THREADS=4
 - [Usage](Usage) - Command-line options
 - [Immich Upload](Immich-Upload) - Immich configuration and upload queuing
 - [Logging](Logging) - Logging configuration
+- [Deduplication](Deduplication) - Cross-processor deduplication details

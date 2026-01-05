@@ -385,7 +385,13 @@ def _process_working_directory(
 
     # Pre-generate all output filenames to avoid race conditions
     log.generating_filenames()
-    filename_gen = FilenameGenerator("google", export_username, service="chat")
+    # Enable content hash suffix for cross-process uniqueness when in dedup mode
+    filename_gen = FilenameGenerator(
+        "google",
+        export_username,
+        service="chat",
+        include_content_hash=(dedup_manifest is not None),
+    )
     processing_tasks = []
 
     # Get file_hashes lookup table for dedup optimization
@@ -435,7 +441,9 @@ def _process_working_directory(
                 message["canonical_timestamp"] = canonical_ts
 
                 # Generate output filename using shared FilenameGenerator
-                output_filename = filename_gen.generate(canonical_ts, file_ext)
+                output_filename = filename_gen.generate(
+                    canonical_ts, file_ext, content_hash=content_hash
+                )
 
                 # Get original filename for XMP:PreservedFileName embedding
                 original_filename = source_file_name

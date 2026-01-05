@@ -380,9 +380,9 @@ class TestDatasetStructure:
             # Some exports may not produce output (e.g., Google Chat only)
             # but most should have output directories
             if output_export.exists():
-                assert (
-                    output_export.is_dir()
-                ), f"{source_export.name} output should be a directory"
+                assert output_export.is_dir(), (
+                    f"{source_export.name} output should be a directory"
+                )
 
     def test_dedup_manifest_exists(self, processed_path):
         """Deduplication manifest should be created."""
@@ -409,9 +409,9 @@ class TestDatasetStructure:
                 file_count = sum(1 for f in files if f.is_file())
                 # Allow some directories to be empty (e.g., issues folders)
                 # but the export should have at least some output
-                assert file_count > 0 or "issues" in str(
-                    export_dir
-                ), f"{export_dir.name} should contain output files"
+                assert file_count > 0 or "issues" in str(export_dir), (
+                    f"{export_dir.name} should contain output files"
+                )
 
 
 @pytest.mark.integration
@@ -534,9 +534,9 @@ class TestSnapchatOutput:
             for file_path in media_files[:5]:  # Sample
                 name = file_path.stem
                 # Should start with snap-memories-
-                assert name.startswith(
-                    "snap-memories-"
-                ), f"{file_path.name} should start with snap-memories-"
+                assert name.startswith("snap-memories-"), (
+                    f"{file_path.name} should start with snap-memories-"
+                )
 
 
 @pytest.mark.integration
@@ -610,10 +610,8 @@ class TestIMessageOutput:
             if not messages_dir.exists():
                 continue
 
-            # Should have subdirectories for contacts
-            subdirs = [d for d in messages_dir.iterdir() if d.is_dir()]
-            # Structure varies by config; the only invariant is that the directory
-            # exists and may contain subdirectories/files.
+            # Verify the messages directory exists and is a directory
+            # (structure varies by config - may contain subdirectories for contacts)
             assert messages_dir.is_dir()
 
 
@@ -700,23 +698,23 @@ class TestDeduplicationResults:
             assert dup_info["match_type"] in {"exact", "perceptual"}
 
             assert "primary" in dup_info, f"Duplicate {hash_key} missing primary"
-            assert (
-                "source_path" in dup_info["primary"]
-            ), "Primary should have source_path"
+            assert "source_path" in dup_info["primary"], (
+                "Primary should have source_path"
+            )
 
-            assert (
-                "best_quality" in dup_info
-            ), f"Duplicate {hash_key} missing best_quality"
-            assert (
-                "source_path" in dup_info["best_quality"]
-            ), "Best quality should have source_path"
+            assert "best_quality" in dup_info, (
+                f"Duplicate {hash_key} missing best_quality"
+            )
+            assert "source_path" in dup_info["best_quality"], (
+                "Best quality should have source_path"
+            )
 
             assert "secondary" in dup_info, f"Duplicate {hash_key} missing secondary"
             assert isinstance(dup_info["secondary"], list)
 
-            assert (
-                "merged_metadata" in dup_info
-            ), f"Duplicate {hash_key} missing merged_metadata"
+            assert "merged_metadata" in dup_info, (
+                f"Duplicate {hash_key} missing merged_metadata"
+            )
             assert isinstance(dup_info["merged_metadata"], dict)
 
 
@@ -781,9 +779,9 @@ class TestMetadataIntegrity:
                             try:
                                 dt = datetime.strptime(dto, fmt)
                                 # Sanity check: date should be reasonable
-                                assert (
-                                    1990 <= dt.year <= 2030
-                                ), f"Year {dt.year} seems invalid"
+                                assert 1990 <= dt.year <= 2030, (
+                                    f"Year {dt.year} seems invalid"
+                                )
                                 break
                             except ValueError:
                                 continue
@@ -833,9 +831,9 @@ class TestFileIntegrity:
                 with open(file_path, "rb") as f:
                     header = f.read(3)
                 # JPEG magic number
-                assert (
-                    header[:2] == b"\xff\xd8"
-                ), f"{file_path.name} should have JPEG header"
+                assert header[:2] == b"\xff\xd8", (
+                    f"{file_path.name} should have JPEG header"
+                )
                 checked += 1
 
         assert checked > 0, "Should have checked some JPG files"

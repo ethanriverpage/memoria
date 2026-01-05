@@ -510,11 +510,16 @@ def _process_working_directory(
     # Pre-generate all output filenames to avoid race conditions
     log.generating_filenames()
     generators: Dict[str, FilenameGenerator] = {}
+    # Enable content hash suffix for cross-process uniqueness when in dedup mode
+    use_content_hash = dedup_manifest is not None
 
     def get_filename_generator(media_type: str) -> FilenameGenerator:
         if media_type not in generators:
             generators[media_type] = FilenameGenerator(
-                "insta", export_username, service=media_type
+                "insta",
+                export_username,
+                service=media_type,
+                include_content_hash=use_content_hash,
             )
         return generators[media_type]
 
@@ -565,6 +570,7 @@ def _process_working_directory(
             output_filename = get_filename_generator(media_type).generate(
                 canonical_ts,
                 file_ext,
+                content_hash=content_hash,
             )
 
             # Get original filename for XMP:PreservedFileName embedding

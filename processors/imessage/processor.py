@@ -997,9 +997,11 @@ def _process_working_directory(
 
     # Match files to messages and pre-generate filenames
     log.generating_filenames()
+    # Enable content hash suffix for cross-process uniqueness when in dedup mode
     filename_gen = FilenameGenerator(
         "imessage",
         export_username,
+        include_content_hash=(dedup_manifest is not None),
     )
 
     # Build live photo pairing maps from metadata
@@ -1066,7 +1068,9 @@ def _process_working_directory(
         timestamp = _extract_message_timestamp(message)
         canonical_ts = get_canonical_timestamp(dedup_manifest, content_hash, timestamp)
         message["canonical_timestamp"] = canonical_ts
-        output_filename = filename_gen.generate(canonical_ts, file_ext)
+        output_filename = filename_gen.generate(
+            canonical_ts, file_ext, content_hash=content_hash
+        )
 
         # If this image has a live-photo video pair, store base and reserve .mov
         pair_keys = message.get("live_photo_pair_keys", [])
@@ -1130,7 +1134,9 @@ def _process_working_directory(
                     media_filename,
                     pair_keys,
                 )
-                output_filename = filename_gen.generate(canonical_ts, file_ext)
+                output_filename = filename_gen.generate(
+                    canonical_ts, file_ext, content_hash=content_hash
+                )
 
         matched_files.append((source_path, message, output_filename, content_hash))
 

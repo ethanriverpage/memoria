@@ -32,7 +32,7 @@ from common.output.summary import print_preprocessing_stats
 from common.preprocess.context_mergers import merge_imessage_context
 from common.processing import process_parallel_threaded
 from processors.imessage.vcard_parser import VCardParser
-from processors.preprocess_base import CopyTask, HashResult, PreprocessorBase
+from processors.preprocess_base import CopyTask, PreprocessorBase
 
 # Video extensions that may be iCloud placeholder attachments
 _ISOBMFF_EXTENSIONS = {".mov", ".mp4", ".m4v"}

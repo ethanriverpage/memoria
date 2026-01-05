@@ -21,7 +21,7 @@ from common.output.progress import PHASE_PREPROCESS
 from common.output.summary import print_preprocessing_stats
 from common.processing import process_parallel_threaded
 from common.text.normalize import normalize_text
-from processors.preprocess_base import CopyTask, HashResult, PreprocessorBase
+from processors.preprocess_base import CopyTask, PreprocessorBase
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -566,9 +566,7 @@ class InstagramPreprocessor(PreprocessorBase):
         logger.info("   Copied %d unique files", self.stats["media_copied"])
         logger.info("   Deduplicated %d duplicate files", self.stats["duplicate_files"])
         logger.info("   Missing files: %d", self.stats["missing_files"])
-        logger.info(
-            "   Orphaned media files: %d", self.stats["orphaned_media_files"]
-        )
+        logger.info("   Orphaned media files: %d", self.stats["orphaned_media_files"])
 
     def _process_single_html_file(
         self, html_tuple: Tuple[str, str]

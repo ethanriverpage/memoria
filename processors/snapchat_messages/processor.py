@@ -935,10 +935,12 @@ def _process_snapchat_working_directory(
 
     # Pre-generate all output filenames to ensure deterministic naming
     logger.info("Pre-generating output filenames...")
+    # Enable content hash suffix for cross-process uniqueness when in dedup mode
     filename_gen = FilenameGenerator(
         "snap",
         export_username,
         service="msgs",
+        include_content_hash=(dedup_manifest is not None),
     )
     output_filenames = []  # List of output filenames in same order as matched_files
 
@@ -967,7 +969,9 @@ def _process_snapchat_working_directory(
         canonical_ts = get_canonical_timestamp(dedup_manifest, content_hash, timestamp)
         message["canonical_timestamp"] = canonical_ts
         ext = ".mkv" if will_have_overlay else file_ext
-        output_filename = filename_gen.generate(canonical_ts, ext)
+        output_filename = filename_gen.generate(
+            canonical_ts, ext, content_hash=content_hash
+        )
 
         output_filenames.append(output_filename)
 

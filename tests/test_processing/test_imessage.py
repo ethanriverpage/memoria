@@ -1182,8 +1182,14 @@ class TestMixedConsolidatedProcessing:
 
         # Should have at least one output file from each export
         output_files = list(messages_output.rglob("*"))
-        media_files = [f for f in output_files if f.is_file() and f.suffix.lower() in {".jpg", ".jpeg", ".png", ".heic"}]
-        assert len(media_files) >= 2, f"Expected at least 2 media files, got {len(media_files)}: {media_files}"
+        media_files = [
+            f
+            for f in output_files
+            if f.is_file() and f.suffix.lower() in {".jpg", ".jpeg", ".png", ".heic"}
+        ]
+        assert len(media_files) >= 2, (
+            f"Expected at least 2 media files, got {len(media_files)}: {media_files}"
+        )
 
     def test_mixed_run_artifact_namespacing(self, tmp_path):
         """Multiple preprocessed dirs should produce namespaced artifacts."""
@@ -1247,10 +1253,14 @@ class TestMixedConsolidatedProcessing:
 
         # Output should contain files from both exports
         messages_output = output_dir / "messages"
-        media_files = list(messages_output.rglob("*.jpg")) + list(messages_output.rglob("*.jpeg"))
+        media_files = list(messages_output.rglob("*.jpg")) + list(
+            messages_output.rglob("*.jpeg")
+        )
 
         # Should have 2 media files (one from each export)
-        assert len(media_files) >= 2, f"Expected at least 2 files, got {len(media_files)}"
+        assert len(media_files) >= 2, (
+            f"Expected at least 2 files, got {len(media_files)}"
+        )
 
     def test_unknown_input_type_fails_early(self, tmp_path):
         """Unknown input directories should cause processing to fail early.

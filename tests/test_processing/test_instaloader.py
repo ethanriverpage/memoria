@@ -459,9 +459,9 @@ class TestInstaloaderPostsOnlyInvariant:
         assert len(media_items) > 0, "Should have processed media items"
 
         for item in media_items:
-            assert (
-                item.get("media_type") == "posts"
-            ), f"Instaloader item must have media_type='posts', got: {item.get('media_type')}"
+            assert item.get("media_type") == "posts", (
+                f"Instaloader item must have media_type='posts', got: {item.get('media_type')}"
+            )
 
 
 class TestInstaloaderEmptyExport:

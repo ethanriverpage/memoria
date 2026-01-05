@@ -380,7 +380,13 @@ def _process_working_directory(
 
     # Pre-generate all output filenames to avoid race conditions
     log.generating_filenames()
-    filename_gen = FilenameGenerator("google", export_username, service="voice")
+    # Enable content hash suffix for cross-process uniqueness when in dedup mode
+    filename_gen = FilenameGenerator(
+        "google",
+        export_username,
+        service="voice",
+        include_content_hash=(dedup_manifest is not None),
+    )
     processing_tasks = []
 
     skipped_dedup = 0
@@ -432,6 +438,7 @@ def _process_working_directory(
                 output_filename = filename_gen.generate(
                     canonical_ts,
                     file_ext,
+                    content_hash=content_hash,
                 )
 
                 # Get original filename for XMP:PreservedFileName embedding

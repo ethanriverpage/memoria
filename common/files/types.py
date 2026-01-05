@@ -16,6 +16,7 @@ class MediaType(Enum):
     VIDEO = "video"
     AUDIO = "audio"
 
+
 # ============================================================================
 # Media Type Detection - Single Source of Truth for Extensions
 # ============================================================================

@@ -471,7 +471,9 @@ def _format_message_line(
     # Add timestamp for secondary sources, unless it matches reference date (Bug 4 fix)
     if is_secondary and entry.timestamp:
         entry_date_str = format_timestamp(entry.timestamp)
-        ref_date_str = format_timestamp(reference_timestamp) if reference_timestamp else ""
+        ref_date_str = (
+            format_timestamp(reference_timestamp) if reference_timestamp else ""
+        )
         # Only show date if it differs from reference (non-redundant)
         if entry_date_str and entry_date_str != ref_date_str:
             result += f" ({entry_date_str})"
@@ -698,9 +700,7 @@ def format_secondary_source(
             and (entry.sender or entry.conversation)
         ):
             # Format: sender in "conv": "content" (date)
-            result = (
-                f"{source_prefix} {detail_parts[0]}: {' '.join(detail_parts[1:])}"
-            )
+            result = f"{source_prefix} {detail_parts[0]}: {' '.join(detail_parts[1:])}"
         else:
             result = f"{source_prefix} {' '.join(detail_parts)}"
     else:
@@ -768,9 +768,7 @@ def _format_secondary_with_relative_path(
             and (entry.sender or entry.conversation)
         ):
             # Format: sender in "conv": "content" (date)
-            result = (
-                f"{source_prefix} {detail_parts[0]}: {' '.join(detail_parts[1:])}"
-            )
+            result = f"{source_prefix} {detail_parts[0]}: {' '.join(detail_parts[1:])}"
         else:
             result = f"{source_prefix} {' '.join(detail_parts)}"
     else:

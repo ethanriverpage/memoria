@@ -371,26 +371,50 @@ CROSS_PROCESSOR_DEDUP=true
 
 ### How It Works
 
-When enabled, Memoria processes exports in three phases:
+When enabled, Memoria processes exports in four phases:
 
 ```
-Phase 1: CATALOG
-  - Scan all exports without copying files
-  - Compute content hashes (xxHash64) for each media file
-  - Optionally compute perceptual hashes for fuzzy matching
-  - Build catalog of all files with metadata
+Phase 0: PREPROCESS
+  - Run preprocessors to extract metadata from raw exports
+  - Build metadata.json with file hashes for each export
+  - Cache results in preprocessing_cache/ for repeated runs
 
-Phase 2: DEDUP ANALYSIS
+Phase 1: CATALOG
+  - Scan all preprocessed exports
+  - Stream catalog entries (content hashes, perceptual hashes) to SQLite
+  - Build unified catalog across all exports
+
+Phase 2: DEDUP ANALYSIS (global barrier)
   - Group files by exact content hash
   - For unmatched files, check perceptual similarity
   - Validate matches using metadata (GPS, timestamp, dimensions)
   - Select highest quality version as primary
-  - Generate dedup_manifest.json
+  - Generate and save dedup_manifest.json
 
 Phase 3: PROCESS
   - Process each export using the manifest
   - Primary files: copy and embed merged metadata
   - Secondary files: skip copying, record reference only
+```
+
+### Parallelism in Dedup Mode
+
+When using `--parallel` with cross-processor deduplication:
+
+| Phase | Parallelism | Control |
+|-------|-------------|---------|
+| Phase 0 (Preprocess) | Parallel across exports | `--parallel` / `MEMORIA_PARALLEL` |
+| Phase 1 (Catalog) | Parallel across exports | `--parallel` / `MEMORIA_PARALLEL` |
+| Phase 2 (Analysis) | Global barrier | `PARALLEL_DEDUP` (internal perceptual comparisons) |
+| Phase 3 (Process) | Parallel across exports | `--parallel` / `MEMORIA_PARALLEL` |
+
+- **Phase 2 is a barrier**: All Phase 1 cataloging must complete before analysis begins, and the manifest must be saved before Phase 3 starts.
+- **`--parallel` controls Phases 0/1/3**: These phases use `ProcessPoolExecutor(max_workers=parallel_exports)` when multiple exports are being processed.
+- **`PARALLEL_DEDUP` controls Phase 2 internals**: Perceptual hash comparisons within Phase 2 can be parallelized independently (default: `true`).
+
+```bash
+# Enable parallel dedup processing
+CROSS_PROCESSOR_DEDUP=true ./memoria.py --originals /exports -o /output --parallel
 ```
 
 ### Duplicate Detection Strategy

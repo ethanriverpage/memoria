@@ -97,7 +97,6 @@ class TestProcessorMapping:
         assert platform == PLATFORM_IMESSAGE
         assert service == ""
 
-
     def test_instagram_messages_mapping(self):
         """Test Instagram Messages maps to Instagram/messages."""
         platform, service = get_platform_service("Instagram Messages")

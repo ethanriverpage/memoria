@@ -408,10 +408,12 @@ def _process_working_directory(
 
     # Second pass: Generate filenames using FilenameGenerator
     # For live photo pairs, reuse base filename (with same sequence) for both files
+    # Enable content hash suffix for cross-process uniqueness when in dedup mode
     filename_gen = FilenameGenerator(
         "google",
         export_username,
         service="photos",
+        include_content_hash=(dedup_manifest is not None),
     )
     live_photo_bases = {}  # Map: live_photo_key -> base filename (without extension)
 
@@ -434,6 +436,7 @@ def _process_working_directory(
         file_ext = os.path.splitext(media_file)[1].lower()
         live_photo_key = get_live_photo_group_key(media_data)
         is_live_photo_pair = len(live_photo_groups.get(live_photo_key, [])) > 1
+        content_hash = media_data.get("content_hash")
 
         if is_live_photo_pair and live_photo_key in live_photo_bases:
             # Second file in live photo pair - reuse base from first file
@@ -442,10 +445,12 @@ def _process_working_directory(
             # Generate filename using FilenameGenerator (mechanism handles uniqueness)
             timestamp_str = media_data.get("capture_timestamp")
             canonical_ts = get_canonical_timestamp(
-                dedup_manifest, media_data.get("content_hash"), timestamp_str
+                dedup_manifest, content_hash, timestamp_str
             )
             media_data["canonical_timestamp"] = canonical_ts
-            output_filename = filename_gen.generate(canonical_ts, file_ext)
+            output_filename = filename_gen.generate(
+                canonical_ts, file_ext, content_hash=content_hash
+            )
 
             # If this is first file in a live photo pair, record base for second file
             if is_live_photo_pair:
@@ -475,8 +480,7 @@ def _process_working_directory(
         source_path = os.path.dirname(full_source_path)
         source_file = os.path.basename(full_source_path)
 
-        # Get content_hash from metadata (if available from preprocessing)
-        content_hash = media_data.get("content_hash")
+        # content_hash already retrieved above for filename generation
 
         # Get original filename for XMP:PreservedFileName embedding
         # Prefer original_filename from metadata, fall back to source file basename

@@ -83,7 +83,7 @@ def build_upload_targets(
 
     # Get OutputInfo from processor
     if isinstance(processor, OutputInfo):
-        output_info = processor
+        output_info: OutputInfo = processor
     else:
         get_name = getattr(processor, "get_name", None)
         get_output_info = getattr(processor, "get_output_info", None)
@@ -93,8 +93,12 @@ def build_upload_targets(
             )
 
         # Processor instance/class - get both name and output info
-        processor_name = get_name()
-        output_info = get_output_info()
+        name_result = get_name()
+        processor_name = str(name_result) if name_result is not None else None
+        result = get_output_info()
+        if not isinstance(result, OutputInfo):
+            raise TypeError("get_output_info() must return OutputInfo")
+        output_info = result
 
     # Extract username using the prefix from OutputInfo
     username = (

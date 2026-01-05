@@ -964,7 +964,9 @@ def _get_description_for_file(
                 )
         else:
             # No primary entry available - use full path
-            lines.append(format_secondary_source(entry, reference_timestamp=reference_timestamp))
+            lines.append(
+                format_secondary_source(entry, reference_timestamp=reference_timestamp)
+            )
 
     # Use &#xa; (XML entity for newline) instead of literal \n
     # Literal newlines break exiftool argfile format, causing secondary lines to be dropped

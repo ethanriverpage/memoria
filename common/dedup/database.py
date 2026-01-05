@@ -257,14 +257,22 @@ class HashDatabase:
         """Create parent directory if it doesn't exist."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Timeout for acquiring database locks (seconds)
+    # SQLite's default is 5s; we use a longer timeout for multi-process scenarios
+    LOCK_TIMEOUT = 30.0
+
     @contextmanager
     def _get_connection(self):
         """Context manager for database connections.
 
         Yields:
             sqlite3.Connection with row factory set to sqlite3.Row
+
+        Note:
+            Uses a 30-second lock timeout for multi-process write scenarios.
+            WAL mode allows concurrent reads while writes are in progress.
         """
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=self.LOCK_TIMEOUT)
         conn.row_factory = sqlite3.Row
         try:
             yield conn
@@ -285,6 +293,9 @@ class HashDatabase:
             cursor.execute(
                 "PRAGMA synchronous=NORMAL"
             )  # Safe with WAL, faster than FULL
+            # Set busy_timeout (milliseconds) for multi-process writer scenarios.
+            # This complements the connection-level timeout parameter.
+            cursor.execute(f"PRAGMA busy_timeout={int(self.LOCK_TIMEOUT * 1000)}")
             cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache (negative = KB)
             cursor.execute("PRAGMA temp_store=MEMORY")  # Store temp tables in memory
             cursor.execute("PRAGMA mmap_size=268435456")  # 256MB memory-mapped I/O
@@ -772,6 +783,9 @@ class HashDatabase:
                 logger.error(f"Failed to write catalog entry: {e}")
                 return False
 
+    # Maximum retries for write operations under lock contention
+    MAX_WRITE_RETRIES = 3
+
     def write_catalog_entries_batch(
         self,
         run_id: str,
@@ -780,7 +794,8 @@ class HashDatabase:
     ) -> int:
         """Write multiple catalog entries in a single transaction.
 
-        More efficient than individual writes for bulk operations.
+        More efficient than individual writes for bulk operations. Uses bounded
+        retry logic for transient lock errors in multi-process scenarios.
 
         Args:
             run_id: Unique identifier for this processing run.
@@ -789,54 +804,93 @@ class HashDatabase:
 
         Returns:
             Number of entries written successfully.
+
+        Raises:
+            RuntimeError: If all retry attempts fail (to surface catalog failures
+                rather than silently under-counting).
         """
+        import time
+
         if not entries:
             return 0
 
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
+        # Build all rows upfront for executemany (before any connection attempt)
+        rows = []
+        for entry in entries:
+            dimensions = entry.get("dimensions")
+            dimensions_str = json.dumps(dimensions) if dimensions else None
+            metadata = entry.get("metadata")
+            metadata_str = json.dumps(metadata) if metadata else None
 
-            # Build all rows upfront for executemany
-            rows = []
-            for entry in entries:
-                dimensions = entry.get("dimensions")
-                dimensions_str = json.dumps(dimensions) if dimensions else None
-                metadata = entry.get("metadata")
-                metadata_str = json.dumps(metadata) if metadata else None
-
-                rows.append(
-                    (
-                        run_id,
-                        export_name,
-                        entry.get("_processor", "Unknown"),
-                        entry.get("source_path", ""),
-                        entry.get("relative_path", ""),
-                        entry.get("content_hash", ""),
-                        entry.get("perceptual_hash"),
-                        entry.get("file_size"),
-                        dimensions_str,
-                        entry.get("timestamp"),
-                        metadata_str,
-                    )
+            rows.append(
+                (
+                    run_id,
+                    export_name,
+                    entry.get("_processor", "Unknown"),
+                    entry.get("source_path", ""),
+                    entry.get("relative_path", ""),
+                    entry.get("content_hash", ""),
+                    entry.get("perceptual_hash"),
+                    entry.get("file_size"),
+                    dimensions_str,
+                    entry.get("timestamp"),
+                    metadata_str,
                 )
+            )
 
+        last_error = None
+        for attempt in range(1, self.MAX_WRITE_RETRIES + 1):
             try:
-                cursor.executemany(
-                    """
-                    INSERT OR REPLACE INTO catalog_entries (
-                        run_id, export_name, processor, source_path, relative_path,
-                        content_hash, perceptual_hash, file_size, dimensions,
-                        timestamp, metadata
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    rows,
-                )
-                conn.commit()
-                return len(rows)
+                with self._get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.executemany(
+                        """
+                        INSERT OR REPLACE INTO catalog_entries (
+                            run_id, export_name, processor, source_path, relative_path,
+                            content_hash, perceptual_hash, file_size, dimensions,
+                            timestamp, metadata
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        rows,
+                    )
+                    conn.commit()
+                    return len(rows)
+            except sqlite3.OperationalError as e:
+                # Retry on lock-related errors (SQLITE_BUSY, SQLITE_LOCKED)
+                error_str = str(e).lower()
+                if "locked" in error_str or "busy" in error_str:
+                    last_error = e
+                    if attempt < self.MAX_WRITE_RETRIES:
+                        # Exponential backoff with jitter
+                        wait = (2**attempt) * 0.1 + (time.time() % 0.1)
+                        logger.warning(
+                            "Database lock contention (attempt %d/%d), retrying in %.2fs: %s",
+                            attempt,
+                            self.MAX_WRITE_RETRIES,
+                            wait,
+                            e,
+                        )
+                        time.sleep(wait)
+                        continue
+                    # Exhausted retries
+                    logger.error(
+                        "Failed to write catalog batch after %d attempts: %s",
+                        self.MAX_WRITE_RETRIES,
+                        e,
+                    )
+                    raise RuntimeError(
+                        f"Catalog write failed after {self.MAX_WRITE_RETRIES} retries: {e}"
+                    ) from e
+                else:
+                    # Non-lock error, fail immediately
+                    logger.error(f"Failed to write catalog entries batch: {e}")
+                    raise
             except sqlite3.Error as e:
                 logger.error(f"Failed to write catalog entries batch: {e}")
-                conn.rollback()
-                return 0
+                raise
+
+        # Should not reach here, but just in case
+        raise RuntimeError(f"Catalog write failed: {last_error}")
 
     def get_duplicate_content_hashes(self, run_id: str) -> List[str]:
         """Get content hashes that appear more than once in a run.

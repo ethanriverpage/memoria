@@ -647,7 +647,11 @@ class TestMergedDescriptionWiring:
         """
         from processors.base import ProcessorBase
         import inspect
-        from common.media.exiftool import DescriptionWriteSpec, MetadataWriteRequest, DEFAULT_PREAMBLE
+        from common.media.exiftool import (
+            DescriptionWriteSpec,
+            MetadataWriteRequest,
+            DEFAULT_PREAMBLE,
+        )
 
         # First, verify the method signature includes dedup_manifest
         sig = inspect.signature(ProcessorBase.batch_process_exif)
@@ -719,17 +723,21 @@ class TestMergedDescriptionWiring:
                 MetadataWriteRequest(
                     file_path=str(test_file),
                     arg_preamble=DEFAULT_PREAMBLE,
-                    description=DescriptionWriteSpec(default_description="Source: Google/user/photos"),
+                    description=DescriptionWriteSpec(
+                        default_description="Source: Google/user/photos"
+                    ),
                     processor_name="Google Photos",
                     content_hash=content_hash,
                 )
             ]
 
-        exif_rebuilt_count, write_outcome, missing_files = ProcessorBase.batch_process_exif(
-            [str(test_file)],
-            [()],
-            _builder,
-            dedup_manifest=manifest,
+        exif_rebuilt_count, write_outcome, missing_files = (
+            ProcessorBase.batch_process_exif(
+                [str(test_file)],
+                [()],
+                _builder,
+                dedup_manifest=manifest,
+            )
         )
         assert exif_rebuilt_count == 0
         assert not missing_files
@@ -1058,16 +1066,12 @@ class TestDuplicateSecondaryEntriesFixes:
 
         # Instagram line should NOT have (2024-01-15) since it matches reference
         lines = result.split("&#xa;")
-        instagram_line = next(
-            (line for line in lines if "+Instagram" in line), None
-        )
+        instagram_line = next((line for line in lines if "+Instagram" in line), None)
         assert instagram_line is not None
         assert "(2024-01-15)" not in instagram_line
 
         # iMessage line SHOULD have (2024-02-20) since it differs from reference
-        imessage_line = next(
-            (line for line in lines if "+iMessage" in line), None
-        )
+        imessage_line = next((line for line in lines if "+iMessage" in line), None)
         assert imessage_line is not None
         assert "(2024-02-20)" in imessage_line
 
@@ -1382,7 +1386,9 @@ class TestDuplicateSecondaryEntriesFixes:
                 sender="friend",
                 conversation="DM",
                 content="Hello there!",  # Same content prefix
-                timestamp=datetime(2024, 1, 20),  # Different timestamp - ignored for dedup
+                timestamp=datetime(
+                    2024, 1, 20
+                ),  # Different timestamp - ignored for dedup
             ),
         ]
 

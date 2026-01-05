@@ -853,7 +853,7 @@ class ProcessorBase(ABC):
     @staticmethod
     def should_skip_for_dedup(
         dedup_manifest: Optional[Dict[str, Any]],
-        content_hash: str,
+        content_hash: Optional[str],
         processor_name: str,
         source_path: str,
     ) -> bool:
@@ -866,13 +866,14 @@ class ProcessorBase(ABC):
         Args:
             dedup_manifest: Deduplication manifest dictionary (or None if dedup disabled).
             content_hash: Precomputed xxHash64 content hash from preprocessing.
+                If None, file cannot be deduplicated (treat as primary).
             processor_name: Name of the processor for manifest lookup.
             source_path: Path to the source file (for within-processor dedup).
 
         Returns:
             True if file is a secondary (should be skipped), False if primary.
         """
-        if not dedup_manifest:
+        if not dedup_manifest or not content_hash:
             return False
 
         from common.dedup.service import is_file_primary_by_hash
@@ -1253,7 +1254,7 @@ class ProcessorBase(ABC):
 
         results: List[Tuple] = []
         file_info: List[Tuple] = []
-        timestamp_meta: List[Tuple[Optional[str], Optional[str]]] = []
+        timestamp_meta: List[Optional[str]] = []
 
         # Phase 1: Copy all files
         for task in batch_tasks:

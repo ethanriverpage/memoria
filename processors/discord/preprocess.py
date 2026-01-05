@@ -28,7 +28,7 @@ from common.output.logging import get_processor_logger
 from common.output.progress import PHASE_PREPROCESS
 from common.output.summary import print_preprocessing_stats
 from common.processing import process_parallel_threaded
-from processors.preprocess_base import CopyResult, PreprocessorBase
+from processors.preprocess_base import PreprocessorBase
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)

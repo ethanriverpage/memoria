@@ -510,7 +510,10 @@ def _process_working_directory(
     log.logger.info("Matching files to metadata...")
     matched_files = []
     orphaned_media_files = []
-    filename_gen = FilenameGenerator("discord", export_username)
+    # Enable content hash suffix for cross-process uniqueness when in dedup mode
+    filename_gen = FilenameGenerator(
+        "discord", export_username, include_content_hash=(dedup_manifest is not None)
+    )
 
     for media_file in media_files:
         if media_file.name in filename_index:
@@ -527,7 +530,7 @@ def _process_working_directory(
             )
             message_info["message"]["canonical_timestamp"] = canonical_ts
             output_filename = filename_gen.generate(
-                canonical_ts or timestamp_clean, ext
+                canonical_ts or timestamp_clean, ext, content_hash=content_hash
             )
             matched_files.append(
                 (media_file, message_info, output_filename, content_hash)

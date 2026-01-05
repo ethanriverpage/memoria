@@ -300,7 +300,11 @@ class TestGoogleChatDMConversationTitle:
         group_info = {
             "members": [
                 # Export user listed first (regression case)
-                {"name": "Export User", "email": "export@example.com", "user_type": "Human"},
+                {
+                    "name": "Export User",
+                    "email": "export@example.com",
+                    "user_type": "Human",
+                },
                 {"name": "Friend", "email": "friend@example.com", "user_type": "Human"},
             ]
         }

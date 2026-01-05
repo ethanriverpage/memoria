@@ -118,6 +118,7 @@ class MediaFileEntry(TypedDict, total=False):
     timestamp: str
     date: str  # Snapchat Memories uses "date" field
     capture_timestamp: str
+    canonical_timestamp: str  # Dedup-resolved timestamp (earliest across duplicates)
 
     # Google Photos specific
     albums: List[str]
@@ -168,6 +169,9 @@ class MessageEntry(TypedDict, total=False):
     # Content
     content: str
     text: str
+
+    # Processing metadata
+    canonical_timestamp: str  # Dedup-resolved timestamp (earliest across duplicates)
 
     # iMessage-specific
     is_live_photo_video: bool  # True if this is a Live Photo video component

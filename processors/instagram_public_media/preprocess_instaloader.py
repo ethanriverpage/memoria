@@ -28,7 +28,7 @@ from common.output.progress import PHASE_PREPROCESS
 from common.output.summary import print_preprocessing_stats
 from common.processing import process_parallel_threaded
 from common.text.normalize import normalize_text
-from processors.preprocess_base import CopyTask, HashResult, PreprocessorBase
+from processors.preprocess_base import CopyTask, PreprocessorBase
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)
@@ -86,10 +86,13 @@ class InstaloaderFormatPreprocessor(PreprocessorBase):
             return False
 
         # Check if at least one media file exists (any supported extension)
-        has_media = any(
-            self.require_any_files(self.export_path, f"*{ext}", label="media")
-            for ext in self.MEDIA_EXTENSIONS
-        )
+        # Use glob directly to avoid logging errors for each extension type
+        has_media = False
+        for ext in self.MEDIA_EXTENSIONS:
+            if list(self.export_path.glob(f"*{ext}")):
+                has_media = True
+                break
+
         if not has_media:
             logger.error("No media files found in %s", self.export_path)
             # Export-level soft-fail per policy A

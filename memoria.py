@@ -290,40 +290,48 @@ def load_all_processors(registry: ProcessorRegistry, quiet: bool = False) -> Non
                 logger.warning("  - %s: %s", name, error)
 
 
-def _build_catalog_worker(
+def _process_export_worker_dedup(
     export_dir_str: str,
     threads: int,
     log_file: Optional[str],
-    db_path: str,
-    run_id: str,
-    preprocessed_dirs_json: Optional[str] = None,
+    manifest_path_str: str,
+    output_base_str: Optional[str],
+    temp_dir: str,
     processor_filter: Optional[str] = None,
-) -> tuple[str, int]:
-    """Build catalogs for a single export directory (multiprocessing worker).
+) -> tuple[str, int, int, list[tuple[str, str]], list[tuple[str, str, str]]]:
+    """Process a single export directory in dedup mode (multiprocessing worker).
 
     This function is designed to be called by ProcessPoolExecutor for parallel
-    catalog building. It re-creates the ProcessorRegistry in the worker process
+    Phase 3 processing. It re-creates the ProcessorRegistry in the worker process
     since registry instances cannot be pickled across process boundaries.
-
-    Entries are written directly to the database for memory-efficient streaming.
 
     Args:
         export_dir_str: Path to the export directory as a string.
-        threads: Number of threads for hashing within this process.
+        threads: Number of threads for within-export concurrency.
         log_file: Path to log file for worker output, or None.
-        db_path: Path to SQLite database for streaming writes.
-        run_id: Unique identifier for this processing run.
-        preprocessed_dirs_json: Optional JSON string mapping
-            "export_dir|processor_name" -> "working_dir" for preprocessed exports.
+        manifest_path_str: Path to the dedup manifest JSON file.
+        output_base_str: Base output directory, or None if no output.
+        temp_dir: Directory for temporary files.
         processor_filter: Optional processor name to filter to (case-insensitive).
 
     Returns:
-        Tuple of (export_dir_name, file_count).
+        Tuple of:
+            - export_dir_str: The export directory path
+            - success_count: Number of processors that succeeded
+            - failed_count: Number of processors that failed
+            - results: List of (processor_path, status) tuples
+            - upload_targets: List of (path, album, processor_name) tuples
     """
     import json as json_module
 
     from processors.registry import ProcessorRegistry
     from common.output.logging import init_worker_logging
+    from common.processing.cache import (
+        get_preprocessing_cache_path,
+        is_preprocessing_cache_valid,
+    )
+    from common.output.paths import build_processor_output_path
+    from common.upload.targets import build_upload_targets
 
     # Mark as subprocess to disable progress bars and prevent interleaved output
     os.environ["_MEMORIA_SUBPROCESS"] = "1"
@@ -336,10 +344,242 @@ def _build_catalog_worker(
 
     export_dir = Path(export_dir_str)
 
-    # Parse preprocessed directories mapping
-    preprocessed_dirs: dict[str, str] = {}
-    if preprocessed_dirs_json:
-        preprocessed_dirs = json_module.loads(preprocessed_dirs_json)
+    # Load manifest from file (written by Phase 2)
+    manifest_path = Path(manifest_path_str)
+    with open(manifest_path, "r") as f:
+        manifest = json_module.load(f)
+
+    # Create and populate registry in this worker process
+    registry = ProcessorRegistry()
+    load_all_processors(registry, quiet=True)
+
+    success_count = 0
+    failed_count = 0
+    results: list[tuple[str, str]] = []
+    upload_targets: list[tuple[str, str, str]] = []
+
+    # Detect matching processors
+    matching_processors = registry.detect_all(export_dir)
+
+    # Filter to specified processor if --processor is used
+    if processor_filter:
+        matching_processors = [
+            p
+            for p in matching_processors
+            if p.get_name().lower() == processor_filter.lower()
+        ]
+
+    for processor in matching_processors:
+        processor_name = processor.get_name()
+
+        # Determine working directory (preprocessed cache or original)
+        if processor.needs_preprocessing(str(export_dir)):
+            cache_path = get_preprocessing_cache_path(export_dir, processor_name)
+            if is_preprocessing_cache_valid(cache_path):
+                working_dir = cache_path
+            else:
+                working_dir = export_dir
+        else:
+            working_dir = export_dir
+
+        # Determine output directory
+        if output_base_str:
+            output_dir = build_processor_output_path(
+                processor.get_output_info(),
+                str(export_dir),
+                output_base_str,
+            )
+        else:
+            output_dir = None
+
+        try:
+            success = processor.process(
+                str(working_dir),
+                output_dir,
+                dedup_manifest=manifest,
+                threads=threads,
+                temp_dir=temp_dir,
+            )
+
+            if success:
+                success_count += 1
+                results.append((f"{export_dir.name}/{processor_name}", "SUCCESS"))
+
+                # Collect upload targets for successful processing
+                if output_dir:
+                    output_info = processor.get_output_info()
+                    if output_info.service:
+                        effective_output = str(Path(output_dir) / output_info.service)
+                    else:
+                        effective_output = output_dir
+
+                    targets = build_upload_targets(
+                        processor, str(export_dir), effective_output
+                    )
+                    for up_path, album_name in targets:
+                        upload_targets.append((up_path, album_name, processor_name))
+            else:
+                failed_count += 1
+                results.append((f"{export_dir.name}/{processor_name}", "FAILED"))
+
+        except Exception as e:
+            logging.error(
+                "Process failed for %s (%s): %s", export_dir.name, processor_name, e
+            )
+            failed_count += 1
+            results.append((f"{export_dir.name}/{processor_name}", "ERROR"))
+
+    return export_dir_str, success_count, failed_count, results, upload_targets
+
+
+def _preprocess_worker(
+    export_dir_str: str,
+    threads: int,
+    log_file: Optional[str],
+    processor_filter: Optional[str] = None,
+) -> tuple[str, list[tuple[str, str]], int, list[str]]:
+    """Preprocess a single export directory (multiprocessing worker).
+
+    This function is designed to be called by ProcessPoolExecutor for parallel
+    preprocessing. It re-creates the ProcessorRegistry in the worker process
+    since registry instances cannot be pickled across process boundaries.
+
+    Args:
+        export_dir_str: Path to the export directory as a string.
+        threads: Number of threads for within-export concurrency.
+        log_file: Path to log file for worker output, or None.
+        processor_filter: Optional processor name to filter to (case-insensitive).
+
+    Returns:
+        Tuple of:
+            - export_dir_str: The export directory path
+            - preprocessed: List of (processor_name, working_dir_str) tuples
+            - preprocess_count: Number of new preprocessings done
+            - errors: List of error messages
+    """
+    from processors.registry import ProcessorRegistry
+    from common.output.logging import init_worker_logging
+    from common.processing.cache import (
+        get_preprocessing_cache_path,
+        is_preprocessing_cache_valid,
+    )
+
+    # Mark as subprocess to disable progress bars and prevent interleaved output
+    os.environ["_MEMORIA_SUBPROCESS"] = "1"
+
+    # Initialize logging for this worker process
+    init_worker_logging(
+        log_filename=log_file,
+        app_modules=["processors", "common"],
+    )
+
+    export_dir = Path(export_dir_str)
+
+    # Create and populate registry in this worker process
+    registry = ProcessorRegistry()
+    load_all_processors(registry, quiet=True)
+
+    preprocessed: list[tuple[str, str]] = []  # (processor_name, working_dir)
+    preprocess_count = 0
+    errors: list[str] = []
+
+    # Detect matching processors that support dedup
+    matching_processors = registry.detect_all(export_dir)
+    dedup_processors = [p for p in matching_processors if p.supports_dedup()]
+
+    # Filter to specified processor if --processor is used
+    if processor_filter:
+        dedup_processors = [
+            p
+            for p in dedup_processors
+            if p.get_name().lower() == processor_filter.lower()
+        ]
+
+    for processor in dedup_processors:
+        processor_name = processor.get_name()
+        try:
+            if processor.needs_preprocessing(str(export_dir)):
+                cache_path = get_preprocessing_cache_path(export_dir, processor_name)
+
+                if is_preprocessing_cache_valid(cache_path):
+                    logging.debug(
+                        "Using cached preprocessing: %s (%s)",
+                        export_dir.name,
+                        processor_name,
+                    )
+                    preprocessed.append((processor_name, str(cache_path)))
+                else:
+                    logging.info(
+                        "Preprocessing: %s (%s)", export_dir.name, processor_name
+                    )
+                    cache_path.mkdir(parents=True, exist_ok=True)
+
+                    working_dir = processor.preprocess(
+                        str(export_dir),
+                        str(cache_path),
+                        threads=threads,
+                    )
+                    if working_dir:
+                        preprocessed.append((processor_name, working_dir))
+                        preprocess_count += 1
+                    else:
+                        errors.append(
+                            f"Preprocessing failed: {export_dir.name} ({processor_name})"
+                        )
+        except Exception as e:
+            errors.append(
+                f"Preprocessing error for {export_dir.name} ({processor_name}): {e}"
+            )
+
+    return export_dir_str, preprocessed, preprocess_count, errors
+
+
+def _build_catalog_worker(
+    export_dir_str: str,
+    threads: int,
+    log_file: Optional[str],
+    db_path: str,
+    run_id: str,
+    processor_filter: Optional[str] = None,
+) -> tuple[str, int]:
+    """Build catalogs for a single export directory (multiprocessing worker).
+
+    This function is designed to be called by ProcessPoolExecutor for parallel
+    catalog building. It re-creates the ProcessorRegistry in the worker process
+    since registry instances cannot be pickled across process boundaries.
+
+    Entries are written directly to the database for memory-efficient streaming.
+    The catalog_dir is derived deterministically using the preprocessing cache
+    path helpers, matching the same logic used in Phase 0 and Phase 3.
+
+    Args:
+        export_dir_str: Path to the export directory as a string.
+        threads: Number of threads for hashing within this process.
+        log_file: Path to log file for worker output, or None.
+        db_path: Path to SQLite database for streaming writes.
+        run_id: Unique identifier for this processing run.
+        processor_filter: Optional processor name to filter to (case-insensitive).
+
+    Returns:
+        Tuple of (export_dir_name, file_count).
+    """
+    from processors.registry import ProcessorRegistry
+    from common.output.logging import init_worker_logging
+    from common.processing.cache import (
+        get_preprocessing_cache_path,
+        is_preprocessing_cache_valid,
+    )
+
+    # Mark as subprocess to disable progress bars and prevent interleaved output
+    os.environ["_MEMORIA_SUBPROCESS"] = "1"
+
+    # Initialize logging for this worker process
+    init_worker_logging(
+        log_filename=log_file,
+        app_modules=["processors", "common"],
+    )
+
+    export_dir = Path(export_dir_str)
 
     # Create and populate registry in this worker process
     # Use quiet=True to suppress "Loaded X processors" messages from workers
@@ -369,9 +609,15 @@ def _build_catalog_worker(
         try:
             processor_name = processor.get_name()
 
-            # Use preprocessed directory if available
-            key = f"{export_dir_str}|{processor_name}"
-            catalog_dir = preprocessed_dirs.get(key, export_dir_str)
+            # Derive catalog_dir deterministically (same logic as Phase 0/3)
+            if processor.needs_preprocessing(str(export_dir)):
+                cache_path = get_preprocessing_cache_path(export_dir, processor_name)
+                if is_preprocessing_cache_valid(cache_path):
+                    catalog_dir = str(cache_path)
+                else:
+                    catalog_dir = export_dir_str
+            else:
+                catalog_dir = export_dir_str
 
             # Stream entries directly to database (never accumulates all in memory)
             batch = []
@@ -438,6 +684,10 @@ def run_phased_dedup_processing(
     temp_dir: str,
     log_file: Optional[Path] = None,
     run_id: str = "",
+    *,
+    threads: int,
+    parallel_enabled: bool,
+    parallel_exports: int,
 ) -> tuple[int, int, list, list]:
     """Run phased processing with cross-processor deduplication.
 
@@ -453,10 +703,13 @@ def run_phased_dedup_processing(
     Args:
         dirs_to_process: List of export directories
         registry: ProcessorRegistry instance
-        args: Command line arguments
+        args: Command line arguments (for processor filter and output path)
         temp_dir: Directory for temporary files
         log_file: Optional path to log file for worker process logging
         run_id: Unique identifier for this processing run
+        threads: Number of threads for within-export concurrency
+        parallel_enabled: Whether multi-export parallelism is enabled
+        parallel_exports: Number of processes for multi-export parallelism
 
     Returns:
         Tuple of (success_count, failed_count, results_list, upload_targets)
@@ -486,63 +739,124 @@ def run_phased_dedup_processing(
     preprocessed_dirs: dict[tuple[Path, str], Path] = {}
     preprocess_count = 0
 
-    for export_dir in dirs_to_process:
-        # Detect matching processors that support dedup
-        matching_processors = registry.detect_all(export_dir)
-        dedup_processors = [p for p in matching_processors if p.supports_dedup()]
+    if parallel_enabled and len(dirs_to_process) > 1:
+        # Parallel preprocessing across exports
+        logger.info(
+            "Preprocessing exports in parallel (%d processes)...", parallel_exports
+        )
 
-        # Filter to specified processor if --processor is used
-        if processor_filter:
-            dedup_processors = [
-                p
-                for p in dedup_processors
-                if p.get_name().lower() == processor_filter.lower()
-            ]
+        from rich.progress import (
+            Progress,
+            SpinnerColumn,
+            TextColumn,
+            BarColumn,
+            MofNCompleteColumn,
+        )
 
-        for processor in dedup_processors:
-            processor_name = processor.get_name()
-            try:
-                if processor.needs_preprocessing(str(export_dir)):
-                    cache_path = get_preprocessing_cache_path(
-                        export_dir, processor_name
-                    )
+        with ProcessPoolExecutor(max_workers=parallel_exports) as executor:
+            futures = {
+                executor.submit(
+                    _preprocess_worker,
+                    str(export_dir),
+                    threads,
+                    str(log_file) if log_file else None,
+                    processor_filter,
+                ): export_dir
+                for export_dir in dirs_to_process
+            }
 
-                    if is_preprocessing_cache_valid(cache_path):
-                        logger.debug(
-                            "Using cached preprocessing: %s (%s)",
-                            export_dir.name,
-                            processor_name,
-                        )
-                        preprocessed_dirs[(export_dir, processor_name)] = cache_path
-                    else:
-                        logger.info(
-                            "Preprocessing: %s (%s)", export_dir.name, processor_name
-                        )
-                        cache_path.mkdir(parents=True, exist_ok=True)
-
-                        working_dir = processor.preprocess(
-                            str(export_dir),
-                            str(cache_path),
-                            threads=args.threads,
-                        )
-                        if working_dir:
-                            preprocessed_dirs[(export_dir, processor_name)] = Path(
-                                working_dir
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[bold blue]Preprocessing exports..."),
+                BarColumn(),
+                MofNCompleteColumn(),
+                console=console,
+                transient=False,
+                refresh_per_second=4,
+            ) as progress:
+                task = progress.add_task("Preprocessing", total=len(futures))
+                for future in as_completed(futures):
+                    export_dir = futures[future]
+                    progress.advance(task)
+                    try:
+                        (
+                            export_dir_str,
+                            preprocessed_list,
+                            count,
+                            errors,
+                        ) = future.result()
+                        for proc_name, working_dir_str in preprocessed_list:
+                            preprocessed_dirs[(Path(export_dir_str), proc_name)] = Path(
+                                working_dir_str
                             )
-                            preprocess_count += 1
-                        else:
-                            logger.warning(
-                                "Preprocessing failed: %s (%s)",
+                        preprocess_count += count
+                        for err in errors:
+                            logger.warning(err)
+                    except Exception as e:
+                        logger.error(
+                            "Preprocessing failed for %s: %s", export_dir.name, e
+                        )
+    else:
+        # Sequential preprocessing
+        for export_dir in dirs_to_process:
+            # Detect matching processors that support dedup
+            matching_processors = registry.detect_all(export_dir)
+            dedup_processors = [p for p in matching_processors if p.supports_dedup()]
+
+            # Filter to specified processor if --processor is used
+            if processor_filter:
+                dedup_processors = [
+                    p
+                    for p in dedup_processors
+                    if p.get_name().lower() == processor_filter.lower()
+                ]
+
+            for processor in dedup_processors:
+                processor_name = processor.get_name()
+                try:
+                    if processor.needs_preprocessing(str(export_dir)):
+                        cache_path = get_preprocessing_cache_path(
+                            export_dir, processor_name
+                        )
+
+                        if is_preprocessing_cache_valid(cache_path):
+                            logger.debug(
+                                "Using cached preprocessing: %s (%s)",
                                 export_dir.name,
                                 processor_name,
                             )
-            except Exception as e:
-                logger.error(
-                    "Preprocessing error for %s (%s): %s",
-                    export_dir.name,
-                    processor_name,
-                    e,
-                )
+                            preprocessed_dirs[(export_dir, processor_name)] = cache_path
+                        else:
+                            logger.info(
+                                "Preprocessing: %s (%s)",
+                                export_dir.name,
+                                processor_name,
+                            )
+                            cache_path.mkdir(parents=True, exist_ok=True)
+
+                            working_dir = processor.preprocess(
+                                str(export_dir),
+                                str(cache_path),
+                                threads=threads,
+                            )
+                            if working_dir:
+                                preprocessed_dirs[(export_dir, processor_name)] = Path(
+                                    working_dir
+                                )
+                                preprocess_count += 1
+                            else:
+                                logger.warning(
+                                    "Preprocessing failed: %s (%s)",
+                                    export_dir.name,
+                                    processor_name,
+                                )
+                except Exception as e:
+                    logger.error(
+                        "Preprocessing error for %s (%s): %s",
+                        export_dir.name,
+                        processor_name,
+                        e,
+                    )
 
     if preprocess_count > 0:
         logger.info("Preprocessed %d exports", preprocess_count)
@@ -554,25 +868,13 @@ def run_phased_dedup_processing(
 
     catalog_results = []  # List of (export_name, file_count, status) for summary table
     total_files = 0
-    use_parallel_catalog = parse_bool_env(
-        os.environ.get("PARALLEL_CATALOG"), default=True
-    )
 
-    # Convert preprocessed_dirs to JSON-serializable format for subprocess workers
-    # Key format: "export_dir|processor_name" -> "working_dir"
-    import json as json_module
-
-    preprocessed_dirs_serializable = {
-        f"{str(k[0])}|{k[1]}": str(v) for k, v in preprocessed_dirs.items()
-    }
-    preprocessed_dirs_json = json_module.dumps(preprocessed_dirs_serializable)
-
-    if use_parallel_catalog and len(dirs_to_process) > 1:
+    if parallel_enabled and len(dirs_to_process) > 1:
         # Parallel catalog building across exports with streaming to DB
-        max_catalog_workers = min(len(dirs_to_process), 8)
+        # Use parallel_exports which is already capped by auto_process_count()
         logger.info(
             "Building catalogs in parallel (%d processes, streaming to DB)...",
-            max_catalog_workers,
+            parallel_exports,
         )
 
         from rich.progress import (
@@ -583,16 +885,15 @@ def run_phased_dedup_processing(
             MofNCompleteColumn,
         )
 
-        with ProcessPoolExecutor(max_workers=max_catalog_workers) as executor:
+        with ProcessPoolExecutor(max_workers=parallel_exports) as executor:
             futures = {
                 executor.submit(
                     _build_catalog_worker,
                     str(export_dir),
-                    args.threads,
+                    threads,
                     str(log_file) if log_file else None,
                     str(config.database_path),  # Pass DB path for streaming
                     run_id,  # Pass run_id for streaming
-                    preprocessed_dirs_json,  # Pass preprocessed dirs for catalog
                     processor_filter,  # Pass processor filter
                 ): export_dir
                 for export_dir in dirs_to_process
@@ -658,7 +959,7 @@ def run_phased_dedup_processing(
                     processor_file_count = 0
                     for entry in processor.build_catalog(
                         str(catalog_dir),
-                        threads=args.threads,
+                        threads=threads,
                     ):
                         if "_processor" not in entry:
                             entry["_processor"] = processor_name
@@ -720,107 +1021,172 @@ def run_phased_dedup_processing(
 
     success_count = 0
     failed_count = 0
-    results = []
-    upload_targets = []  # Collect upload targets: (path, album, processor_name)
+    results: list[tuple[str, str]] = []
+    upload_targets: list[tuple[str, str, str]] = []
 
-    for export_dir in dirs_to_process:
-        section_header(f"Processing: {export_dir.name}")
+    if parallel_enabled and len(dirs_to_process) > 1:
+        # Parallel processing across exports
+        logger.info(
+            "Processing exports in parallel (%d processes)...", parallel_exports
+        )
 
-        matching_processors = registry.detect_all(export_dir)
+        from rich.progress import (
+            Progress,
+            SpinnerColumn,
+            TextColumn,
+            BarColumn,
+            MofNCompleteColumn,
+        )
 
-        # Filter to specified processor if --processor is used
-        if processor_filter:
-            matching_processors = [
-                p
-                for p in matching_processors
-                if p.get_name().lower() == processor_filter.lower()
-            ]
-
-        for idx, processor in enumerate(matching_processors, 1):
-            processor_name = processor.get_name()
-            # Look up preprocessed directory, fall back to original
-            working_dir = preprocessed_dirs.get(
-                (export_dir, processor_name),
-                export_dir,
-            )
-
-            # Determine output directory using Platform/User structure
-            # Note: Uses original export_dir for username extraction
-            if args.output:
-                output_dir = build_processor_output_path(
-                    processor.get_output_info(),
+        with ProcessPoolExecutor(max_workers=parallel_exports) as executor:
+            futures = {
+                executor.submit(
+                    _process_export_worker_dedup,
                     str(export_dir),
+                    threads,
+                    str(log_file) if log_file else None,
+                    str(manifest_path),
                     args.output,
+                    temp_dir,
+                    processor_filter,
+                ): export_dir
+                for export_dir in dirs_to_process
+            }
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[bold blue]Processing exports..."),
+                BarColumn(),
+                MofNCompleteColumn(),
+                console=console,
+                transient=False,
+                refresh_per_second=4,
+            ) as progress:
+                task = progress.add_task("Processing", total=len(futures))
+                for future in as_completed(futures):
+                    export_dir = futures[future]
+                    progress.advance(task)
+                    try:
+                        (
+                            _export_dir_str,
+                            exp_success,
+                            exp_failed,
+                            exp_results,
+                            exp_uploads,
+                        ) = future.result()
+                        success_count += exp_success
+                        failed_count += exp_failed
+                        results.extend(exp_results)
+                        upload_targets.extend(exp_uploads)
+                    except Exception as e:
+                        logger.error("Processing failed for %s: %s", export_dir.name, e)
+                        failed_count += 1
+                        results.append((f"{export_dir.name}", "ERROR"))
+    else:
+        # Sequential processing
+        for export_dir in dirs_to_process:
+            section_header(f"Processing: {export_dir.name}")
+
+            matching_processors = registry.detect_all(export_dir)
+
+            # Filter to specified processor if --processor is used
+            if processor_filter:
+                matching_processors = [
+                    p
+                    for p in matching_processors
+                    if p.get_name().lower() == processor_filter.lower()
+                ]
+
+            for idx, processor in enumerate(matching_processors, 1):
+                processor_name = processor.get_name()
+                # Look up preprocessed directory, fall back to original
+                working_dir = preprocessed_dirs.get(
+                    (export_dir, processor_name),
+                    export_dir,
                 )
-            else:
-                output_dir = None
 
-            _log_processor_start(
-                export_dir=export_dir,
-                processor_name=processor_name,
-                idx=idx,
-                total=len(matching_processors),
-                input_dir=export_dir,
-                working_dir=working_dir,
-                output_dir=output_dir,
-            )
-
-            started = perf_counter()
-            status = "ERROR"
-            try:
-                kwargs = {
-                    "threads": args.threads,
-                    "temp_dir": temp_dir,
-                }
-
-                success = processor.process(
-                    str(working_dir), output_dir, dedup_manifest=manifest, **kwargs
-                )
-
-                if success:
-                    success_count += 1
-                    status = "SUCCESS"
-                    results.append(
-                        (f"{export_dir.name}/{processor.get_name()}", "SUCCESS")
+                # Determine output directory using Platform/User structure
+                # Note: Uses original export_dir for username extraction
+                if args.output:
+                    output_dir = build_processor_output_path(
+                        processor.get_output_info(),
+                        str(export_dir),
+                        args.output,
                     )
-
-                    # Collect upload targets for successful processing
-                    if output_dir:
-                        output_info = processor.get_output_info()
-                        if output_info.service:
-                            effective_output = str(
-                                Path(output_dir) / output_info.service
-                            )
-                        else:
-                            effective_output = output_dir
-
-                        targets = build_upload_targets(
-                            processor, str(export_dir), effective_output
-                        )
-                        for up_path, album_name in targets:
-                            upload_targets.append(
-                                (up_path, album_name, processor.get_name())
-                            )
                 else:
-                    failed_count += 1
-                    status = "FAILED"
-                    results.append(
-                        (f"{export_dir.name}/{processor.get_name()}", "FAILED")
-                    )
+                    output_dir = None
 
-            except Exception as e:
-                logger.error("    ERROR: %s", e)
-                failed_count += 1
-                status = "ERROR"
-                results.append((f"{export_dir.name}/{processor.get_name()}", "ERROR"))
-            finally:
-                _log_processor_end(
+                _log_processor_start(
+                    export_dir=export_dir,
                     processor_name=processor_name,
                     idx=idx,
                     total=len(matching_processors),
-                    status=status,
-                    elapsed_s=perf_counter() - started,
+                    input_dir=export_dir,
+                    working_dir=working_dir,
+                    output_dir=output_dir,
                 )
+
+                started = perf_counter()
+                status = "ERROR"
+                try:
+                    kwargs = {
+                        "threads": threads,
+                        "temp_dir": temp_dir,
+                    }
+
+                    success = processor.process(
+                        str(working_dir),
+                        output_dir,
+                        dedup_manifest=manifest,
+                        **kwargs,
+                    )
+
+                    if success:
+                        success_count += 1
+                        status = "SUCCESS"
+                        results.append(
+                            (f"{export_dir.name}/{processor.get_name()}", "SUCCESS")
+                        )
+
+                        # Collect upload targets for successful processing
+                        if output_dir:
+                            output_info = processor.get_output_info()
+                            if output_info.service:
+                                effective_output = str(
+                                    Path(output_dir) / output_info.service
+                                )
+                            else:
+                                effective_output = output_dir
+
+                            targets = build_upload_targets(
+                                processor, str(export_dir), effective_output
+                            )
+                            for up_path, album_name in targets:
+                                upload_targets.append(
+                                    (up_path, album_name, processor.get_name())
+                                )
+                    else:
+                        failed_count += 1
+                        status = "FAILED"
+                        results.append(
+                            (f"{export_dir.name}/{processor.get_name()}", "FAILED")
+                        )
+
+                except Exception as e:
+                    logger.error("    ERROR: %s", e)
+                    failed_count += 1
+                    status = "ERROR"
+                    results.append(
+                        (f"{export_dir.name}/{processor.get_name()}", "ERROR")
+                    )
+                finally:
+                    _log_processor_end(
+                        processor_name=processor_name,
+                        idx=idx,
+                        total=len(matching_processors),
+                        status=status,
+                        elapsed_s=perf_counter() - started,
+                    )
 
     phase_header("DEDUP PROCESSING COMPLETE")
     logger.info("Results: %d succeeded, %d failed", success_count, failed_count)
@@ -1809,7 +2175,6 @@ Examples:
         dirs_to_process = [input_path]
 
     # Resolve Immich configuration
-    system_cpu_count = multiprocessing.cpu_count()
 
     # Resolve threads: CLI > env > auto
     if args.threads is not None:
@@ -1923,6 +2288,9 @@ Examples:
                 temp_dir,
                 log_file,
                 run_id,
+                threads=threads,
+                parallel_enabled=parallel_enabled,
+                parallel_exports=parallel_exports,
             )
         )
 

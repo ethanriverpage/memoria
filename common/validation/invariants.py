@@ -6,6 +6,7 @@ Shared invariant validators for failure handling.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 
 class InvariantViolation(ValueError):
@@ -13,7 +14,7 @@ class InvariantViolation(ValueError):
 
 
 def require_non_unknown_username(
-    username: str, *, source: str, export_dir: Path, processor: str
+    username: Optional[str], *, source: str, export_dir: Path, processor: str
 ) -> None:
     """
     Ensure we never proceed with an unknown export username.

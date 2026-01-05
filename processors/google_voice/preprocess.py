@@ -22,7 +22,7 @@ from common.files.scanner import iter_files
 from common.files.types import ALL_MEDIA_EXTENSIONS
 from common.output.logging import get_processor_logger
 from common.output.summary import print_preprocessing_stats
-from processors.preprocess_base import CopyTask, HashResult, PreprocessorBase
+from processors.preprocess_base import CopyTask, PreprocessorBase
 
 # Standard logger for worker processes and exception logging
 logger = logging.getLogger(__name__)

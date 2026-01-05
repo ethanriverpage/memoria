@@ -75,9 +75,7 @@ class DedupConfig:
     perceptual_threshold: float = 0.92
 
     # Storage
-    database_path: Path = field(
-        default_factory=lambda: Path.cwd() / "dedup.db"
-    )
+    database_path: Path = field(default_factory=lambda: Path.cwd() / "dedup.db")
 
     # ImageDescription formatting
     desc_max_per_source: int = 250
@@ -112,7 +110,6 @@ class DedupConfig:
                 (defaults to $PREPROCESSING_DIR/preprocessing_cache)
 
         Performance Environment Variables (not part of DedupConfig):
-            PARALLEL_CATALOG: Enable parallel catalog building (default: true)
             PARALLEL_DEDUP: Enable parallel perceptual hash comparison (default: true)
 
         Returns:

@@ -55,29 +55,57 @@ class FilenameGenerator:
         username: str,
         service: Optional[str] = None,
         sequence_start: int = 2,
+        include_content_hash: bool = False,
     ):
+        """Initialize the filename generator.
+
+        Args:
+            platform: Platform name (e.g., "discord", "google").
+            username: Username or account identifier.
+            service: Optional service name for multi-service platforms.
+            sequence_start: Starting number for uniqueness sequences (default 2).
+            include_content_hash: If True, include a content hash suffix when
+                provided via generate(). This ensures cross-process uniqueness
+                when parallel workers may write to the same output directory.
+        """
         # Sanitize components for safe filenames (lowercase, no special chars)
         self.platform = sanitize_filename(platform)
         self.username = sanitize_filename(username)
         self.service = sanitize_filename(service) if service else None
         self.sequence_start = sequence_start
         self.used_filenames: Set[str] = set()
+        self.include_content_hash = include_content_hash
 
     def generate(
         self,
         timestamp_str: Optional[str],
         extension: str,
+        content_hash: Optional[str] = None,
     ) -> str:
-        """Generate a unique filename following Platform/User/Service order."""
+        """Generate a unique filename following Platform/User/Service order.
+
+        Args:
+            timestamp_str: ISO 8601 timestamp for date extraction.
+            extension: File extension including the dot (e.g., ".jpg").
+            content_hash: Optional content hash. If provided and include_content_hash
+                is True, appends first 8 chars to filename for cross-process uniqueness.
+
+        Returns:
+            Unique filename string.
+        """
         date_key = self._parse_date(timestamp_str)
 
+        # Build base filename
         if self.service:
-            base = (
-                f"{self.platform}-{self.username}-{self.service}-{date_key}{extension}"
-            )
+            base = f"{self.platform}-{self.username}-{self.service}-{date_key}"
         else:
-            base = f"{self.platform}-{self.username}-{date_key}{extension}"
+            base = f"{self.platform}-{self.username}-{date_key}"
 
+        # Add content hash suffix for cross-process uniqueness when enabled
+        if self.include_content_hash and content_hash:
+            base = f"{base}-{content_hash[:8]}"
+
+        base = f"{base}{extension}"
         return self._ensure_unique(base, extension)
 
     def _parse_date(self, timestamp_str: Optional[str]) -> str:

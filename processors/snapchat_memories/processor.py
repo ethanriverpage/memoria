@@ -675,10 +675,12 @@ def _process_preprocessed(
 
     # Pre-generate all output filenames
     log.generating_filenames()
+    # Enable content hash suffix for cross-process uniqueness when in dedup mode
     filename_gen = FilenameGenerator(
         "snap",
         export_username,
         service="memories",
+        include_content_hash=(dedup_manifest is not None),
     )
 
     processing_tasks = []
@@ -718,7 +720,9 @@ def _process_preprocessed(
             dedup_manifest, content_hash, media_data.get("date")
         )
         media_data["canonical_timestamp"] = canonical_ts
-        output_filename = filename_gen.generate(canonical_ts, file_ext)
+        output_filename = filename_gen.generate(
+            canonical_ts, file_ext, content_hash=content_hash
+        )
 
         # Get overlay source path if present
         overlay_source_path = media_data.get("overlay_source_path")

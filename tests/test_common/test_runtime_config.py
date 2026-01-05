@@ -180,7 +180,14 @@ class TestMemoriaEnvPrecedence:
 
 
 class TestProcessCountCapping:
-    """Tests for MEMORIA_PROCESSES override and capping."""
+    """Tests for MEMORIA_PROCESSES override and capping.
+
+    Critical behavior from memoria.py:
+    - MEMORIA_PROCESSES override is capped only by exports_count (not 8)
+    - auto_process_count() has the 8-cap built in
+    - This allows power users to override the 8-cap via MEMORIA_PROCESSES
+      if they have the resources
+    """
 
     def test_env_override_respected(self) -> None:
         """MEMORIA_PROCESSES should override auto computation."""
@@ -189,9 +196,9 @@ class TestProcessCountCapping:
         auto_val = 4
         exports_count = 10
 
-        # Apply the same logic as memoria.py
+        # Apply the same logic as memoria.py (env override capped by exports only)
         if env_val is not None:
-            procs = min(env_val, exports_count, 8)
+            procs = min(env_val, exports_count)
         else:
             procs = auto_val
 
@@ -202,14 +209,26 @@ class TestProcessCountCapping:
         env_val = 10
         exports_count = 3
 
-        procs = min(env_val, exports_count, 8)
+        # memoria.py: parallel_exports = min(env_processes, exports_count)
+        procs = min(env_val, exports_count)
         assert procs == 3
 
-    def test_env_override_capped_at_eight(self) -> None:
-        """MEMORIA_PROCESSES should be capped at 8."""
-        env_val = 20
-        exports_count = 100
+    def test_env_override_not_capped_at_eight(self) -> None:
+        """MEMORIA_PROCESSES allows users to exceed auto's 8-cap.
 
-        procs = min(env_val, exports_count, 8)
-        assert procs == 8
+        The 8-process cap is in auto_process_count(), not in the env override.
+        Power users can set MEMORIA_PROCESSES=16 if they have resources.
+        """
+        env_val = 16
+        exports_count = 20
 
+        # memoria.py: parallel_exports = min(env_processes, exports_count)
+        procs = min(env_val, exports_count)
+        assert procs == 16  # Not capped at 8
+
+    def test_auto_process_count_has_eight_cap(self) -> None:
+        """auto_process_count() should have the 8-cap built in."""
+        with patch("common.config.runtime.cpu_count", return_value=65):
+            # cpu_budget = 64, threads = 1 -> 64 // 1 = 64, capped at 8
+            result = auto_process_count(threads=1, exports_count=100)
+            assert result == 8
