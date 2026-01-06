@@ -24,6 +24,7 @@ Supported keys:
 - `--immich-concurrency` / `IMMICH_UPLOAD_CONCURRENCY` (default 4)
 - `IMMICH_SKIP_HASH` (boolean, default true) - Skip hash computation during upload
 - `IMMICH_IGNORE_PATTERNS` (comma-separated glob patterns) - Folders/files to exclude from upload
+- `--immich-tag-platforms` / `--no-immich-tag-platforms` / `IMMICH_TAG_PLATFORMS` (boolean, default true when Immich enabled) - Apply platform tags to uploaded assets
 
 Example `.env`:
 
@@ -33,6 +34,7 @@ IMMICH_API_KEY=YOUR_API_KEY
 IMMICH_UPLOAD_CONCURRENCY=4
 IMMICH_SKIP_HASH=true
 IMMICH_IGNORE_PATTERNS=issues/**,**/*matching/**
+IMMICH_TAG_PLATFORMS=true
 ```
 
 ### Default Ignore Patterns
@@ -249,6 +251,58 @@ Use sequential mode (without `--parallel`), or skip uploads entirely:
 
 ```bash
 ./memoria.py --originals /exports -o /output --skip-upload
+```
+
+---
+
+## Platform Tagging
+
+After uploading media to Immich, Memoria automatically applies platform tags to help organize and filter your media by source.
+
+### Supported Platform Tags
+
+| Platform | Color |
+|----------|-------|
+| Google | `#34A853` (green) |
+| Instagram | `#C13584` (magenta) |
+| Snapchat | `#FFFC00` (yellow) |
+| Discord | `#5865F2` (blurple) |
+| iMessage | `#0A84FF` (blue) |
+
+### How It Works
+
+1. After each successful upload, Memoria queries Immich for assets in the album
+2. Local files are matched to Immich assets by filename and size
+3. Platform tags are applied based on the source processor
+
+### Cross-Processor Deduplication
+
+When using cross-processor deduplication, a single output file may have originated from multiple platforms (primary + secondary sources). In this case, the uploaded asset receives tags for **all contributing platforms**.
+
+For example, if a photo appears in both Google Photos and Instagram Messages:
+- The deduplicated output file is uploaded once
+- It receives both `Google` and `Instagram` tags
+
+### Configuration
+
+Platform tagging is enabled by default when Immich uploads are enabled.
+
+**Disable tagging:**
+```bash
+./memoria.py /path/to/export -o /output --no-immich-tag-platforms
+```
+
+**Via environment variable:**
+```bash
+IMMICH_TAG_PLATFORMS=false ./memoria.py /path/to/export -o /output
+```
+
+### Creating Platform Tags
+
+Tags are automatically created if they don't exist. To pre-create platform tags with colors before processing, use the standalone test tool:
+
+```bash
+python standalone/test_immich_api.py --test setup-platform-tags
 ```
 
 ---

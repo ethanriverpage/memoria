@@ -63,6 +63,9 @@ from common.processing import (  # noqa: E402
     is_preprocessing_cache_valid,
 )
 from common.upload.immich import verify_auth, upload as immich_upload  # noqa: E402
+from common.upload.platform_tagging import (  # noqa: E402
+    apply_platform_tags_for_upload_target,
+)
 from common.upload.targets import build_upload_targets  # noqa: E402
 
 
@@ -157,6 +160,7 @@ def upload_worker_thread(
     immich_concurrency: int,
     immich_skip_hash: bool,
     stop_event: threading.Event,
+    tag_platforms: bool = True,
 ) -> None:
     """Worker thread that processes upload tasks sequentially
 
@@ -165,11 +169,13 @@ def upload_worker_thread(
 
     Args:
         upload_queue: Multiprocessing queue containing (export_name, upload_tasks) tuples
+            where upload_tasks is a list of (up_path, album_name, processor_name, manifest_path) tuples
         immich_url: Immich server URL
         immich_key: Immich API key
         immich_concurrency: Number of concurrent uploads per task
         immich_skip_hash: Whether to skip hash checking
         stop_event: Event to signal thread should stop
+        tag_platforms: Whether to apply platform tags after upload
     """
     logger.info("[Upload Worker] Started - will process uploads sequentially")
 
@@ -192,7 +198,7 @@ def upload_worker_thread(
                 len(upload_tasks),
             )
 
-            for idx, (up_path, album_name, processor_name) in enumerate(
+            for idx, (up_path, album_name, processor_name, manifest_path) in enumerate(
                 upload_tasks, 1
             ):
                 logger.info(
@@ -215,6 +221,26 @@ def upload_worker_thread(
                     )
                     if rc == 0:
                         logger.info("    Completed (rc=%d)", rc)
+                        # Apply platform tags if enabled
+                        if tag_platforms:
+                            try:
+                                # Use manifest path from task tuple (already resolved)
+                                tag_results = apply_platform_tags_for_upload_target(
+                                    upload_path=up_path,
+                                    album_name=album_name,
+                                    dedup_manifest_path=manifest_path,
+                                    immich_url=immich_url,
+                                    immich_key=immich_key,
+                                )
+                                if tag_results:
+                                    for platform, count in tag_results.items():
+                                        logger.info(
+                                            "    Tagged %d assets with %s",
+                                            count,
+                                            platform,
+                                        )
+                            except Exception as e:
+                                logger.warning("    Platform tagging failed: %s", e)
                     else:
                         logger.warning("    Completed with issues (rc=%d)", rc)
                 except Exception as e:
@@ -298,7 +324,7 @@ def _process_export_worker_dedup(
     output_base_str: Optional[str],
     temp_dir: str,
     processor_filter: Optional[str] = None,
-) -> tuple[str, int, int, list[tuple[str, str]], list[tuple[str, str, str]]]:
+) -> tuple[str, int, int, list[tuple[str, str]], list[tuple[str, str, str, str | None]]]:
     """Process a single export directory in dedup mode (multiprocessing worker).
 
     This function is designed to be called by ProcessPoolExecutor for parallel
@@ -320,7 +346,7 @@ def _process_export_worker_dedup(
             - success_count: Number of processors that succeeded
             - failed_count: Number of processors that failed
             - results: List of (processor_path, status) tuples
-            - upload_targets: List of (path, album, processor_name) tuples
+            - upload_targets: List of (path, album, processor_name, manifest_path) tuples
     """
     import json as json_module
 
@@ -356,7 +382,7 @@ def _process_export_worker_dedup(
     success_count = 0
     failed_count = 0
     results: list[tuple[str, str]] = []
-    upload_targets: list[tuple[str, str, str]] = []
+    upload_targets: list[tuple[str, str, str, str | None]] = []
 
     # Detect matching processors
     matching_processors = registry.detect_all(export_dir)
@@ -417,7 +443,9 @@ def _process_export_worker_dedup(
                         processor, str(export_dir), effective_output
                     )
                     for up_path, album_name in targets:
-                        upload_targets.append((up_path, album_name, processor_name))
+                        upload_targets.append(
+                            (up_path, album_name, processor_name, manifest_path_str)
+                        )
             else:
                 failed_count += 1
                 results.append((f"{export_dir.name}/{processor_name}", "FAILED"))
@@ -713,7 +741,7 @@ def run_phased_dedup_processing(
 
     Returns:
         Tuple of (success_count, failed_count, results_list, upload_targets)
-        where upload_targets is a list of (path, album, processor_name) tuples
+        where upload_targets is a list of (path, album, processor_name, manifest_path) tuples
     """
     config = get_dedup_config()
     phase_header("CROSS-PROCESSOR DEDUPLICATION MODE")
@@ -1022,7 +1050,7 @@ def run_phased_dedup_processing(
     success_count = 0
     failed_count = 0
     results: list[tuple[str, str]] = []
-    upload_targets: list[tuple[str, str, str]] = []
+    upload_targets: list[tuple[str, str, str, str | None]] = []
 
     if parallel_enabled and len(dirs_to_process) > 1:
         # Parallel processing across exports
@@ -1163,7 +1191,7 @@ def run_phased_dedup_processing(
                             )
                             for up_path, album_name in targets:
                                 upload_targets.append(
-                                    (up_path, album_name, processor.get_name())
+                                    (up_path, album_name, processor.get_name(), str(manifest_path))
                                 )
                     else:
                         failed_count += 1
@@ -1266,6 +1294,7 @@ def _process_export_worker(
     total_exports: int,
     upload_queue=None,
     processor_filter: str | None = None,
+    tag_platforms: bool = True,
 ) -> tuple[str, int, int]:
     """Worker function for parallel processing of exports
 
@@ -1287,6 +1316,7 @@ def _process_export_worker(
         total_exports: Total number of exports being processed
         upload_queue: Optional multiprocessing queue to collect upload tasks
         processor_filter: Optional processor name to filter to (case-insensitive)
+        tag_platforms: Whether to apply platform tags after upload
 
     Returns:
         Tuple of (export_name, success_count, failed_count)
@@ -1342,6 +1372,7 @@ def _process_export_worker(
             temp_dir,
             detection_cache=None,
             upload_queue=upload_queue,
+            tag_platforms=tag_platforms,
         )
 
         return export_dir.name, success_count, failed_count
@@ -1364,6 +1395,8 @@ def process_single_export(
     temp_dir: str,
     detection_cache: Optional[dict] = None,
     upload_queue=None,
+    tag_platforms: bool = True,
+    dedup_manifest_path: Optional[str] = None,
 ) -> tuple[int, int, list, list]:
     """Process a single export directory
 
@@ -1379,11 +1412,13 @@ def process_single_export(
         temp_dir: Directory for temporary preprocessing files
         detection_cache: Optional cache for processor detection
         upload_queue: Optional multiprocessing queue to collect upload tasks
+        tag_platforms: Whether to apply platform tags after upload
+        dedup_manifest_path: Optional path to dedup manifest for tagging
 
     Returns:
         Tuple of (success_count, failed_count, results, upload_tasks)
         results is a list of processing result dicts
-        upload_tasks is a list of (up_path, album_name, processor_name) tuples
+        upload_tasks is a list of (up_path, album_name, processor_name, manifest_path) tuples
     """
     # Detect ALL matching processors with caching
     logger.info("Analyzing: %s", input_path)
@@ -1510,7 +1545,7 @@ def process_single_export(
                             )
                             for up_path, album_name in targets:
                                 upload_tasks.append(
-                                    (up_path, album_name, processor.get_name())
+                                    (up_path, album_name, processor.get_name(), dedup_manifest_path)
                                 )
                         else:
                             # Upload immediately (sequential mode)
@@ -1534,6 +1569,29 @@ def process_single_export(
                                             album_name,
                                             up_path,
                                         )
+                                        # Apply platform tags if enabled
+                                        if tag_platforms:
+                                            try:
+                                                tag_results = (
+                                                    apply_platform_tags_for_upload_target(
+                                                        upload_path=up_path,
+                                                        album_name=album_name,
+                                                        dedup_manifest_path=dedup_manifest_path,
+                                                        immich_url=immich_url,
+                                                        immich_key=immich_key,
+                                                    )
+                                                )
+                                                if tag_results:
+                                                    for plat, cnt in tag_results.items():
+                                                        logger.info(
+                                                            "    Tagged %d assets with %s",
+                                                            cnt,
+                                                            plat,
+                                                        )
+                                            except Exception as e:
+                                                logger.warning(
+                                                    "    Platform tagging failed: %s", e
+                                                )
                                     else:
                                         logger.warning(
                                             "  %s -> %s from %s (rc=%d)",
@@ -1776,6 +1834,7 @@ def upload_only_mode(
     immich_key: str,
     immich_concurrency: int,
     immich_skip_hash: bool,
+    tag_platforms: bool = True,
 ) -> int:
     """Handle upload-only mode: upload existing processed files to Immich."""
     from datetime import datetime
@@ -1820,6 +1879,12 @@ def upload_only_mode(
     logger.info("Found %d upload target(s):", len(all_targets))
     for up_path, album_name in all_targets:
         logger.info("  - %s -> %s", Path(up_path).name, album_name)
+
+    # Compute dedup manifest path once from upload root
+    dedup_manifest_path = upload_path / "dedup_manifest.json"
+    manifest_str = str(dedup_manifest_path) if dedup_manifest_path.exists() else None
+    if manifest_str:
+        logger.info("Using dedup manifest: %s", dedup_manifest_path)
 
     # Open log file for writing
     with open(log_file, "w", encoding="utf-8") as log:
@@ -1873,6 +1938,27 @@ def upload_only_mode(
                     logger.info(
                         "  %s: completed (%d files)", album_name, len(files_to_upload)
                     )
+                    # Apply platform tags if enabled
+                    if tag_platforms:
+                        try:
+                            # Use pre-computed manifest path from upload root
+                            tag_results = apply_platform_tags_for_upload_target(
+                                upload_path=up_path,
+                                album_name=album_name,
+                                dedup_manifest_path=manifest_str,
+                                immich_url=immich_url,
+                                immich_key=immich_key,
+                                ignore_patterns=ignore_patterns,
+                            )
+                            if tag_results:
+                                for platform, count in tag_results.items():
+                                    logger.info(
+                                        "    Tagged %d assets with %s", count, platform
+                                    )
+                                    log.write(f"    Tagged: {platform} ({count} assets)\n")
+                        except Exception as e:
+                            logger.warning("    Platform tagging failed: %s", e)
+                            log.write(f"    Platform tagging failed: {e}\n")
                 else:
                     logger.warning(
                         "  %s: completed with issues (rc=%d, %d files)",
@@ -2027,6 +2113,19 @@ Examples:
         help="Log level for file output: 'debug' (default) captures all details, "
         "'info' produces smaller logs with only phase summaries",
     )
+    parser.add_argument(
+        "--immich-tag-platforms",
+        action="store_true",
+        dest="immich_tag_platforms",
+        default=None,
+        help="Enable platform tagging for uploaded assets (default when Immich is enabled)",
+    )
+    parser.add_argument(
+        "--no-immich-tag-platforms",
+        action="store_false",
+        dest="immich_tag_platforms",
+        help="Disable platform tagging for uploaded assets",
+    )
 
     args = parser.parse_args()
 
@@ -2051,15 +2150,19 @@ Examples:
     load_dotenv_file(args.env_file)
 
     # Resolve parallel enabled: CLI > env > default false
-    parallel_enabled = args.parallel
-    if not parallel_enabled:
-        env_parallel = os.environ.get("MEMORIA_PARALLEL")
-        parallel_enabled = parse_bool_env(env_parallel) if env_parallel else False
+    # Skip parallel for --upload-only mode (it doesn't do any processing)
+    if args.upload_only:
+        parallel_enabled = False
+    else:
+        parallel_enabled = args.parallel
+        if not parallel_enabled:
+            env_parallel = os.environ.get("MEMORIA_PARALLEL")
+            parallel_enabled = parse_bool_env(env_parallel) if env_parallel else False
 
-    # Validate --parallel requires --originals
-    if parallel_enabled and not args.originals:
-        parser.error("--parallel (or MEMORIA_PARALLEL=true) requires --originals")
-        return 1
+        # Validate --parallel requires --originals
+        if parallel_enabled and not args.originals:
+            parser.error("--parallel (or MEMORIA_PARALLEL=true) requires --originals")
+            return 1
 
     # Generate unique run_id for this processing session
     run_id = f"run_{uuid.uuid4().hex[:12]}"
@@ -2125,10 +2228,13 @@ Examples:
         parser.error("cannot specify both input_dir and --originals")
         return 1
 
-    # Build list of directories to process
+    # Build list of directories to process (skip for upload-only mode)
     dirs_to_process = []
 
-    if args.originals:
+    if args.upload_only:
+        # Upload-only mode handles its own path; skip dirs_to_process
+        pass
+    elif args.originals:
         originals_path = Path(args.originals).resolve()
 
         if not originals_path.exists():
@@ -2246,6 +2352,17 @@ Examples:
             )
             immich_enabled = False
 
+    # Determine if platform tagging is enabled
+    # CLI takes precedence, then env var, then default (on if Immich is enabled)
+    if args.immich_tag_platforms is not None:
+        immich_tag_platforms = args.immich_tag_platforms
+    else:
+        env_tag = os.environ.get("IMMICH_TAG_PLATFORMS")
+        if env_tag is not None:
+            immich_tag_platforms = parse_bool_env(env_tag)
+        else:
+            immich_tag_platforms = immich_enabled
+
     # Handle upload-only mode
     if args.upload_only:
         if not immich_enabled:
@@ -2263,6 +2380,7 @@ Examples:
             immich_key,
             immich_concurrency,
             immich_skip_hash,
+            immich_tag_platforms,
         )
 
     # Process all directories
@@ -2298,10 +2416,10 @@ Examples:
         if immich_enabled and args.output and upload_targets:
             logger.info("Uploading processed files...")
             logger.info("Found %d upload target(s):", len(upload_targets))
-            for up_path, album_name, proc_name in upload_targets:
+            for up_path, album_name, proc_name, _manifest in upload_targets:
                 logger.info("  - %s -> %s", proc_name, album_name)
 
-            for up_path, album_name, proc_name in upload_targets:
+            for up_path, album_name, proc_name, manifest_path_str in upload_targets:
                 try:
                     rc = immich_upload(
                         path=up_path,
@@ -2315,6 +2433,25 @@ Examples:
                     )
                     if rc == 0:
                         logger.info("  %s -> %s: completed", proc_name, album_name)
+                        # Apply platform tags if enabled
+                        if immich_tag_platforms:
+                            try:
+                                tag_results = apply_platform_tags_for_upload_target(
+                                    upload_path=up_path,
+                                    album_name=album_name,
+                                    dedup_manifest_path=manifest_path_str,
+                                    immich_url=immich_url,
+                                    immich_key=immich_key,
+                                )
+                                if tag_results:
+                                    for platform, count in tag_results.items():
+                                        logger.info(
+                                            "    Tagged %d assets with %s",
+                                            count,
+                                            platform,
+                                        )
+                            except Exception as e:
+                                logger.warning("    Platform tagging failed: %s", e)
                     else:
                         logger.warning(
                             "  %s -> %s: completed with issues (rc=%d)",
@@ -2426,6 +2563,7 @@ Examples:
                         immich_concurrency,
                         immich_skip_hash,
                         stop_event,
+                        immich_tag_platforms,
                     ),
                     daemon=True,
                 )
@@ -2455,6 +2593,7 @@ Examples:
                         len(dirs_to_process),
                         upload_queue,  # Pass the upload queue
                         args.processor,  # Pass the processor filter
+                        immich_tag_platforms,  # Pass platform tagging flag
                     )
                     future_to_export[future] = (idx, export_dir)
 
@@ -2525,6 +2664,7 @@ Examples:
                                 immich_skip_hash,
                                 temp_dir,
                                 detection_cache,
+                                tag_platforms=immich_tag_platforms,
                             )
                         )
 
